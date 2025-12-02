@@ -256,6 +256,29 @@ int main(int argc, const char** argv) {
 
 	try {
 		SymbolResolver sym("rust_bevy_test.exe");
+
+		char* exe = sym.get_addr(".exe");
+		char* ucrtbase = sym.get_addr("ucrtbase.dll");
+
+		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
+			at_addr(exe + 0);
+			at_addr(exe + 5);
+
+			at_addr(exe + 0x3011B80); // main()
+
+			at_addr(exe + 0x3008AE0); // update_cubes_dyn
+			at_addr(exe + 0x3008B2A); // update_cubes_dyn info_span!
+			at_addr(exe + 0x3008BB4); // update_cubes_dyn .to_radians()
+	
+			at_addr(exe + 0x2FC20D0); // par_iter_mut follow_waves
+			at_addr(exe + 0x2FC20D0+10); // par_iter_mut follow_waves
+	
+			at_addr(exe + 0x2DB2BF0); // rand_chacha::guts::refill_wide
+			at_addr(exe + 0x2DB2BF0+21); // rand_chacha::guts::refill_wide
+	
+			//at_addr(ucrtbase + 0x69FB30); // ucrtbase.dll!sinf(), returns wrong symbol for some reason, I even double checked everything, am I missing something?
+			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf, weirdly this one works, so it's even the same ucrtbase.dll as the two other executables
+		});
 	} catch (std::runtime_error err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	Sleep(1000);
 	
