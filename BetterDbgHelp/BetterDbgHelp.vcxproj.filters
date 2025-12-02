@@ -6,5 +6,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="timer.hpp" />
+    <ClInclude Include="dbghelp.hpp" />
+    <ClInclude Include="util.hpp" />
   </ItemGroup>
 </Project>

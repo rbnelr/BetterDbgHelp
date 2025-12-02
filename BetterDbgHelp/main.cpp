@@ -1,36 +1,9 @@
-#include <stdio.h>
-#include <assert.h>
-#include <string>
-#include <vector>
-#include <stdexcept>
-#include "timer.hpp"
-using namespace kiss;
+#include "util.hpp"
+#include "dbghelp.hpp"
+#include <functional>
 
-#define WIN32_LEAN_AND_MEAN 1
-#include <windows.h>
 #include <psapi.h>
-#include <tlhelp32.h>
 #pragma comment(lib, "Kernel32.lib")
-
-std::string print_err(const char* operation) {
-	auto err = GetLastError();
-
-	LPSTR msgBuf = nullptr;
-
-	DWORD size = FormatMessageA(
-		FORMAT_MESSAGE_ALLOCATE_BUFFER |
-		FORMAT_MESSAGE_FROM_SYSTEM     |
-		FORMAT_MESSAGE_IGNORE_INSERTS,
-		nullptr,
-		err,
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		(LPSTR)&msgBuf,
-		0,
-		nullptr);
-
-	printf("%s failed: [%lu] {\n%s}\n", operation, err, msgBuf);
-	throw std::runtime_error("Win32 Error");
-}
 
 class SymbolResolver {
 	STARTUPINFOA si{};
@@ -48,9 +21,20 @@ class SymbolResolver {
 		void add (std::string path, void* addr) {
 			list.push_back({ path, addr });
 		}
+		
+		void* get_ptr (std::string_view name_suffix) {
+			for (auto& m : list) {
+				if (ends_with(m.path, name_suffix)) {
+					return m.addr;
+				}
+			}
+			throw std::runtime_error(std::string(name_suffix) + " not found");
+		}
 	};
 
 	LoadedModules loaded_modules;
+
+	Debughelp* dbghelp;
 	
 	void start_debugging_child_process (std::string const& exe_filepath, float max_run_time) {
 		// Start exe as child process with DEBUG_ONLY_THIS_PROCESS
@@ -162,20 +146,42 @@ class SymbolResolver {
 		CloseHandle(pi.hProcess);
 	}
 public:
-	char* exe_base_addr = nullptr;
-
 	SymbolResolver (std::string const& exe_filepath, float max_run_time = 2.0f) {
 		printf("Starting %s\n", exe_filepath.c_str());
 		start_debugging_child_process(exe_filepath, max_run_time);
+		dbghelp = new Debughelp(pi.hProcess);
 	}
 
 	~SymbolResolver () {
+		delete dbghelp; dbghelp = nullptr;
+
 		printf("Killing process\n");
 		finish_debugging_and_kill_child_process();
+
 	}
 
-	void addr2loc (char* addr) {
-		
+	char* get_addr (std::string_view name) {
+		return (char*)loaded_modules.get_ptr(name);
+	}
+	void show_addr2sym (char* addr) {
+		dbghelp->show_addr2sym(addr);
+	}
+	void measure_addr2sym (char* addr) {
+		dbghelp->measure_addr2sym(addr);
+	}
+
+	template <typename FUNC>
+	void run_examples_addresses (FUNC run_examples) {
+		using std::placeholders::_1;
+		std::function<void(char*)> fshow = std::bind(&SymbolResolver::show_addr2sym, this, _1);
+		std::function<void(char*)> fmeas = std::bind(&SymbolResolver::measure_addr2sym, this, _1);
+
+		run_examples(fshow);
+
+		for (int i=0; i<1000; i++) {
+			run_examples(fmeas);
+		}
+		dbghelp->print_timings();
 	}
 };
 
@@ -183,32 +189,74 @@ int main(int argc, const char** argv) {
 
 	try {
 		SymbolResolver sym("TinyProgram.exe", 0.5f);
-		sym.addr2loc(sym.exe_base_addr + 0);
-		sym.addr2loc(sym.exe_base_addr + 5);
 
-		sym.addr2loc(sym.exe_base_addr + 0x1010); // printf()
+		char* exe = sym.get_addr(".exe");
+		char* ucrtbase = sym.get_addr("ucrtbase.dll");
 
-		sym.addr2loc(sym.exe_base_addr + 0x1080); // fib()
-		sym.addr2loc(sym.exe_base_addr + 0x1088); // fib() test instr
-		sym.addr2loc(sym.exe_base_addr + 0x10C8); // past fib()
+		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
+			at_addr(exe + 0);
+			at_addr(exe + 5);
 
-		sym.addr2loc(sym.exe_base_addr + 0x10D0); // fib_iter()
-		sym.addr2loc(sym.exe_base_addr + 0x1114); // fib_iter() mov instr
+			at_addr(exe + 0x1DE0); // main()
+		
+			at_addr(exe + 0x1F90); // print()
 
-		sym.addr2loc(sym.exe_base_addr + 0x1140); // sqrt()
+			at_addr(exe + 0x1F40); // fib()
+			at_addr(exe + 0x1F48); // fib() test ecx,ecx
+			at_addr(exe + 0x1F8A); // past fib()
 
-		// Find a way to query ucrtbase.dll base addr so we can find sym for __stdio_common_vfprintf
-	} catch (...) {}
+			at_addr(exe + 0x1EC0); // fib_iter()
+			at_addr(exe + 0x1ED4); // fib_iter() mov instr
+
+			at_addr(exe + 0x1E60); // sqrt()
+		
+			at_addr(ucrtbase + 0x1B370); // __stdio_common_vfprintf
+		});
+	} catch (std::runtime_error err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	Sleep(1000);
 	
 	try {
 		SymbolResolver sym("city_builder_rel.exe");
-	} catch (...) {}
+		
+		char* exe = sym.get_addr(".exe");
+		char* assimp = sym.get_addr("assimp-vc143-mt.dll");
+		char* ucrtbase = sym.get_addr("ucrtbase.dll");
+
+		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
+			at_addr(exe + 0);
+			at_addr(exe + 5);
+
+			at_addr(exe + 0x21FA0); // main()
+	
+			at_addr(exe + 0x2C1E0); // json_load
+			at_addr(exe + 0x2C1F4); // json_load - save.load_graphics_settings
+			at_addr(exe + 0x37810); // nlohmann
+			at_addr(exe + 0x37861); // array = create<array_t>(); - mov ecx,18h
+			at_addr(exe + 0x8D7B0); // operator new D:\a\_work\1\s\src\vctools\crt\vcstartup\src\heap\new_scalar.cpp
+			at_addr(exe + 0x30FC2); // load
+			at_addr(exe + 0x30FC2+1); // load
+			at_addr(exe + 0x30FC2+5); // load
+			at_addr(exe + 0x30FC2+8); // load
+			at_addr(exe + 0x30FC2+12); // load
+			at_addr(exe + 0x30FC2+15); // load
+	
+			at_addr(exe + 0x12ECF1); // clac_seg lambda + inline rotate90_right
+			at_addr(exe + 0x12EDB6+4); // clac_seg lambda + inline pick + get_dir_to_node
+			at_addr(exe + 0x12EDB6+6); // clac_seg lambda + inline pick + get_dir_to_node
+			at_addr(exe + 0x12EDB6+8); // clac_seg lambda + inline pick + get_dir_to_node
+			at_addr(exe + 0x12EDB6+10); // clac_seg lambda + inline pick + get_dir_to_node
+	
+			at_addr(assimp + 0x23990); // assimp
+	
+			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
+		});
+
+	} catch (std::runtime_error err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	Sleep(1000);
 
 	try {
 		SymbolResolver sym("rust_bevy_test.exe");
-	} catch (...) {}
+	} catch (std::runtime_error err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	Sleep(1000);
 	
 	return 0;
