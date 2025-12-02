@@ -1,11 +1,13 @@
 #include "util.hpp"
-#include "dbghelp.hpp"
 #include <functional>
 
 #include <psapi.h>
 #pragma comment(lib, "Kernel32.lib")
 
-class SymbolResolver {
+#include "dbghelp.hpp"
+#include "sym_resolver.hpp"
+
+class SymTesting {
 	STARTUPINFOA si{};
 	PROCESS_INFORMATION pi{};
 	
@@ -34,7 +36,8 @@ class SymbolResolver {
 
 	LoadedModules loaded_modules;
 
-	Debughelp* dbghelp;
+	std::unique_ptr<Debughelp> dbghelp;
+	std::unique_ptr<SymResolver> resolver;
 	
 	void start_debugging_child_process (std::string const& exe_filepath, float max_run_time) {
 		// Start exe as child process with DEBUG_ONLY_THIS_PROCESS
@@ -146,14 +149,16 @@ class SymbolResolver {
 		CloseHandle(pi.hProcess);
 	}
 public:
-	SymbolResolver (std::string const& exe_filepath, float max_run_time = 2.0f) {
+	SymTesting (std::string const& exe_filepath, float max_run_time = 2.0f) {
 		printf("Starting %s\n", exe_filepath.c_str());
 		start_debugging_child_process(exe_filepath, max_run_time);
-		dbghelp = new Debughelp(pi.hProcess);
+		dbghelp = std::make_unique<Debughelp>(pi.hProcess);
+		resolver = std::make_unique<SymResolver>(pi.hProcess);
 	}
 
-	~SymbolResolver () {
-		delete dbghelp; dbghelp = nullptr;
+	~SymTesting () {
+		dbghelp = nullptr;
+		resolver = nullptr;
 
 		printf("Killing process\n");
 		finish_debugging_and_kill_child_process();
@@ -165,6 +170,7 @@ public:
 	}
 	void show_addr2sym (char* addr) {
 		dbghelp->show_addr2sym(addr);
+		resolver->show_addr2sym(addr);
 	}
 	void measure_addr2sym (char* addr) {
 		dbghelp->measure_addr2sym(addr);
@@ -173,8 +179,8 @@ public:
 	template <typename FUNC>
 	void run_examples_addresses (FUNC run_examples) {
 		using std::placeholders::_1;
-		std::function<void(char*)> fshow = std::bind(&SymbolResolver::show_addr2sym, this, _1);
-		std::function<void(char*)> fmeas = std::bind(&SymbolResolver::measure_addr2sym, this, _1);
+		std::function<void(char*)> fshow = std::bind(&SymTesting::show_addr2sym, this, _1);
+		std::function<void(char*)> fmeas = std::bind(&SymTesting::measure_addr2sym, this, _1);
 
 		run_examples(fshow);
 
@@ -182,13 +188,14 @@ public:
 			run_examples(fmeas);
 		}
 		dbghelp->print_timings();
+		resolver->print_timings();
 	}
 };
 
 int main(int argc, const char** argv) {
 
 	try {
-		SymbolResolver sym("TinyProgram.exe", 0.5f);
+		SymTesting sym("TinyProgram.exe", 0.5f);
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
@@ -216,7 +223,7 @@ int main(int argc, const char** argv) {
 	Sleep(1000);
 	
 	try {
-		SymbolResolver sym("city_builder_rel.exe");
+		SymTesting sym("city_builder_rel.exe");
 		
 		char* exe = sym.get_addr(".exe");
 		char* assimp = sym.get_addr("assimp-vc143-mt.dll");
@@ -255,7 +262,7 @@ int main(int argc, const char** argv) {
 	Sleep(1000);
 
 	try {
-		SymbolResolver sym("rust_bevy_test.exe");
+		SymTesting sym("rust_bevy_test.exe");
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");

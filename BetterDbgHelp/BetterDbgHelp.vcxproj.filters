@@ -8,5 +8,6 @@
     <ClInclude Include="timer.hpp" />
     <ClInclude Include="dbghelp.hpp" />
     <ClInclude Include="util.hpp" />
+    <ClInclude Include="sym_resolver.hpp" />
   </ItemGroup>
 </Project>

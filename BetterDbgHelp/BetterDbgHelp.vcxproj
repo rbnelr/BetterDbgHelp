@@ -137,6 +137,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="dbghelp.hpp" />
+    <ClInclude Include="sym_resolver.hpp" />
     <ClInclude Include="timer.hpp" />
     <ClInclude Include="util.hpp" />
   </ItemGroup>

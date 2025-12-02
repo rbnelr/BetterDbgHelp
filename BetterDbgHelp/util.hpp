@@ -1,14 +1,39 @@
 #pragma once
+#ifndef _CRT_SECURE_NO_WARNINGS
+	#define _CRT_SECURE_NO_WARNINGS 1
+#endif
+
 #include <stdio.h>
 #include <assert.h>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <memory>
+#include <algorithm>
 #include "timer.hpp"
 using namespace kiss;
 
-#define WIN32_LEAN_AND_MEAN 1
+#ifndef WIN32_LEAN_AND_MEAN
+	#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef WIN32_NOMINMAX
+	#define WIN32_NOMINMAX
+#endif
+#ifndef NOMINMAX
+	#define NOMINMAX
+#endif
+
 #include <windows.h>
+
+#undef near
+#undef far
+#undef min
+#undef max
+#undef BF_BOTTOM
+#undef BF_TOP
+#undef ERROR
+
+
 #include <stdexcept>
 
 inline std::string print_err(const char* operation) {
