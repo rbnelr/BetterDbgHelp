@@ -219,7 +219,7 @@ int main(int argc, const char** argv) {
 		
 			at_addr(ucrtbase + 0x1B370); // __stdio_common_vfprintf
 		});
-	} catch (std::runtime_error err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	Sleep(1000);
 	
 	try {
@@ -258,7 +258,7 @@ int main(int argc, const char** argv) {
 			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
 		});
 
-	} catch (std::runtime_error err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	Sleep(1000);
 
 	try {
@@ -286,7 +286,7 @@ int main(int argc, const char** argv) {
 			//at_addr(ucrtbase + 0x69FB30); // ucrtbase.dll!sinf(), returns wrong symbol for some reason, I even double checked everything, am I missing something?
 			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf, weirdly this one works, so it's even the same ucrtbase.dll as the two other executables
 		});
-	} catch (std::runtime_error err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	Sleep(1000);
 	
 	return 0;

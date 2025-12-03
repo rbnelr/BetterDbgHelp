@@ -10,6 +10,10 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <stdexcept>
+#include <filesystem>
+#include <fstream>
+
 #include "timer.hpp"
 using namespace kiss;
 
@@ -33,9 +37,6 @@ using namespace kiss;
 #undef BF_TOP
 #undef ERROR
 
-
-#include <stdexcept>
-
 inline std::string print_err(const char* operation) {
 	auto err = GetLastError();
 
@@ -58,4 +59,29 @@ inline std::string print_err(const char* operation) {
 
 static bool ends_with(std::string_view str, std::string_view suffix) {
 	return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
+}
+
+
+inline bool load_file (std::string const& filepath, std::vector<char>* out_data) {
+	// https://stackoverflow.com/questions/51352863/what-is-the-idiomatic-c17-standard-approach-to-reading-binary-files
+	std::ifstream ifs(filepath, std::ios::binary|std::ios::ate);
+
+	if(!ifs)
+		return false;
+
+	auto end = ifs.tellg();
+	ifs.seekg(0, std::ios::beg);
+
+	auto size = std::size_t(end - ifs.tellg());
+
+	if(size == 0) // avoid undefined behavior
+		return false;
+
+	auto buffer = std::vector<char>(size);
+
+	if(!ifs.read(buffer.data(), buffer.size()))
+		throw std::runtime_error(filepath/* + ": " + std::strerror(errno)*/);
+
+	*out_data = std::move(buffer);
+	return true;
 }
