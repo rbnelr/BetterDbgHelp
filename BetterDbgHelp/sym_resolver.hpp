@@ -436,6 +436,64 @@ struct optional_debug_header_substream{
 	u16 stream_index_of_original_section_header_dump;
 };
 
+struct codeview_symbol_header{ // Also see SYMTYPE in cvinfo.h
+	u16 length;
+	//u16 kind;
+	SYM_ENUM_e kind;
+};
+
+enum DEBUG_S_SUBSECTION_TYPE : u32 {
+	DEBUG_S_IGNORE = 0x80000000,    // if this bit is set in a subsection type then ignore the subsection contents
+
+	DEBUG_S_SYMBOLS = 0xf1,
+	DEBUG_S_LINES,
+	DEBUG_S_STRINGTABLE,
+	DEBUG_S_FILECHKSMS,
+	DEBUG_S_FRAMEDATA,
+	DEBUG_S_INLINEELINES,
+	DEBUG_S_CROSSSCOPEIMPORTS,
+	DEBUG_S_CROSSSCOPEEXPORTS,
+
+	DEBUG_S_IL_LINES,
+	DEBUG_S_FUNC_MDTOKEN_MAP,
+	DEBUG_S_TYPE_MDTOKEN_MAP,
+	DEBUG_S_MERGED_ASSEMBLYINPUT,
+
+	DEBUG_S_COFF_SYMBOL_RVA,
+};
+struct codeview_subsection_header{
+	DEBUG_S_SUBSECTION_TYPE type;
+	u32 length;
+};
+struct codeview_file_checksum{
+	u32 offset_in_string_table;
+	u8  checksum_size;
+	u8  checksum_kind;
+	//u8  checksum[];
+};
+struct codeview_line_header{
+	u32 contribution_offset;
+	u16 contribution_section_id;
+	u16 flags;
+	u32 contribution_size;
+};
+struct codeview_line_block_header{
+	u32 offset_in_file_checksums;
+	u32 amount_of_lines; // codeview_line_block_header followed by codeview_line[amount_of_lines]
+	u32 block_size; // unsure what is is for, could be sizeof(codeview_line_block_header + codeview_line[])
+};
+struct codeview_line{
+	u32 offset;
+	u32 start_line_number     : 24;
+	u32 optional_delta_to_end : 7;
+	u32 is_a_statement        : 1;
+};
+
+struct SourceLoc {
+	const char* filename;
+	u32         lineno;
+};
+
 class PDB_File {
 	std::vector<char> data;
 	
@@ -482,7 +540,7 @@ class PDB_File {
 
 	pdb_information_stream_header* info;
 
-	std::unordered_map<const char*, u32> named_streams;
+	std::unordered_map<std::string_view, u32> named_streams;
 
 	const char* names;
 
@@ -623,7 +681,7 @@ class PDB_File {
 				//named_streams[std::move(key)] = kv.value;
 				std::string key = std::string(&string_buffer[kv.key]);
 				printf("> %s: %d\n", &string_buffer[kv.key], kv.value);
-				named_streams[&string_buffer[kv.key]] = kv.value;
+				named_streams[std::string_view(&string_buffer[kv.key])] = kv.value;
 				continue;
 			}
 		}
@@ -635,6 +693,7 @@ class PDB_File {
 		
 		u32 signature = *(u32*)ptr;
 		ptr += sizeof(u32);
+		assert(signature == 0xEFFEEFFE);
 		
 		u32 hash_version = *(u32*)ptr;
 		ptr += sizeof(u32);
@@ -691,7 +750,7 @@ class PDB_File {
 			modules.push_back(m);
 
 			assert(module_index < 0xffff);
-			copy_module_symbol_stream((s16)module_index);
+			read_module_symbol_stream((s16)module_index);
 		}
 		assert((ptr - ptr2) == header->byte_size_of_the_module_information_substream);
 		ptr = ptr2 + header->byte_size_of_the_module_information_substream;
@@ -792,19 +851,14 @@ class PDB_File {
 		_assert_sections_sorted();
 	}
 	
-	struct codeview_symbol_header{ // Also see SYMTYPE in cvinfo.h
-		u16 length;
-		//u16 kind;
-		SYM_ENUM_e kind;
-	};
-
-	void copy_module_symbol_stream (s16 module_index) {
+	void read_module_symbol_stream (s16 module_index) {
 		auto& mod = modules[module_index];
 		auto* mi = mod.mi;
 
 		mod.symbol_stream_data = copy_into_consecutive(mi->stream_index_of_module_symbol_stream);
 		char* ptr = mod.symbol_stream_data.data();
 		
+		//// Symbol info
 		char* ptr2 = ptr;
 		u32 signature = *(u32*)ptr;
 		ptr += sizeof(u32);
@@ -819,9 +873,8 @@ class PDB_File {
 			printf("> %4x %d\n", sym->kind, sym->length);
 
 			switch (sym->kind) {
-				case S_LPROC32: case S_GPROC32:
-				//case S_GPROC32EX: case S_LPROC32EX: // supposedly could exists as well
-				{
+				case S_GPROC32: case S_LPROC32:
+				case S_GPROC32_ID: case S_LPROC32_ID: {
 					auto* proc = (PROCSYM32*)sym;
 					printf(">> %s %4d %4d %8x %s\n",
 						sym->kind == S_LPROC32 ? "L":"G",
@@ -836,9 +889,89 @@ class PDB_File {
 		//auto* c11_line_information = (u8*)ptr;
 		ptr += mi->byte_size_of_c11_line_information;
 		
-		//auto* c13_line_information = (u8*)ptr;
-		ptr += mi->byte_size_of_c13_line_information;
+		//// C13 line info
+		printf("> c13_line_information\n");
+
+		ptr2 = ptr;
+
+		// first pass to find FILECHKSMS ptr
+		char* filechksms_ptr = nullptr;
+		while (ptr < ptr2 + mi->byte_size_of_c13_line_information) {
+			auto* header = (codeview_subsection_header*)ptr;
+			ptr += sizeof(codeview_subsection_header);
+
+			if (header->type == DEBUG_S_FILECHKSMS) {
+				filechksms_ptr = ptr;
+				//read_file_checksum(header);
+				break;
+			}
+			else {
+				ptr += header->length;
+			}
+		}
+		ptr = ptr2; // reset ptr
 		
+		auto read_line_numbers = [&] (codeview_subsection_header* header) {
+			auto* ptr3 = ptr;
+
+			// With usual compiler, this is once per function
+			auto* lines = (codeview_line_header*)ptr;
+			ptr += sizeof(codeview_line_header);
+			assert(lines->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
+
+			printf(">> Header %d, %8x %8x\n", lines->contribution_section_id, lines->contribution_offset, lines->contribution_size);
+			
+			while (ptr < ptr3 + header->length) {
+				auto* line_block = (codeview_line_block_header*)ptr;
+				ptr += sizeof(codeview_line_block_header);
+
+				auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
+				auto* name = &names[cksm->offset_in_string_table];
+
+				printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, name);
+
+				for (u32 i=0; i<line_block->amount_of_lines; i++) {
+					auto* line = (codeview_line*)ptr;
+					ptr += sizeof(codeview_line);
+
+					printf(">>  Line %d %d\n", line->start_line_number, line->offset);
+				}
+			}
+			assert((ptr - ptr3) == header->length);
+		};
+		auto read_file_checksums = [&] (codeview_subsection_header* header) {
+			auto* ptr3 = ptr;
+			while (ptr < ptr3 + header->length) {
+				auto* file = (codeview_file_checksum*)ptr;
+				ptr += sizeof(codeview_file_checksum);
+				ptr += file->checksum_size;
+				ptr = align_up(ptr, 4);
+
+				auto* name = &names[file->offset_in_string_table];
+
+				printf(">> File Checksum %s\n", name);
+			}
+			assert((ptr - ptr3) == header->length);
+		};
+
+		while (ptr < ptr2 + mi->byte_size_of_c13_line_information) {
+			auto* header = (codeview_subsection_header*)ptr;
+			ptr += sizeof(codeview_subsection_header);
+
+			switch (header->type) {
+				case DEBUG_S_LINES: {
+					read_line_numbers(header);
+				} break;
+				//case DEBUG_S_FILECHKSMS: {
+				//	read_file_checksum(header);
+				//} break;
+				default: {
+					ptr += header->length;
+				}
+			}
+		}
+		assert((ptr - ptr2) == mi->byte_size_of_c13_line_information);
+
 		auto global_references_bytes_size = *(u32*)ptr;
 		auto num_global_references = global_references_bytes_size / 4;
 		ptr += sizeof(u32);
@@ -848,7 +981,7 @@ class PDB_File {
 		
 		assert((ptr - mod.symbol_stream_data.data()) == streams[mi->stream_index_of_module_symbol_stream].size);
 	}
-
+	
 public:
 	struct ProcSym {
 		PROCSYM32* proc;
@@ -903,6 +1036,92 @@ public:
 		}
 
 		return nullptr;
+	}
+
+	bool find_source_loc (Module& mod, u32 sec_id, u32 sec_raddr, SourceLoc* out_src_loc) {
+		auto* mi = mod.mi;
+		char* ptr = mod.symbol_stream_data.data();
+		
+		ptr += mi->byte_size_of_symbol_information;
+		ptr += mi->byte_size_of_c11_line_information;
+		
+		//// C13 line info
+		char* c13_line_information = ptr;
+
+		// first pass to find FILECHKSMS ptr
+		char* filechksms_ptr = nullptr;
+		while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
+			auto* header = (codeview_subsection_header*)ptr;
+			ptr += sizeof(codeview_subsection_header);
+
+			if (header->type == DEBUG_S_FILECHKSMS) {
+				filechksms_ptr = ptr;
+				break;
+			}
+			else {
+				ptr += header->length;
+			}
+		}
+		ptr = c13_line_information; // reset ptr
+		
+		while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
+			auto* header = (codeview_subsection_header*)ptr;
+			ptr += sizeof(codeview_subsection_header);
+
+			if (header->type == DEBUG_S_LINES) {
+				auto* lines = (codeview_line_header*)ptr;
+				ptr += sizeof(codeview_line_header);
+				assert(lines->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
+					
+				if (  lines->contribution_section_id == sec_id &&
+					  sec_raddr >= lines->contribution_offset && sec_raddr < lines->contribution_offset + lines->contribution_size) {
+					u32 proc_raddr = sec_raddr - lines->contribution_offset;
+
+					while (ptr < (char*)lines + header->length) {
+						auto* line_block = (codeview_line_block_header*)ptr;
+						ptr += sizeof(codeview_line_block_header);
+						if (line_block->amount_of_lines > 0) {
+							auto* lines = (codeview_line*)ptr;
+
+							// codeview_lines seems to be sorted by offset, ie code address relative to start of function
+							// there is only offset, no size, so I assume any addresses between this offset and the next belong to the line as well
+							// lines can be out of order (earlier instructions belonging to later lines due to compiler optimizations for example)
+							// lines will be missing (empty lines or lines with no generated code)
+							// different entries can have the same line (single line to multiple instruction spans)
+							// the same offset can appear twice with different lines (I guess multiple related lines that do one thing, maybe also when a statement is split over lines?)
+							//  -> this part makes it confusing to resolve line numbers, as we would usually only return one (but go to disassembly and possibly breakpoints need info for each line!)
+							//     tracy should never double count samples, and indeed dbghelp only reports one line, which appears like the lower one
+							//     but it's unclear if the first match in the list is chosen or if the lower line number is actively chosen TODO:
+
+							codeview_line* prev_line_with_lower_offset = &lines[0];
+							for (u32 i=1; i<line_block->amount_of_lines; i++) {
+								auto* line = &lines[i];
+
+								// scan all lines and pick lowest lineno TODO: this could probably be simplified/accelerated by first deduplicating lines and storing the list of end addresses instead
+								if (proc_raddr < line->offset) {
+									// proc_raddr is in range [prev_offset, offset), so it belongs to all instructions with prev_offset
+									// prev_line_with_lower_offset is the first one of these (lowest line number?)
+									break;
+								}
+								if (line->offset != prev_line_with_lower_offset->offset)
+									prev_line_with_lower_offset = line;
+							}
+							codeview_line* found_line = prev_line_with_lower_offset;
+
+							auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
+							auto* name = &names[cksm->offset_in_string_table];
+
+							*out_src_loc = { name, found_line->start_line_number };
+							return true;
+						}
+					}
+					assert(ptr == (char*)lines + header->length);
+				}
+			}
+			
+			ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
+		}
+		return false;
 	}
 
 	static std::unique_ptr<PDB_File> try_load_pdb (std::string&& path) {
@@ -1085,7 +1304,13 @@ public:
 			return;
 		}
 		
-		printf("#[%16llx]: %-15s %-9s (%d) %4llx %s", addr, mod->path.c_str(), sec->name.c_str(), sec_id, sec_raddr, ps->proc->name);
+		SourceLoc src_loc = {};
+		if (!mod->pdb->find_source_loc(pdb_mod, sec_id, (u32)sec_raddr, &src_loc)) {
+			printf("#[%16llx]: Source location not found\n", addr);
+			return;
+		}
+
+		printf("#[%16llx]: %-9s (%d) %4llx %-15s!%s %s:%d", addr, sec->name.c_str(), sec_id, sec_raddr, mod->path.c_str(), ps->proc->name, src_loc.filename, src_loc.lineno);
 
 		printf("\n");
 	}
