@@ -490,7 +490,7 @@ struct codeview_line{
 };
 
 struct SourceLoc {
-	const char* filename;
+	const char* filepath;
 	u32         lineno;
 };
 
@@ -1203,7 +1203,7 @@ class SymResolver {
 
 		const LoadedModule* find_module_for_addr (HANDLE inspectee, uintptr_t addr) {
 			for (auto& m : sorted) {
-				if (addr > m.base_addr && addr <= m.base_addr + m.size) {
+				if (addr >= m.base_addr && addr < m.base_addr + m.size) {
 					return &m;
 				}
 			}
@@ -1253,7 +1253,7 @@ class SymResolver {
 				if (GetModuleInformation(inspectee, mod, &info, sizeof(info))) {
 					auto base = (uintptr_t)info.lpBaseOfDll;
 					auto size = (size_t)info.SizeOfImage;
-					if (addr >= base && addr < (base + size)) {
+					if (addr >= base && addr < base + size) {
 						char name[1024];
 						auto nameLength = GetModuleFileNameExA(inspectee, mod, name, sizeof(name));
 						if (nameLength > 0) {
@@ -1268,21 +1268,61 @@ class SymResolver {
 	};
 
 	ModuleCache mod_cache;
+	
+	TimerMeasurement twarmup = TimerMeasurement("warmup");
+	TimerMeasurement taddr2sym = TimerMeasurement("addr2sym");
 
 public:
 	SymResolver (HANDLE inspectee): inspectee{inspectee} {}
+	
+	struct Result {
+		const char* module_path;
+		const char* sym_name;
 
-	void show_addr2sym (char* ptr) {
+		const char* src_filepath;
+		uint32_t    src_lineno;
+
+		// TODO: inline frames
+	};
+
+	bool show_addr2sym (char* ptr) {
+		Result res = {};
+		const char* err = 0;
+		if (!addr2sym(ptr, &res, &err)) {
+			printf("#[%16llx]: %s\n", (uintptr_t)ptr, err);
+			return false;
+		}
+
+		printf("#[%16llx]: %-15s!%s %s:%d\n", (uintptr_t)ptr, res.module_path, res.sym_name, res.src_filepath, res.src_lineno);
+		return true;
+	}
+	void warmup_addr2sym (char* ptr) {
+		TimerMeasZone(twarmup);
+
+		Result res = {};
+		const char* err = 0;
+		addr2sym(ptr, &res, &err);
+	}
+	void measure_addr2sym (char* ptr) {
+		Result res = {};
+		const char* err = 0;
+		{
+			TimerMeasZone(taddr2sym);
+			addr2sym(ptr, &res, &err);
+		}
+	}
+
+	bool addr2sym (void* ptr, Result* res, const char** err) {
 		uintptr_t addr = (uintptr_t)ptr;
 
 		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
 		if (!mod) {
-			printf("#[%16llx]: Module not found\n", addr);
-			return;
+			*err = "Module not found";
+			return false;
 		}
 		if (!mod->pdb) {
-			printf("#[%16llx]: Module pdb not found\n", addr);
-			return;
+			*err = "Module pdb not found";
+			return false;
 		}
 
 		uintptr_t mod_raddr = addr - mod->base_addr;
@@ -1290,8 +1330,8 @@ public:
 		u32 sec_id = 0;
 		auto* sec = mod->pdb->find_section_for_addr(mod_raddr, &sec_id);
 		if (!sec) {
-			printf("#[%16llx]: Section not found\n", addr);
-			return;
+			*err = "Section not found";
+			return false;
 		}
 
 		uintptr_t sec_raddr = mod_raddr - sec->base_addr;
@@ -1299,29 +1339,35 @@ public:
 		
 		auto* sc = mod->pdb->find_section_contribution(sec_id, (s32)sec_raddr);
 		if (!sc) {
-			printf("#[%16llx]: Section contribution not found\n", addr);
-			return;
+			*err = "Section contribution not found";
+			return false;
 		}
 
 		auto& pdb_mod = mod->pdb->modules[sc->module_index];
 		auto* ps = mod->pdb->find_procsym(pdb_mod, sec_id, (u32)sec_raddr);
 		if (!ps) {
-			printf("#[%16llx]: Symbol not found\n", addr);
-			return;
+			*err = "Symbol not found";
+			return false;
 		}
 		
 		SourceLoc src_loc = {};
 		if (!mod->pdb->find_source_loc(pdb_mod, sec_id, (u32)sec_raddr, &src_loc)) {
-			printf("#[%16llx]: Source location not found\n", addr);
-			return;
+			*err = "Source location not found";
+			return false;
 		}
 
-		printf("#[%16llx]: %-9s (%d) %4llx %-15s!%s %s:%d", addr, sec->name.c_str(), sec_id, sec_raddr, mod->path.c_str(), ps->proc->name, src_loc.filename, src_loc.lineno);
-
-		printf("\n");
+		*res = Result {
+			mod->path.c_str(),
+			(const char*)ps->proc->name,
+			src_loc.filepath,
+			src_loc.lineno,
+		};
+		return true;
 	}
 
 	void print_timings () {
 		mod_cache.ttry_get_and_cache_module.print();
+		twarmup.print();
+		taddr2sym.print();
 	}
 };

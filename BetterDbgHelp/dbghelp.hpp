@@ -14,7 +14,9 @@ extern "C" {
 class Debughelp {
 	HANDLE inspectee;
 public:
-
+	
+	TimerMeasurement tDebughelp_init = TimerMeasurement("Debughelp_init");
+	TimerMeasurement twarmup = TimerMeasurement("warmup");
 	TimerMeasurement tSymFromAddr = TimerMeasurement("SymFromAddr");
 	TimerMeasurement tSymGetLineFromAddr64 = TimerMeasurement("SymGetLineFromAddr64");
 	TimerMeasurement tSymAddrIncludeInlineTrace = TimerMeasurement("SymAddrIncludeInlineTrace");
@@ -29,7 +31,7 @@ public:
 	t_SymGetLineFromInlineContext _SymGetLineFromInlineContext = 0;
 
 	Debughelp (HANDLE inspectee): inspectee{inspectee} {
-		TimerZone(Debughelp_init);
+		TimerMeasZone(tDebughelp_init);
 
 		DWORD opts = 0;
 		opts |= SYMOPT_LOAD_LINES;         // line info
@@ -124,6 +126,68 @@ public:
 			ctx++;
 		}
 	}
+	
+	void warmup_addr2sym (char* addr) {
+		TimerMeasZone(twarmup);
+		// simply measure_addr2sym without timers
+
+		constexpr size_t MaxNameSize = 8192;
+		char buf[sizeof(SYMBOL_INFO) + MaxNameSize] = {};
+		auto* si = (SYMBOL_INFO*)buf;
+		si->SizeOfStruct = sizeof(SYMBOL_INFO);
+		si->MaxNameLen = MaxNameSize;
+
+		DWORD Displacement = 0;
+
+		IMAGEHLP_LINE64 line = {};
+		line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+
+		BOOL res1;
+		{
+			res1 = SymFromAddr(inspectee, (DWORD64)addr, nullptr, si);
+		}
+		if (!res1) {
+			return;
+		}
+		
+		BOOL res2;
+		{
+			res2 = SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line);
+		}
+
+		
+		BOOL doInline = FALSE;
+		DWORD ctx = 0;
+		DWORD inlineNum = 0;
+		if (_SymAddrIncludeInlineTrace) {
+			{
+				inlineNum = _SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
+			}
+
+			DWORD idx;
+			if (inlineNum != 0) {
+				doInline = _SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
+			}
+		}
+		
+		for (DWORD i=0; i<inlineNum; i++) {
+			{
+				res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
+			}
+			if (!res1) {
+				continue;
+			}
+			
+			{
+				res2 = _SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
+			}
+			if (!res2) {
+				continue;
+			}
+
+			ctx++;
+		}
+	}
 	void measure_addr2sym (char* addr) {
 		constexpr size_t MaxNameSize = 8192;
 		char buf[sizeof(SYMBOL_INFO) + MaxNameSize] = {};
@@ -190,6 +254,9 @@ public:
 	}
 
 	void print_timings () {
+		tDebughelp_init.print();
+		twarmup.print();
+
 		tSymFromAddr.print();
 		tSymGetLineFromAddr64.print();
 

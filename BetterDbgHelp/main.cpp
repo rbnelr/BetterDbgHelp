@@ -177,6 +177,7 @@ public:
 	}
 	void measure_addr2sym (char* addr) {
 		dbghelp->measure_addr2sym(addr);
+		resolver->measure_addr2sym(addr);
 	}
 
 	template <typename FUNC>
@@ -191,7 +192,12 @@ public:
 			run_examples(fmeas);
 		}
 		dbghelp->print_timings();
+		printf("---\n");
 		resolver->print_timings();
+	}
+	void warmup (char* addr) {
+		dbghelp->warmup_addr2sym(addr);
+		resolver->warmup_addr2sym(addr);
 	}
 };
 
@@ -202,7 +208,8 @@ int main(int argc, const char** argv) {
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
-
+		
+		sym.warmup(exe + 0x21F0);
 		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
@@ -244,7 +251,8 @@ int main(int argc, const char** argv) {
 		char* exe = sym.get_addr(".exe");
 		char* assimp = sym.get_addr("assimp-vc143-mt.dll");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
-
+		
+		sym.warmup(exe + 0x21FA0);
 		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
@@ -282,7 +290,8 @@ int main(int argc, const char** argv) {
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
-
+		
+		sym.warmup(exe + 0x3011B80);
 		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
