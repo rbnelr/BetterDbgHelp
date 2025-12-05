@@ -37,7 +37,7 @@ using namespace kiss;
 #undef BF_TOP
 #undef ERROR
 
-inline std::string print_err(const char* operation) {
+inline void print_err(const char* operation) {
 	auto err = GetLastError();
 
 	LPSTR msgBuf = nullptr;
@@ -54,6 +54,9 @@ inline std::string print_err(const char* operation) {
 		nullptr);
 
 	fprintf(stderr, "%s failed: [%lu] {\n%s}\n", operation, err, msgBuf);
+}
+inline std::string print_err_throw(const char* operation) {
+	print_err(operation);
 	throw std::runtime_error("Win32 Error");
 }
 

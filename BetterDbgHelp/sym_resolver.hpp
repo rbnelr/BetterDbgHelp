@@ -616,7 +616,7 @@ class PDB_File {
 		
 		for (u32 si=0; si<streams.size(); si++) {
 			auto& stream = streams[si];
-			printf("Stream %3d: { ", si);
+			//printf("Stream %3d: { ", si);
 		
 			u32 num_pages = ceil_div(stream.size, header->page_size);
 			for (u32 i=0; i<num_pages; i++) {
@@ -625,10 +625,10 @@ class PDB_File {
 		
 				stream.pages.push_back(page_idx);
 		
-				printf("%d, ", page_idx);
+				//printf("%d, ", page_idx);
 			}
 		
-			printf("}\n");
+			//printf("}\n");
 		}
 	}
 
@@ -674,7 +674,7 @@ class PDB_File {
 		// unused
 		ptr += sizeof(u32);
 		
-		printf("Named Streams:\n");
+		//printf("Named Streams:\n");
 		for(u32 index = 0, entry_index = 0; index < capacity && entry_index < amount_of_entries; index++){
 			u32 word_index = index / (sizeof(u32) * 8);
 			u32 bit_index  = index % (sizeof(u32) * 8);
@@ -686,7 +686,7 @@ class PDB_File {
 				//printf("> %s: %d\n", key.c_str(), kv.value);
 				//named_streams[std::move(key)] = kv.value;
 				std::string key = std::string(&string_buffer[kv.key]);
-				printf("> %s: %d\n", &string_buffer[kv.key], kv.value);
+				//printf("> %s: %d\n", &string_buffer[kv.key], kv.value);
 				named_streams[std::string_view(&string_buffer[kv.key])] = kv.value;
 				continue;
 			}
@@ -777,7 +777,7 @@ class PDB_File {
 			//ptr += sizeof(pdb_section_contribution);
 		for (u32 i=0; i<num_section_contributions; i++) {
 			auto* sc = &section_contributions[i];
-			printf("> %d %8x %8x %d\n", sc->section_id, sc->offset, sc->size, sc->module_index);
+			//printf("> %d %8x %8x %d\n", sc->section_id, sc->offset, sc->size, sc->module_index);
 		}
 		ptr += sizeof(pdb_section_contribution) * num_section_contributions;
 		assert((ptr - ptr2) == header->byte_size_of_the_section_contribution_substream); // Why is this not correct?
@@ -861,6 +861,8 @@ class PDB_File {
 		auto& mod = modules[module_index];
 		auto* mi = mod.mi;
 
+		if (mi->stream_index_of_module_symbol_stream == 0xffff)
+			return; // no symbol data
 		mod.symbol_stream_data = copy_into_consecutive(mi->stream_index_of_module_symbol_stream);
 		char* ptr = mod.symbol_stream_data.data();
 		
@@ -876,15 +878,15 @@ class PDB_File {
 			ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
 			ptr = align_up(ptr, 4);
 
-			printf("> %4x %d\n", sym->kind, sym->length);
+			//printf("> %4x %d\n", sym->kind, sym->length);
 
 			switch (sym->kind) {
 				case S_GPROC32: case S_LPROC32:
 				case S_GPROC32_ID: case S_LPROC32_ID: {
 					auto* proc = (PROCSYM32*)sym;
-					printf(">> %s %4d %4d %8x %s\n",
-						sym->kind == S_LPROC32 ? "L":"G",
-						proc->seg, proc->len, proc->off, proc->name);
+					//printf(">> %s %4d %4d %8x %s\n",
+					//	sym->kind == S_LPROC32 ? "L":"G",
+					//	proc->seg, proc->len, proc->off, proc->name);
 
 					mod.procsyms.push_back({ proc });
 				} break;
@@ -896,7 +898,7 @@ class PDB_File {
 		ptr += mi->byte_size_of_c11_line_information;
 		
 		//// C13 line info
-		printf("> c13_line_information\n");
+		//printf("> c13_line_information\n");
 
 		ptr2 = ptr;
 
@@ -925,7 +927,7 @@ class PDB_File {
 			ptr += sizeof(codeview_line_header);
 			assert(lines->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
 
-			printf(">> Header %d, %8x %8x\n", lines->contribution_section_id, lines->contribution_offset, lines->contribution_size);
+			//printf(">> Header %d, %8x %8x\n", lines->contribution_section_id, lines->contribution_offset, lines->contribution_size);
 			
 			while (ptr < ptr3 + header->length) {
 				auto* line_block = (codeview_line_block_header*)ptr;
@@ -934,13 +936,13 @@ class PDB_File {
 				auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
 				auto* name = &names[cksm->offset_in_string_table];
 
-				printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, name);
+				//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, name);
 
 				for (u32 i=0; i<line_block->amount_of_lines; i++) {
 					auto* line = (codeview_line*)ptr;
 					ptr += sizeof(codeview_line);
 
-					printf(">>  Line %d %d\n", line->start_line_number, line->offset);
+					//printf(">>  Line %d %d\n", line->start_line_number, line->offset);
 				}
 			}
 			assert((ptr - ptr3) == header->length);
@@ -955,7 +957,7 @@ class PDB_File {
 
 				auto* name = &names[file->offset_in_string_table];
 
-				printf(">> File Checksum %s\n", name);
+				//printf(">> File Checksum %s\n", name);
 			}
 			assert((ptr - ptr3) == header->length);
 		};
@@ -1046,6 +1048,11 @@ public:
 
 	bool find_source_loc (Module& mod, u32 sec_id, u32 sec_raddr, SourceLoc* out_src_loc) {
 		auto* mi = mod.mi;
+
+		assert(mod.symbol_stream_data.empty() == (mi->stream_index_of_module_symbol_stream == 0xffff));
+		if (mi->stream_index_of_module_symbol_stream == 0xffff) {
+			return false; // no symbol data
+		}
 		char* ptr = mod.symbol_stream_data.data();
 		
 		ptr += mi->byte_size_of_symbol_information;
@@ -1241,7 +1248,7 @@ class SymResolver {
 			HMODULE modules[1024];
 			DWORD needed = 0;
 			if (!EnumProcessModules(inspectee, modules, sizeof(modules), &needed) || needed > sizeof(modules)) { // TODO: properly handle error
-				print_err("EnumProcessModules");
+				print_err_throw("EnumProcessModules");
 			}
 
 			// only return, and cache, the module that addr was in (as opposed to simply aching anything GetModuleInformation returns)

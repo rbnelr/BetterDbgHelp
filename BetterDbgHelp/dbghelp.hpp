@@ -43,7 +43,7 @@ public:
 		// In my case I just want to measure symbol resolution performance and I assume the modules I'm interested in are already loaded
 		BOOL fInvadeProcess = TRUE;
 		if (!SymInitialize(inspectee, NULL, fInvadeProcess)) {
-			print_err("SymInitialize");
+			print_err_throw("SymInitialize");
 		}
 
 		//SymFromAddr
@@ -70,8 +70,8 @@ public:
 
 		BOOL res1 = SymFromAddr(inspectee, (DWORD64)addr, NULL, si);
 		if (!res1) {
-			//print_err("SymFromAddr");
 			printf("[%16p]: Not found\n", addr);
+			print_err("SymFromAddr");
 			return;
 		}
 		// start_of_symbol + Displacement == addr
@@ -83,8 +83,8 @@ public:
 		printf("[%16p]: %-15s", addr, si->Name);
 		
 		if (!res2) { // tracy has another check here: line.LineNumber >= 0xF00000 but this is undocumented
-			//print_err("SymGetLineFromAddr64");
 			printf("\n");
+			//print_err("SymGetLineFromAddr64"); // Not having a line number is normal for certain addresses
 			return;
 		}
 		// address_of_first_instruction_of_line + Displacement2 == addr
@@ -108,7 +108,8 @@ public:
 		for (DWORD i=0; i<inlineNum; i++) {
 			res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
 			if (!res1) {
-				printf("> Not found\n");
+				print_err("SymFromInlineContext");
+				//printf("> Not found\n");
 				continue;
 			}
 
@@ -118,6 +119,7 @@ public:
 
 			if (!res2) {
 				printf("\n");
+				//print_err("SymGetLineFromInlineContext");
 				continue;
 			}
 

@@ -51,7 +51,7 @@ class SymTesting {
 		if (!CreateProcessA(exe_filepath.c_str(), NULL, NULL, NULL, FALSE,
 				DEBUG_ONLY_THIS_PROCESS | CREATE_NEW_CONSOLE,
 				NULL, working_dir.c_str(), &si, &pi)) {
-			print_err("CreateProcess");
+			print_err_throw("CreateProcess");
 		}
 
 		auto timer = Timer::start();
@@ -61,7 +61,7 @@ class SymTesting {
 			de = {};
 			auto res = WaitForDebugEvent(&de, timeout);
 			if (!res && GetLastError() != ERROR_SEM_TIMEOUT) {
-				print_err("WaitForDebugEvent\n");
+				print_err_throw("WaitForDebugEvent\n");
 			}
 
 			// check time elapsed both on normal events and timeouts
@@ -136,7 +136,7 @@ class SymTesting {
 			for (;;) {
 				de = {};
 				if (!WaitForDebugEvent(&de, INFINITE)) {
-					print_err("WaitForDebugEvent\n");
+					print_err_throw("WaitForDebugEvent\n");
 				}
 
 				assert(de.dwProcessId == pi.dwProcessId);
@@ -243,7 +243,7 @@ int main(int argc, const char** argv) {
 			at_addr(ucrtbase + 0x1B370); // __stdio_common_vfprintf
 		});
 	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
-	Sleep(1000);
+	//Sleep(1000);
 	
 	try {
 		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
@@ -257,7 +257,7 @@ int main(int argc, const char** argv) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
 
-			at_addr(exe + 0x21FA0); // main()
+			at_addr(exe + 0x21FA0); // main()  -  This one does not resolve correctly for some reason, with both dbghelp.dll and my code
 	
 			at_addr(exe + 0x2C1E0); // json_load
 			at_addr(exe + 0x2C1F4); // json_load - save.load_graphics_settings
@@ -283,7 +283,7 @@ int main(int argc, const char** argv) {
 		});
 
 	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
-	Sleep(1000);
+	//Sleep(1000);
 
 	try {
 		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
@@ -312,7 +312,7 @@ int main(int argc, const char** argv) {
 			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf, weirdly this one works, so it's even the same ucrtbase.dll as the two other executables
 		});
 	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
-	Sleep(1000);
+	//Sleep(1000);
 	
 	return 0;
 }
