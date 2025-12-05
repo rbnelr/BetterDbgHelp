@@ -204,19 +204,32 @@ int main(int argc, const char** argv) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
 
-			at_addr(exe + 0x1DE0); // main()
-		
-			at_addr(exe + 0x1F90); // print()
+			at_addr(exe + 0x21F0); // main()
+			at_addr(exe + 0x2219); // main() printf call
 
-			at_addr(exe + 0x1F40); // fib()
-			at_addr(exe + 0x1F48); // fib() test ecx,ecx
-			at_addr(exe + 0x1F8A); // past fib()
+			at_addr(exe + 0x24D0); // print()
 
-			at_addr(exe + 0x1EC0); // fib_iter()
-			at_addr(exe + 0x1ED4); // fib_iter() mov instr
+			at_addr(exe + 0x2480); // fib()
+			at_addr(exe + 0x2488); // fib() test ecx,ecx
+			at_addr(exe + 0x2493); // fib() ret
+			at_addr(exe + 0x24CA); // past fib()
 
-			at_addr(exe + 0x1E60); // sqrt()
-		
+			at_addr(exe + 0x2400); // fib_iter()
+			at_addr(exe + 0x2414); // fib_iter() mov instr
+
+			at_addr(exe + 0x23A0); // sqrt()
+			at_addr(exe + 0x23EA); // sqrt() return
+	
+			at_addr(exe + 0x22A0); // inlining()
+			at_addr(exe + 0x22B9); // inlining() addps
+			at_addr(exe + 0x22F6); // inlining() sprintf_s
+			at_addr(exe + 0x22A0 + 75); // inlining()
+			at_addr(exe + 0x22A0 + 20); // inlining()
+			at_addr(exe + 0x22A0 + 25); // inlining()
+			at_addr(exe + 0x22A0 + 30); // inlining()
+			at_addr(exe + 0x22A0 + 40); // inlining()
+			at_addr(exe + 0x22A0 + 50); // inlining()
+
 			at_addr(ucrtbase + 0x1B370); // __stdio_common_vfprintf
 		});
 	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }

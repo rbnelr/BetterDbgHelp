@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <iostream>
 
 __declspec(noinline)
 void print (const char* prog_name) {
@@ -41,7 +42,39 @@ int sqrt (int square) {
 	return -1;
 }
 
-#include <windows.h>
+
+struct Vec3 {
+	float x, y, z;
+
+	__forceinline
+	std::string to_string () const {
+		char buf[1024];
+		int len = sprintf_s(buf, sizeof(buf), "(%f, %f, %f)", x, y, z);
+		return std::string(buf, len);
+	}
+};
+__forceinline
+Vec3 operator+ (Vec3 const& l, Vec3 const& r) {
+	return {
+		l.x + r.x,
+		l.y + r.y,
+		l.z + r.z,
+	};
+}
+
+__forceinline
+void inlined2 (float x, float y, float z) {
+	printf("(%s)\n", (Vec3{x, y, z} + Vec3{x, y, -z}).to_string().c_str());
+}
+__forceinline
+void inlined3 (float x, float y, float z) {
+	inlined2(x, y, z);
+}
+
+__declspec(noinline)
+void inlining (float a, float b) {
+	inlined3(a, 3, b);
+}
 
 int main(int argc, const char** argv) {
 	print(argv[0]);
@@ -56,5 +89,8 @@ int main(int argc, const char** argv) {
 
 	sqrt(28*28);
 	sqrt(100*100);
+
+	inlining(1, 3);
+	inlining(-1, 3);
 	return 0;
 }
