@@ -1,5 +1,6 @@
 #pragma once
 #include "util.hpp"
+#include "sym_resolver.hpp"
 
 #include <dbghelp.h>
 #pragma comment(lib, "dbghelp.lib")
@@ -265,6 +266,36 @@ public:
 
 			ctx++;
 		}
+	}
+
+	SymResolver::err_t addr2sym (void* addr, SymResolver::Result* res) {
+		char buf[sizeof(SYMBOL_INFO) + SymResolver::Result::STRBUF_SIZE] = {};
+
+		auto* si = (SYMBOL_INFO*)buf;
+		si->SizeOfStruct = sizeof(SYMBOL_INFO);
+		si->MaxNameLen = SymResolver::Result::STRBUF_SIZE;
+
+		DWORD Displacement = 0;
+
+		IMAGEHLP_LINE64 line = {};
+		line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+
+		if (!SymFromAddr(inspectee, (DWORD64)addr, nullptr, si)) {
+			return "SymFromAddr error";
+		}
+
+		strcpy(res->str_buf, si->Name);
+
+		res->sym_name = res->str_buf;
+		res->src_filepath = nullptr;
+		res->src_lineno = 0;
+		
+		if (!SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line)) {
+			return nullptr;
+		}
+		res->src_filepath = line.FileName;
+		res->src_lineno = line.LineNumber;
+		return nullptr;
 	}
 
 	void print_timings () {

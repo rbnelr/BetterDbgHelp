@@ -152,6 +152,8 @@ class SymTesting {
 		CloseHandle(pi.hProcess);
 	}
 public:
+	bool tests_failed = false;
+
 	SymTesting (std::string const& exe_filepath, float max_run_time = 2.0f) {
 		printf("Starting %s\n", exe_filepath.c_str());
 		start_debugging_child_process(exe_filepath, max_run_time);
@@ -179,14 +181,40 @@ public:
 		dbghelp->measure_addr2sym(addr);
 		resolver->measure_addr2sym(addr);
 	}
+	void test_addr2sym (char* addr) {
+		SymResolver::Result res={}, res_dbghelp={};
+
+		auto err_dbghelp = dbghelp->addr2sym(addr, &res_dbghelp);
+		auto err         = resolver->addr2sym(addr, &res);
+		
+		if (err_dbghelp) {
+			printf("!!! [%16llx %s] dbghelp.dll Error: %s\n", (uintptr_t)addr, res_dbghelp.sym_name, err_dbghelp);
+			tests_failed = true;
+			return;
+		}
+		if (err) {
+			printf("!!! [%16llx %s] SymResolver Error: %s\n", (uintptr_t)addr, res_dbghelp.sym_name, err);
+			tests_failed = true;
+			return;
+		}
+		
+		if (res != res_dbghelp) {
+			printf("!!! [%16llx %s] Result Mismatch:\n", (uintptr_t)addr, res_dbghelp.sym_name);
+			res.print_diff(res_dbghelp);
+			tests_failed = true;
+			return;
+		}
+	}
 
 	template <typename FUNC>
 	void run_examples_addresses (FUNC run_examples) {
 		using std::placeholders::_1;
 		std::function<void(char*)> fshow = std::bind(&SymTesting::show_addr2sym, this, _1);
 		std::function<void(char*)> fmeas = std::bind(&SymTesting::measure_addr2sym, this, _1);
+		std::function<void(char*)> ftest = std::bind(&SymTesting::test_addr2sym, this, _1);
 
-		run_examples(fshow);
+		//run_examples(fshow);
+		run_examples(ftest);
 
 		for (int i=0; i<1000; i++) {
 			run_examples(fmeas);
@@ -239,6 +267,9 @@ int main(int argc, const char** argv) {
 			at_addr(exe + 0x22A0 + 30); // inlining()
 			at_addr(exe + 0x22A0 + 40); // inlining()
 			at_addr(exe + 0x22A0 + 50); // inlining()
+
+			at_addr(exe + 0x2154); // malloc()
+			at_addr(exe + 0x16b0); // mainCRTStartup
 
 			at_addr(ucrtbase + 0x1B370); // __stdio_common_vfprintf
 		});

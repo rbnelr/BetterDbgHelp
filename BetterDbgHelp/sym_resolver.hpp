@@ -12,9 +12,15 @@ typedef uint16_t u16;
 typedef int32_t s32;
 typedef uint32_t u32;
 
-typedef uint32_t CV_typ_t; // ?? Couldn't find real code or doc for this
-typedef uint32_t CV_uoff32_t; // assumed based on name
-
+typedef unsigned long   CV_uoff32_t;
+typedef          long   CV_off32_t;
+typedef unsigned short  CV_uoff16_t;
+typedef          short  CV_off16_t;
+typedef unsigned short  CV_typ16_t;
+typedef unsigned long   CV_typ_t;
+typedef unsigned long   CV_pubsymflag_t;    // must be same as CV_typ_t.
+typedef unsigned short  _2BYTEPAD;
+typedef unsigned long   CV_tkn_t;
 
 typedef enum SYM_ENUM_e : u16 {
     S_COMPILE       =  0x0001,  // Compile flags symbol
@@ -299,6 +305,17 @@ typedef struct CV_PROCFLAGS {
         };
     };
 } CV_PROCFLAGS;
+typedef union CV_PUBSYMFLAGS {
+    CV_pubsymflag_t grfFlags;
+    struct {
+        CV_pubsymflag_t fCode       :  1;    // set if public symbol refers to a code address
+        CV_pubsymflag_t fFunction   :  1;    // set if public symbol is a function
+        CV_pubsymflag_t fManaged    :  1;    // set if managed code (native or IL)
+        CV_pubsymflag_t fMSIL       :  1;    // set if managed IL code
+        CV_pubsymflag_t __unused    : 28;    // must be zero
+    };
+} CV_PUBSYMFLAGS;
+
 typedef struct PROCSYM32 {
     unsigned short  reclen;     // Record length
     unsigned short  rectyp;     // S_GPROC32, S_LPROC32, S_GPROC32_ID, S_LPROC32_ID, S_LPROC32_DPC or S_LPROC32_DPC_ID
@@ -314,6 +331,43 @@ typedef struct PROCSYM32 {
     CV_PROCFLAGS    flags;      // Proc flags
     unsigned char   name[1];    // Length-prefixed name
 } PROCSYM32;
+typedef struct REFSYM2 {
+    unsigned short  reclen;     // Record length
+    unsigned short  rectyp;     // S_PROCREF, S_DATAREF, or S_LPROCREF
+    unsigned long   sumName;    // SUC of the name
+    unsigned long   ibSym;      // Offset of actual symbol in $$Symbols
+    unsigned short  imod;       // Module containing the actual symbol
+    unsigned char   name[1];    // hidden name made a first class member
+} REFSYM2;
+typedef struct CONSTSYM {
+    unsigned short  reclen;     // Record length
+    unsigned short  rectyp;     // S_CONSTANT or S_MANCONSTANT
+    CV_typ_t        typind;     // Type index (containing enum if enumerate) or metadata token
+    unsigned short  value;      // numeric leaf containing value
+    unsigned char   name[1];     // Length-prefixed name
+} CONSTSYM;
+typedef struct UDTSYM {
+    unsigned short  reclen;     // Record length
+    unsigned short  rectyp;     // S_UDT | S_COBOLUDT
+    CV_typ_t        typind;     // Type index
+    unsigned char   name[1];    // Length-prefixed name
+} UDTSYM;
+typedef struct DATASYM32 {
+    unsigned short  reclen;     // Record length
+    unsigned short  rectyp;     // S_LDATA32, S_GDATA32, S_LMANDATA, S_GMANDATA
+    CV_typ_t        typind;     // Type index, or Metadata token if a managed symbol
+    CV_uoff32_t     off;
+    unsigned short  seg;
+    unsigned char   name[1];    // Length-prefixed name
+} DATASYM32;
+typedef struct PUBSYM32 {
+    unsigned short  reclen;     // Record length
+    unsigned short  rectyp;     // S_PUB32
+    CV_PUBSYMFLAGS  pubsymflags;
+    CV_uoff32_t     off;
+    unsigned short  seg;
+    unsigned char   name[1];    // Length-prefixed name
+} PUBSYM32;
 
 // https://github.com/PascalBeyer/PDB-Documentation/?tab=readme-ov-file
 struct msf_header{
@@ -748,7 +802,7 @@ class PDB_File {
 
 			ptr = align_up(ptr, 4);
 
-			printf("> %d %-50s %-50s\n", mi->stream_index_of_module_symbol_stream, mod_name, file_name);
+			//printf("> %d %-50s %-50s\n", mi->stream_index_of_module_symbol_stream, mod_name, file_name);
 
 			Module m;
 			m.mi = mi;
@@ -852,14 +906,56 @@ class PDB_File {
 
 			sections_sorted.push_back({ std::string((const char*)sh->Name, strnlen_s((const char*)sh->Name, 8)), sh->VirtualAddress, sh->Misc.VirtualSize });
 			
-			char name[9] = {};
-			strncpy_s(name, (const char*)sh->Name, 8); // properly null-terminate
-			printf("> %7s %8x %8x\n", name, sh->VirtualAddress, sh->Misc.VirtualSize);
+			//char name[9] = {};
+			//strncpy_s(name, (const char*)sh->Name, 8); // properly null-terminate
+			//printf("> %7s %8x %8x\n", name, sh->VirtualAddress, sh->Misc.VirtualSize);
 		}
 
 		_assert_sections_sorted();
 	}
 	
+	void read_symbol_record_stream () {
+		auto* dbi = (dbi_stream_header*)DBI_data.data();
+		auto srs_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
+		char* ptr = srs_data.data();
+
+		char* ptr2 = ptr;
+		
+		// TODO: these should be 
+		while (ptr < ptr2 + srs_data.size()) {
+			auto sym = (codeview_symbol_header*)ptr;
+			
+			ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
+			ptr = align_up(ptr, 4);
+
+			switch (sym->kind) {
+				//case S_PROCREF: case S_DATAREF: case S_LPROCREF: {
+				//	auto* s = (REFSYM2*)sym;
+				//	printf("REFSYM2: %s\n", s->name);
+				//} break;
+				//case S_CONSTANT: case S_MANCONSTANT: { // mostly works, but weirdness with the name? maybe using 1 for zero length array is wrong
+				//	auto* s = (CONSTSYM*)sym;
+				//	printf("CONSTSYM: %s\n", s->name);
+				//} break;
+				//case S_UDT: case S_COBOLUDT: {
+				//	auto* s = (UDTSYM*)sym;
+				//	printf("UDTSYM: %s\n", s->name);
+				//} break;
+				case S_LDATA32: case S_GDATA32: case S_LMANDATA: case S_GMANDATA: {
+					auto* s = (DATASYM32*)sym;
+					//printf("DATASYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
+				} break;
+				case S_PUB32: {
+					auto* s = (PUBSYM32*)sym;
+					//printf("PUBSYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
+				} break;
+				default: {
+
+				}
+			}
+		}
+		assert((ptr - ptr2) == srs_data.size());
+	}
 	void read_module_symbol_stream (s16 module_index) {
 		auto& mod = modules[module_index];
 		auto* mi = mod.mi;
@@ -1041,6 +1137,10 @@ public:
 
 	const ProcSym* find_procsym (Module& mod, u32 sec_id, u32 sec_raddr) {
 		for (auto& ps : mod.procsyms) {
+			// I am not sure proc->len actually refers to the length of the instructions belonging to the function or now
+			// other symbols stored inside the pdb do not have a length
+			// and dbghelp.dll actually SymFromAddr the function name for addresses clearly past the function (padding before the next function)
+			// not sure if that's what I should do as well, I plan to do comparisons with dbghelp with fuzzed inputs/scan the entire exe address space
 			if (sec_id == ps.proc->seg && sec_raddr >= ps.proc->off && sec_raddr < ps.proc->off + ps.proc->len) {
 				return &ps;
 			}
@@ -1164,6 +1264,8 @@ public:
 		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
 		read_section_header_dump();
 
+		read_symbol_record_stream();
+
 		printf("PDB read.\n");
 	}
 };
@@ -1283,22 +1385,70 @@ class SymResolver {
 	TimerMeasurement taddr2sym = TimerMeasurement("addr2sym");
 
 public:
-	SymResolver (HANDLE inspectee): inspectee{inspectee} {}
-	
+	typedef const char* err_t;
 	struct Result {
-		const char* module_path;
-		const char* sym_name;
+		// TODO: dbghelp.dll requires us to pass in a string buffer, and I want to avoid heap alloc for the moment
+		static inline constexpr unsigned STRBUF_SIZE = 4096;
+		char str_buf[STRBUF_SIZE];
 
-		const char* src_filepath;
-		uint32_t    src_lineno;
+		const char* module_path = nullptr;
+		const char* sym_name = nullptr;
+
+		const char* src_filepath = nullptr;
+		uint32_t    src_lineno = 0;
+
+		bool has_source () const {
+			return src_filepath != nullptr;
+		}
 
 		// TODO: inline frames
+
+		bool operator== (Result const& r) const {
+			// dbghelp.dll not returning module name, assume it's correct
+			//if (strcmp(module_path, r.module_path) != 0) return false;
+			if (strcmp(sym_name, r.sym_name) != 0) return false;
+
+			if (has_source() != r.has_source()) return false;
+			if (has_source()) {
+				if (strcmp(src_filepath, r.src_filepath) != 0) return false;
+				if (src_lineno != r.src_lineno) return false;
+			}
+
+			return true;
+		}
+		bool operator!= (Result const& r) const {
+			return !(*this == r);
+		}
+
+		void print_diff (Result const& r) const {
+			//if (   strcmp(module_path, r.module_path) != 0
+			//	|| strcmp(sym_name, r.sym_name) != 0 ) {
+			//	printf("> sym:         \"%s!%s\" !=\n", module_path,sym_name);
+			//	printf("> dbghelp:dll: \"%s!%s\"\n", r.module_path,r.sym_name);
+			//}
+			if (strcmp(sym_name, r.sym_name) != 0) {
+				printf("> sym:         \"%s!%s\" !=\n", module_path,sym_name);
+				printf("> dbghelp:dll: \"?!%s\"\n", r.sym_name);
+			}
+			if (   has_source() != r.has_source()
+				&& strcmp(src_filepath, r.src_filepath) != 0 && src_lineno != r.src_lineno ) {
+				
+				if (has_source()) {
+					printf("> sym:         \"%s:%d\" !=\n", src_filepath,src_lineno);
+				}
+				if (r.has_source()) {
+					printf("> dbghelp:dll: \"%s:%d\" !=\n", r.src_filepath,r.src_lineno);
+				}
+			}
+		}
 	};
 
+	SymResolver (HANDLE inspectee): inspectee{inspectee} {}
+	
 	bool show_addr2sym (char* ptr) {
 		Result res = {};
-		const char* err = 0;
-		if (!addr2sym(ptr, &res, &err)) {
+		auto err = addr2sym(ptr, &res);
+		if (err) {
 			printf("#[%16llx]: %s\n", (uintptr_t)ptr, err);
 			return false;
 		}
@@ -1310,29 +1460,26 @@ public:
 		TimerMeasZone(twarmup);
 
 		Result res = {};
-		const char* err = 0;
-		addr2sym(ptr, &res, &err);
+		addr2sym(ptr, &res);
 	}
 	void measure_addr2sym (char* ptr) {
 		Result res = {};
 		const char* err = 0;
 		{
 			TimerMeasZone(taddr2sym);
-			addr2sym(ptr, &res, &err);
+			addr2sym(ptr, &res);
 		}
 	}
 
-	bool addr2sym (void* ptr, Result* res, const char** err) {
+	err_t addr2sym (void* ptr, Result* res) {
 		uintptr_t addr = (uintptr_t)ptr;
 
 		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
 		if (!mod) {
-			*err = "Module not found";
-			return false;
+			return "Module not found";
 		}
 		if (!mod->pdb) {
-			*err = "Module pdb not found";
-			return false;
+			return "Module pdb not found";
 		}
 
 		uintptr_t mod_raddr = addr - mod->base_addr;
@@ -1340,8 +1487,7 @@ public:
 		u32 sec_id = 0;
 		auto* sec = mod->pdb->find_section_for_addr(mod_raddr, &sec_id);
 		if (!sec) {
-			*err = "Section not found";
-			return false;
+			return "Section not found";
 		}
 
 		uintptr_t sec_raddr = mod_raddr - sec->base_addr;
@@ -1349,30 +1495,25 @@ public:
 		
 		auto* sc = mod->pdb->find_section_contribution(sec_id, (s32)sec_raddr);
 		if (!sc) {
-			*err = "Section contribution not found";
-			return false;
+			return "Section contribution not found";
 		}
 
 		auto& pdb_mod = mod->pdb->modules[sc->module_index];
 		auto* ps = mod->pdb->find_procsym(pdb_mod, sec_id, (u32)sec_raddr);
 		if (!ps) {
-			*err = "Symbol not found";
-			return false;
+			return "Symbol not found";
 		}
 		
 		SourceLoc src_loc = {};
 		if (!mod->pdb->find_source_loc(pdb_mod, sec_id, (u32)sec_raddr, &src_loc)) {
-			*err = "Source location not found";
-			return false;
+			return "Source location not found";
 		}
 
-		*res = Result {
-			mod->path.c_str(),
-			(const char*)ps->proc->name,
-			src_loc.filepath,
-			src_loc.lineno,
-		};
-		return true;
+		res->module_path = mod->path.c_str();
+		res->sym_name = (const char*)ps->proc->name;
+		res->src_filepath = src_loc.filepath;
+		res->src_lineno = src_loc.lineno;
+		return nullptr;
 	}
 
 	void print_timings () {
