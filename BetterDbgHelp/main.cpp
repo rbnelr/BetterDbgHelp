@@ -45,9 +45,12 @@ class SymTesting {
 		// meanwhile react to module load events to record their names and addresses
 		// then leave process suspended so we can simulate symbol resolving
 
+		std::filesystem::path path = exe_filepath;
+		std::string working_dir = path.has_parent_path() ? path.parent_path().u8string() : ".";
+
 		if (!CreateProcessA(exe_filepath.c_str(), NULL, NULL, NULL, FALSE,
 				DEBUG_ONLY_THIS_PROCESS | CREATE_NEW_CONSOLE,
-				NULL, NULL, &si, &pi)) {
+				NULL, working_dir.c_str(), &si, &pi)) {
 			print_err("CreateProcess");
 		}
 
@@ -236,7 +239,7 @@ int main(int argc, const char** argv) {
 	Sleep(1000);
 	
 	try {
-		SymTesting sym("city_builder_rel.exe");
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
 		
 		char* exe = sym.get_addr(".exe");
 		char* assimp = sym.get_addr("assimp-vc143-mt.dll");
@@ -275,7 +278,7 @@ int main(int argc, const char** argv) {
 	Sleep(1000);
 
 	try {
-		SymTesting sym("rust_bevy_test.exe");
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");

@@ -1,0 +1,61 @@
+{
+	"vsync": false,
+	"ogl_renderer": {
+		"lighting": {
+			"sun_col": [
+				1.0,
+				0.949999988079071,
+				0.800000011920929
+			],
+			"sky_col": [
+				0.6444797515869141,
+				0.7912980318069458,
+				1.0
+			],
+			"fog_col": [
+				0.6444797515869141,
+				0.7912980318069458,
+				1.0
+			],
+			"fog_base": 4.999999873689376e-05,
+			"fog_falloff": 0.0005000000237487257
+		},
+		"passes": {
+			"exposure": {
+				"auto_exposure": false,
+				"exposure": 6.668000221252441,
+				"adjust_speed": 1.0,
+				"brightness": 0.30000001192092896
+			},
+			"renderscale": {
+				"renderscale": 2.0,
+				"nearest": false
+			},
+			"shadowmap_opt": {
+				"enabled": true,
+				"shadow_res": 2048,
+				"cascades": 2,
+				"cascade_factor": 3.5,
+				"size": 100.0,
+				"depth_range": 500.0,
+				"bias_fac_world": 3.0,
+				"bias_max_world": 10.0
+			},
+			"bloom": {
+				"bloom_fac": 0.05000000074505806,
+				"filter_radius": 1.5,
+				"prefilter_clamp": false,
+				"prefilter_clamp_val": 20.0,
+				"prefilter_threshold": 1.0,
+				"prefilter_knee": 0.125
+			}
+		},
+		"objects": {
+			"entities": {
+				"lights": {
+					"enable": true
+				}
+			}
+		}
+	}
+}

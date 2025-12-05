@@ -1,0 +1,982 @@
+{
+	"assets": {
+		"props": {
+			"Streetlight1": {
+				"mesh_filename": "props/Streetlight1.fbx",
+				"tex_filename": "props/traffic_light",
+				"lights": [
+					{
+						"pos": [
+							0.0,
+							2.6500000953674316,
+							8.399999618530273
+						],
+						"dir": [
+							0.0,
+							0.28006693720817566,
+							-0.9599804878234863
+						],
+						"radius": 14.0,
+						"cone": [
+							0.6981317400932312,
+							1.0471975803375244
+						],
+						"col": [
+							0.9836065769195557,
+							0.9501236081123352,
+							0.8761085867881775
+						],
+						"strength": 0.6000000238418579
+					}
+				]
+			},
+			"TrafficLightPole1": {
+				"mesh_filename": "props/TrafficLightPole1.fbx",
+				"tex_filename": "props/traffic_light",
+				"lights": []
+			},
+			"TrafficSignal1": {
+				"mesh_filename": "props/TrafficSignal1.fbx",
+				"tex_filename": "props/traffic_light",
+				"lights": []
+			},
+			"Streetlight2": {
+				"mesh_filename": "props/Streetlight1.fbx",
+				"tex_filename": "props/traffic_light",
+				"lights": [
+					{
+						"pos": [
+							0.0,
+							2.6500000953674316,
+							8.399999618530273
+						],
+						"dir": [
+							0.0,
+							0.27993783354759216,
+							-0.9600181579589844
+						],
+						"radius": 17.0,
+						"cone": [
+							0.8726646304130554,
+							1.3962634801864624
+						],
+						"col": [
+							0.9490196108818054,
+							0.9306302666664124,
+							0.6364014148712158
+						],
+						"strength": 1.0
+					}
+				]
+			}
+		},
+		"traffic_light_props": {
+			"TrafficLight": {
+				"mast_prop": "TrafficLightPole1",
+				"signal_prop": "TrafficSignal1",
+				"mast_base": [
+					0.0,
+					0.0,
+					5.699999809265137
+				],
+				"mast_dir": [
+					-0.9968101978302002,
+					0.0,
+					0.07980858534574509
+				],
+				"colors": [
+					[
+						1.0,
+						0.029999999329447746,
+						0.029999999329447746
+					],
+					[
+						1.0,
+						1.0,
+						0.029999999329447746
+					],
+					[
+						0.029999999329447746,
+						1.0,
+						0.029999999329447746
+					]
+				]
+			}
+		},
+		"networks": {
+			"small road": {
+				"road_class": 0,
+				"speed_limit": 8.333333969116211,
+				"edgeL": -5.199999809265137,
+				"edgeR": 6.800000190734863,
+				"sidewalkL": -3.0,
+				"sidewalkR": 4.5,
+				"lanes": [
+					{
+						"shift": 1.399999976158142,
+						"width": 2.799999952316284,
+						"direction": "FORWARD"
+					},
+					{
+						"shift": -1.399999976158142,
+						"width": 2.799999952316284,
+						"direction": "BACKWARD"
+					}
+				],
+				"parking": [
+					{
+						"shift": 4.099999904632568,
+						"direction": "FORWARD",
+						"spot_size": [
+							2.5999999046325684,
+							5.199999809265137
+						]
+					}
+				],
+				"line_markings": [
+					{
+						"type": "LINE",
+						"shift": [
+							2.9000000953674316,
+							0.0
+						],
+						"scale": [
+							0.5,
+							1.0
+						]
+					}
+				],
+				"streetlights": [
+					{
+						"shift": [
+							6.849999904632568,
+							0.0,
+							0.0
+						],
+						"spacing": 15.0,
+						"rot": 0.0,
+						"prop": "Streetlight1"
+					}
+				],
+				"traffic_light_props": "TrafficLight",
+				"traffic_light_shift": [
+					3.0999999046325684,
+					0.20000000298023224
+				]
+			},
+			"medium road": {
+				"road_class": 1,
+				"speed_limit": 13.88888931274414,
+				"edgeL": -10.0,
+				"edgeR": 10.0,
+				"sidewalkL": -7.0,
+				"sidewalkR": 7.0,
+				"lanes": [
+					{
+						"shift": 2.0,
+						"width": 3.0,
+						"direction": "FORWARD"
+					},
+					{
+						"shift": 5.0,
+						"width": 3.0,
+						"direction": "FORWARD"
+					},
+					{
+						"shift": -2.0,
+						"width": 3.0,
+						"direction": "BACKWARD"
+					},
+					{
+						"shift": -5.0,
+						"width": 3.0,
+						"direction": "BACKWARD"
+					}
+				],
+				"parking": [],
+				"line_markings": [
+					{
+						"type": "STRIPED",
+						"shift": [
+							-3.5,
+							0.0
+						],
+						"scale": [
+							0.5,
+							2.0
+						]
+					},
+					{
+						"type": "LINE",
+						"shift": [
+							0.0,
+							0.0
+						],
+						"scale": [
+							0.5,
+							2.0
+						]
+					},
+					{
+						"type": "STRIPED",
+						"shift": [
+							3.5,
+							0.0
+						],
+						"scale": [
+							0.5,
+							2.0
+						]
+					}
+				],
+				"streetlights": [
+					{
+						"shift": [
+							-9.850000381469727,
+							0.0,
+							0.0
+						],
+						"spacing": 20.0,
+						"rot": 3.1415927410125732,
+						"prop": "Streetlight2"
+					},
+					{
+						"shift": [
+							9.850000381469727,
+							0.0,
+							0.0
+						],
+						"spacing": 20.0,
+						"rot": 0.0,
+						"prop": "Streetlight2"
+					}
+				],
+				"traffic_light_props": "TrafficLight",
+				"traffic_light_shift": [
+					7.599999904632568,
+					0.5
+				]
+			},
+			"medium road asym": {
+				"road_class": 1,
+				"speed_limit": 13.88888931274414,
+				"edgeL": -10.0,
+				"edgeR": 10.0,
+				"sidewalkL": -7.5,
+				"sidewalkR": 7.5,
+				"lanes": [
+					{
+						"shift": 0.0,
+						"width": 3.0,
+						"direction": "FORWARD"
+					},
+					{
+						"shift": 3.0,
+						"width": 3.0,
+						"direction": "FORWARD"
+					},
+					{
+						"shift": 6.0,
+						"width": 3.0,
+						"direction": "FORWARD"
+					},
+					{
+						"shift": -3.0,
+						"width": 3.0,
+						"direction": "BACKWARD"
+					},
+					{
+						"shift": -6.0,
+						"width": 3.0,
+						"direction": "BACKWARD"
+					}
+				],
+				"parking": [],
+				"line_markings": [
+					{
+						"type": "STRIPED",
+						"shift": [
+							-4.5,
+							0.0
+						],
+						"scale": [
+							0.5,
+							2.0
+						]
+					},
+					{
+						"type": "LINE",
+						"shift": [
+							-1.5,
+							0.0
+						],
+						"scale": [
+							0.5,
+							2.0
+						]
+					},
+					{
+						"type": "STRIPED",
+						"shift": [
+							1.5,
+							0.0
+						],
+						"scale": [
+							0.5,
+							2.0
+						]
+					},
+					{
+						"type": "STRIPED",
+						"shift": [
+							4.5,
+							0.0
+						],
+						"scale": [
+							0.5,
+							2.0
+						]
+					}
+				],
+				"streetlights": [
+					{
+						"shift": [
+							-9.850000381469727,
+							0.0,
+							0.0
+						],
+						"spacing": 20.0,
+						"rot": 3.1415927410125732,
+						"prop": "Streetlight2"
+					},
+					{
+						"shift": [
+							9.850000381469727,
+							0.0,
+							0.0
+						],
+						"spacing": 20.0,
+						"rot": 0.0,
+						"prop": "Streetlight2"
+					}
+				],
+				"traffic_light_props": "TrafficLight",
+				"traffic_light_shift": [
+					8.100000381469727,
+					0.800000011920929
+				]
+			}
+		},
+		"buildings": {
+			"house": {
+				"mesh_filename": "buildings/house.fbx",
+				"tex_filename": "buildings/house",
+				"type": "RESIDENTIAL",
+				"citizens": 3,
+				"size": [
+					16.0,
+					7.0,
+					16.0
+				]
+			},
+			"urban_mixed_use": {
+				"mesh_filename": "buildings/urban_mixed_use.fbx",
+				"tex_filename": "buildings/house",
+				"type": "RESIDENTIAL",
+				"citizens": 20,
+				"size": [
+					16.0,
+					7.0,
+					16.0
+				]
+			}
+		},
+		"vehicles": {
+			"limo": {
+				"mesh_filename": "vehicles/limo.fbx",
+				"tex_filename": "vehicles/car",
+				"spawn_weight": 3.0
+			},
+			"small": {
+				"mesh_filename": "vehicles/small.fbx",
+				"tex_filename": "vehicles/car",
+				"spawn_weight": 5.0
+			},
+			"combi": {
+				"mesh_filename": "vehicles/combi.fbx",
+				"tex_filename": "vehicles/car",
+				"spawn_weight": 2.0
+			},
+			"smart": {
+				"mesh_filename": "vehicles/smart.fbx",
+				"tex_filename": "vehicles/car",
+				"spawn_weight": 2.0
+			},
+			"SUV": {
+				"mesh_filename": "vehicles/SUV.fbx",
+				"tex_filename": "vehicles/car",
+				"spawn_weight": 2.0
+			},
+			"van": {
+				"mesh_filename": "vehicles/van.fbx",
+				"tex_filename": "vehicles/car",
+				"spawn_weight": 1.5
+			},
+			"bus": {
+				"mesh_filename": "vehicles/bus.fbx",
+				"tex_filename": "vehicles/bus",
+				"spawn_weight": 0.5
+			}
+		}
+	},
+	"options": {
+		"speed_unit": "KPH"
+	},
+	"cam_binds": {
+		"rotate": 3,
+		"rotate_sensitivity": 0.002094395225867629,
+		"move_left": 65,
+		"move_right": 68,
+		"move_back": 83,
+		"move_forw": 87,
+		"move_down": 81,
+		"move_up": 69,
+		"rot_left": 0,
+		"rot_right": 0,
+		"zoom_in": 334,
+		"zoom_out": 333,
+		"change_fov": 70,
+		"modifier": 340
+	},
+	"test": {
+		"bez": {
+			"a": [
+				0.0,
+				0.0,
+				0.0
+			],
+			"b": [
+				20.0,
+				20.0,
+				0.0
+			],
+			"c": [
+				0.0,
+				20.0,
+				0.0
+			],
+			"d": [
+				0.0,
+				0.0,
+				0.0
+			]
+		},
+		"speed": 2.0
+	},
+	"test_map_builder": {
+		"_grid_n": 10,
+		"_persons_n": 1000,
+		"_intersection_radius": 2.0,
+		"_connection_chance": 0.699999988079071
+	},
+	"test_bez": {
+		"beziers": [
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			},
+			{
+				"bez": {
+					"a": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"b": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"c": [
+						0.0,
+						0.0,
+						0.0
+					],
+					"d": [
+						0.0,
+						0.0,
+						0.0
+					]
+				},
+				"width": 3.0,
+				"col": [
+					1.0,
+					1.0,
+					0.0,
+					1.0
+				]
+			}
+		]
+	}
+}

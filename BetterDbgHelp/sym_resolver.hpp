@@ -588,9 +588,10 @@ class PDB_File {
 	}
 	void read_stream_table () {
 
-		//u32* _sts_pages = (u32*)get_page(header->page_list_of_stream_table_stream_page_list[0]);
-		//u32* _sts0 = (u32*)get_page(_sts_pages[0]);
-		
+		u32* _sts_ppages = (u32*)get_page(header->page_list_of_stream_table_stream_page_list[0]);
+		u32* _sts_pages = (u32*)get_page(_sts_ppages[0]);
+		char* _sts_start = (char*)read_sts(0);
+
 		u32 cur = 0;
 		u32 amount_of_streams = *(u32*)read_sts(cur);
 		cur += sizeof(u32);
@@ -598,9 +599,14 @@ class PDB_File {
 		while (streams.size() < amount_of_streams) {
 			u32 stream_size = *(u32*)read_sts(cur);
 			cur += sizeof(u32);
+
+			// The assumtion that deleted streams don't count seems to be wrong due to crash and seems to be verified by looking at data
+			//if (stream_size == 0xffffffff) {
+			//	// I think, this deleted stream does not count for amount_of_streams, but the link above is not clear on this
+			//	continue;
+			//}
 			if (stream_size == 0xffffffff) {
-				// I think, this deleted stream does not count for amount_of_streams, but the link above is not clear on this
-				continue;
+				stream_size = 0;
 			}
 		
 			Stream s;
@@ -1148,7 +1154,7 @@ public:
 		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
 		read_section_header_dump();
 
-		printf("PDB read\n");
+		printf("PDB read.\n");
 	}
 };
 
