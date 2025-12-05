@@ -33,6 +33,18 @@ public:
 	Debughelp (HANDLE inspectee): inspectee{inspectee} {
 		TimerMeasZone(tDebughelp_init);
 
+		std::string search_path;
+		{ // Need to set search_path because dbhelp.dll does not search next to exe for pdb, instead searching this processes working directory
+			char exe_name[1024];
+			DWORD size = sizeof(exe_name);
+			if (!QueryFullProcessImageNameA(inspectee, 0, exe_name, &size)) {
+				print_err_throw("QueryFullProcessImageNameA");
+			}
+
+			std::filesystem::path exe_path = std::string_view(exe_name, size);
+			search_path = exe_path.has_parent_path() ? exe_path.parent_path().u8string() : ".";
+		}
+
 		DWORD opts = 0;
 		opts |= SYMOPT_LOAD_LINES;         // line info
 		//opts |= SYMOPT_UNDNAME;            // undecorate C++ names, tracy does not use this
@@ -42,7 +54,7 @@ public:
 		// Tracy is using this, but then also calling SymLoadModuleEx later (since modules can be loaded later)
 		// In my case I just want to measure symbol resolution performance and I assume the modules I'm interested in are already loaded
 		BOOL fInvadeProcess = TRUE;
-		if (!SymInitialize(inspectee, NULL, fInvadeProcess)) {
+		if (!SymInitialize(inspectee, search_path.c_str(), fInvadeProcess)) {
 			print_err_throw("SymInitialize");
 		}
 

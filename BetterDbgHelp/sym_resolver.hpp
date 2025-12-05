@@ -494,6 +494,9 @@ struct SourceLoc {
 	u32         lineno;
 };
 
+// PDBs are assumed to be next to exe of the same name for the moment
+// PDBs of microsoft dlls are not gotten yet (which dbghelp.dll does somehow)
+
 class PDB_File {
 	std::vector<char> data;
 	
