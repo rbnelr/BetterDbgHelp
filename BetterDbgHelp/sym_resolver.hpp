@@ -613,112 +613,6 @@ class PDB_File {
 	};
 	std::vector<Section> sections_sorted;
 
-	u32 num_section_contributions;
-	pdb_section_contribution* section_contributions;
-	
-public:
-	struct ProcSym {
-		PROCSYM32* proc;
-	};
-	struct Module {
-		pdb_module_information* mi;
-		std::string_view name;
-		std::string_view file_name;
-
-		std::vector<char> symbol_stream_data;
-		std::vector<ProcSym> procsyms;
-	};
-	std::vector<Module> modules;
-
-	struct Symbol {
-		uintptr_t base_addr; // relative to module
-		size_t size;
-		char const* name;
-
-		struct SrcLines {
-			uint32_t num_lines = 0;
-			char const* filename = nullptr;
-			codeview_line* lines = nullptr;
-		};
-		std::vector<SrcLines> src;
-	};
-	std::vector<Symbol> sym_sorted;
-
-	void sort_symbols () {
-		// sort based on base_addr
-		std::stable_sort(sym_sorted.begin(), sym_sorted.end(), [] (Symbol const& l, Symbol const& r) {
-			return std::less<uintptr_t>()(l.base_addr, r.base_addr);
-		});
-
-		// seems like functions like printf will appear both as procedure symbols with size in modules
-		// and as PUB32 symbols without a size but with mangled names, and thus we will always have overlapping symbols
-		
-		//// assert non overlap including size
-		//for (size_t i=1; i<sym_sorted.size(); i++) {
-		//	//assert(sym_sorted[i].base_addr > sym_sorted[i-1].base_addr + sym_sorted[i-1].size);
-		//	if (!(sym_sorted[i].base_addr > sym_sorted[i-1].base_addr + sym_sorted[i-1].size)) {
-		//		printf("!! Overlapping symbols: [%8llx] %s/%s\n", sym_sorted[i].base_addr, sym_sorted[i-1].name, sym_sorted[i].name);
-		//	}
-		//}
-	}
-	Symbol* find_symbol_for_addr (uintptr_t addr) {
-		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
-		// so use upper bound instead (returns first item bigger than addr), then use previous
-		auto dymmy_Symbol = Symbol{
-			addr, 0, nullptr
-		};
-		auto it = std::upper_bound(sym_sorted.begin(), sym_sorted.end(), dymmy_Symbol, [] (Symbol const& l, Symbol const& r) {
-			return l.base_addr < r.base_addr;
-		});
-		if (it <= sym_sorted.begin()) {
-			// first symbol after addr is first symbol, search failed
-			return nullptr;
-		}
-		it--;
-		return &*it;
-	}
-	
-	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
-		uintptr_t proc_raddr = addr - sym->base_addr;
-		if (proc_raddr >= sym->size) {
-			// past symbol address range, no valid line number
-			return false;
-		}
-
-		for (auto& src : sym->src) {
-			// codeview_lines seems to be sorted by offset, ie code address relative to start of function
-			// there is only offset, no size, so I assume any addresses between this offset and the next belong to the line as well
-			// lines can be out of order (earlier instructions belonging to later lines due to compiler optimizations for example)
-			// lines will be missing (empty lines or lines with no generated code)
-			// different entries can have the same line (single line to multiple instruction spans)
-			// the same offset can appear twice with different lines (I guess multiple related lines that do one thing, maybe also when a statement is split over lines?)
-			//  -> this part makes it confusing to resolve line numbers, as we would likely only return the first line (but debuggers via 'go to disassembly' or breakpoints might need info for each line!)
-			//     tracy should never double count samples, and indeed dbghelp only reports one line, which appears the first line
-			//     but it's unclear if the first match in this list is chosen or if it actively looks for the lowest line number TODO: determine via fuzzing and consider alternative datastructure)
-
-			// linear scan for the moment, profile to see how much this impacts perf
-			codeview_line* prev_line_with_lower_offset = src.lines;
-			for (u32 i=1; i<src.num_lines; i++) {
-				auto* line = &src.lines[i];
-
-				// scan all lines and pick lowest lineno TODO: this could probably be simplified/accelerated by first deduplicating lines and storing the list of end addresses instead
-				if (proc_raddr < line->offset) {
-					// proc_raddr is in range [prev_offset, offset), so it belongs to all instructions with prev_offset
-					// prev_line_with_lower_offset is the first one of these (lowest line number?)
-					break;
-				}
-				if (line->offset != prev_line_with_lower_offset->offset)
-					prev_line_with_lower_offset = line;
-			}
-			codeview_line* found_line = prev_line_with_lower_offset;
-
-			*out_src_loc = { src.filename, found_line->start_line_number };
-			return true;
-		}
-		return false;
-	}
-
-	
 	void* read_stream (u32 stream, u32 ptr) {
 		u32 page_idx    = ptr / header->page_size;
 		u32 ptr_in_page = ptr % header->page_size;
@@ -925,17 +819,14 @@ public:
 		ptr += sizeof(u32);
 
 		assert(DBISCImpv == (0xeffe0000 + 19970605));
+		
+		u32 num_section_contributions = header->byte_size_of_the_section_contribution_substream / sizeof(pdb_section_contribution);
+		auto* section_contributions = (pdb_section_contribution*)ptr;
 
-		num_section_contributions = header->byte_size_of_the_section_contribution_substream / sizeof(pdb_section_contribution);
-		section_contributions = (pdb_section_contribution*)ptr;
-
-		//while (ptr < ptr2+header->byte_size_of_the_section_contribution_substream) {
-			//auto* sc = (pdb_section_contribution*)ptr;
-			//ptr += sizeof(pdb_section_contribution);
-		for (u32 i=0; i<num_section_contributions; i++) {
-			auto* sc = &section_contributions[i];
-			//printf("> %d %8x %8x %d\n", sc->section_id, sc->offset, sc->size, sc->module_index);
-		}
+		//for (u32 i=0; i<num_section_contributions; i++) {
+		//	auto* sc = &section_contributions[i];
+		//	printf("> %d %8x %8x %d\n", sc->section_id, sc->offset, sc->size, sc->module_index);
+		//}
 		ptr += sizeof(pdb_section_contribution) * num_section_contributions;
 		assert((ptr - ptr2) == header->byte_size_of_the_section_contribution_substream); // Why is this not correct?
 		
@@ -1011,7 +902,9 @@ public:
 			//printf("> %7s %8x %8x\n", name, sh->VirtualAddress, sh->Misc.VirtualSize);
 		}
 
-		_assert_sections_sorted();
+		for (size_t i=1; i<sections_sorted.size(); i++) {
+			assert(sections_sorted[i].base_addr > sections_sorted[i-1].base_addr + sections_sorted[i-1].size);
+		}
 	}
 	
 	void read_symbol_record_stream () {
@@ -1111,9 +1004,6 @@ public:
 					//printf(">> %s %4d %4d %8x %s\n",
 					//	sym->kind == S_LPROC32 ? "L":"G",
 					//	proc->seg, proc->len, proc->off, proc->name);
-
-					mod.procsyms.push_back({ proc });
-					
 
 					uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
 
@@ -1248,6 +1138,7 @@ public:
 		assert((ptr - mod.symbol_stream_data.data()) == streams[mi->stream_index_of_module_symbol_stream].size);
 	}
 
+public:
 	static std::unique_ptr<PDB_File> try_load_pdb (std::string&& path) {
 		try {
 			return std::make_unique<PDB_File>(std::move(path));
@@ -1283,139 +1174,99 @@ public:
 		printf("PDB read.\n");
 	}
 
-	const Section* find_section_for_addr (uintptr_t raddr, u32* out_sec_id) {
-		for (u32 id=0; id<sections_sorted.size(); id++) {
-			auto& sec = sections_sorted[id];
-			if (raddr < sec.base_addr)
-				break;
-			if (/*raddr >= sec.base_addr && */raddr < sec.base_addr + sec.size) {
-				*out_sec_id = id+1; // one based!
-				return &sec;
-			}
-		}
-		return nullptr;
+	struct Module {
+		pdb_module_information* mi;
+		std::string_view name;
+		std::string_view file_name;
+
+		std::vector<char> symbol_stream_data;
+	};
+	std::vector<Module> modules;
+
+	struct Symbol {
+		uintptr_t base_addr; // relative to module
+		size_t size;
+		char const* name;
+
+		struct SrcLines {
+			uint32_t num_lines = 0;
+			char const* filename = nullptr;
+			codeview_line* lines = nullptr;
+		};
+		std::vector<SrcLines> src;
+	};
+	std::vector<Symbol> sym_sorted;
+
+	void sort_symbols () {
+		// sort based on base_addr
+		std::stable_sort(sym_sorted.begin(), sym_sorted.end(), [] (Symbol const& l, Symbol const& r) {
+			return std::less<uintptr_t>()(l.base_addr, r.base_addr);
+		});
+
+		// seems like functions like printf will appear both as procedure symbols with size in modules
+		// and as PUB32 symbols without a size but with mangled names, and thus we will always have overlapping symbols
+		
+		//// assert non overlap including size
+		//for (size_t i=1; i<sym_sorted.size(); i++) {
+		//	//assert(sym_sorted[i].base_addr > sym_sorted[i-1].base_addr + sym_sorted[i-1].size);
+		//	if (!(sym_sorted[i].base_addr > sym_sorted[i-1].base_addr + sym_sorted[i-1].size)) {
+		//		printf("!! Overlapping symbols: [%8llx] %s/%s\n", sym_sorted[i].base_addr, sym_sorted[i-1].name, sym_sorted[i].name);
+		//	}
+		//}
 	}
-	void _assert_sections_sorted () {
-		for (size_t i=1; i<sections_sorted.size(); i++) {
-			assert(sections_sorted[i].base_addr > sections_sorted[i-1].base_addr + sections_sorted[i-1].size);
+	Symbol* find_symbol_for_addr (uintptr_t addr) {
+		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
+		// so use upper bound instead (returns first item bigger than addr), then use previous
+		auto dymmy_Symbol = Symbol{
+			addr, 0, nullptr
+		};
+		auto it = std::upper_bound(sym_sorted.begin(), sym_sorted.end(), dymmy_Symbol, [] (Symbol const& l, Symbol const& r) {
+			return l.base_addr < r.base_addr;
+		});
+		if (it <= sym_sorted.begin()) {
+			// first symbol after addr is first symbol, search failed
+			return nullptr;
 		}
+		it--;
+		return &*it;
 	}
 	
-	// section_contributions.offset & size are explicitly signed for some reason despite the fact that they logically cannot be negative
-	// (as negative sizes don't make sense and the relative address had to be positive to even cause us to look up this section)
-	const pdb_section_contribution* find_section_contribution (u32 sec_id, s32 raddr) {
-		// supposedly this is meant to be binary searched, but we could cache the subrange for each section to avoid like half the cost
-		for (u32 i=0; i<num_section_contributions; i++) {
-			auto& sc = section_contributions[i];
-			if (sec_id == sc.section_id && raddr >= sc.offset && raddr < sc.offset + sc.size) {
-				return &sc;
-			}
+	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
+		uintptr_t proc_raddr = addr - sym->base_addr;
+		if (proc_raddr >= sym->size) {
+			// past symbol address range, no valid line number
+			return false;
 		}
 
-		return nullptr;
-	}
+		for (auto& src : sym->src) {
+			// codeview_lines seems to be sorted by offset, ie code address relative to start of function
+			// there is only offset, no size, so I assume any addresses between this offset and the next belong to the line as well
+			// lines can be out of order (earlier instructions belonging to later lines due to compiler optimizations for example)
+			// lines will be missing (empty lines or lines with no generated code)
+			// different entries can have the same line (single line to multiple instruction spans)
+			// the same offset can appear twice with different lines (I guess multiple related lines that do one thing, maybe also when a statement is split over lines?)
+			//  -> this part makes it confusing to resolve line numbers, as we would likely only return the first line (but debuggers via 'go to disassembly' or breakpoints might need info for each line!)
+			//     tracy should never double count samples, and indeed dbghelp only reports one line, which appears the first line
+			//     but it's unclear if the first match in this list is chosen or if it actively looks for the lowest line number TODO: determine via fuzzing and consider alternative datastructure)
 
-	const ProcSym* find_procsym (Module& mod, u32 sec_id, u32 sec_raddr) {
-		for (auto& ps : mod.procsyms) {
-			// I am not sure proc->len actually refers to the length of the instructions belonging to the function or now
-			// other symbols stored inside the pdb do not have a length
-			// and dbghelp.dll actually SymFromAddr the function name for addresses clearly past the function (padding before the next function)
-			// not sure if that's what I should do as well, I plan to do comparisons with dbghelp with fuzzed inputs/scan the entire exe address space
-			if (sec_id == ps.proc->seg && sec_raddr >= ps.proc->off && sec_raddr < ps.proc->off + ps.proc->len) {
-				return &ps;
-			}
-		}
+			// linear scan for the moment, profile to see how much this impacts perf
+			codeview_line* prev_line_with_lower_offset = src.lines;
+			for (u32 i=1; i<src.num_lines; i++) {
+				auto* line = &src.lines[i];
 
-		return nullptr;
-	}
-
-	bool find_source_loc (Module& mod, u32 sec_id, u32 sec_raddr, SourceLoc* out_src_loc) {
-		auto* mi = mod.mi;
-
-		assert(mod.symbol_stream_data.empty() == (mi->stream_index_of_module_symbol_stream == 0xffff));
-		if (mi->stream_index_of_module_symbol_stream == 0xffff) {
-			return false; // no symbol data
-		}
-		char* ptr = mod.symbol_stream_data.data();
-		
-		ptr += mi->byte_size_of_symbol_information;
-		ptr += mi->byte_size_of_c11_line_information;
-		
-		//// C13 line info
-		char* c13_line_information = ptr;
-
-		// first pass to find FILECHKSMS ptr
-		char* filechksms_ptr = nullptr;
-		while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
-			auto* header = (codeview_subsection_header*)ptr;
-			ptr += sizeof(codeview_subsection_header);
-
-			if (header->type == DEBUG_S_FILECHKSMS) {
-				filechksms_ptr = ptr;
-				break;
-			}
-			else {
-				ptr += header->length;
-			}
-		}
-		ptr = c13_line_information; // reset ptr
-		
-		while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
-			auto* header = (codeview_subsection_header*)ptr;
-			ptr += sizeof(codeview_subsection_header);
-
-			if (header->type == DEBUG_S_LINES) {
-				auto* line_header = (codeview_line_header*)ptr;
-				ptr += sizeof(codeview_line_header);
-				assert(line_header->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
-					
-				if (  line_header->contribution_section_id == sec_id &&
-					  sec_raddr >= line_header->contribution_offset && sec_raddr < line_header->contribution_offset + line_header->contribution_size) {
-					u32 proc_raddr = sec_raddr - line_header->contribution_offset;
-
-					while (ptr < (char*)line_header + header->length) {
-						auto* line_block = (codeview_line_block_header*)ptr;
-						ptr += sizeof(codeview_line_block_header);
-						if (line_block->amount_of_lines > 0) {
-							auto* lines = (codeview_line*)ptr;
-
-							// codeview_lines seems to be sorted by offset, ie code address relative to start of function
-							// there is only offset, no size, so I assume any addresses between this offset and the next belong to the line as well
-							// lines can be out of order (earlier instructions belonging to later lines due to compiler optimizations for example)
-							// lines will be missing (empty lines or lines with no generated code)
-							// different entries can have the same line (single line to multiple instruction spans)
-							// the same offset can appear twice with different lines (I guess multiple related lines that do one thing, maybe also when a statement is split over lines?)
-							//  -> this part makes it confusing to resolve line numbers, as we would usually only return one (but go to disassembly and possibly breakpoints need info for each line!)
-							//     tracy should never double count samples, and indeed dbghelp only reports one line, which appears like the lower one
-							//     but it's unclear if the first match in the list is chosen or if the lower line number is actively chosen TODO:
-
-							codeview_line* prev_line_with_lower_offset = &lines[0];
-							for (u32 i=1; i<line_block->amount_of_lines; i++) {
-								auto* line = &lines[i];
-
-								// scan all lines and pick lowest lineno TODO: this could probably be simplified/accelerated by first deduplicating lines and storing the list of end addresses instead
-								if (proc_raddr < line->offset) {
-									// proc_raddr is in range [prev_offset, offset), so it belongs to all instructions with prev_offset
-									// prev_line_with_lower_offset is the first one of these (lowest line number?)
-									break;
-								}
-								if (line->offset != prev_line_with_lower_offset->offset)
-									prev_line_with_lower_offset = line;
-							}
-							codeview_line* found_line = prev_line_with_lower_offset;
-
-							auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
-							auto* name = &names[cksm->offset_in_string_table];
-
-							*out_src_loc = { name, found_line->start_line_number };
-							return true;
-						}
-					}
-					assert(ptr == (char*)line_header + header->length);
+				// scan all lines and pick lowest lineno TODO: this could probably be simplified/accelerated by first deduplicating lines and storing the list of end addresses instead
+				if (proc_raddr < line->offset) {
+					// proc_raddr is in range [prev_offset, offset), so it belongs to all instructions with prev_offset
+					// prev_line_with_lower_offset is the first one of these (lowest line number?)
+					break;
 				}
+				if (line->offset != prev_line_with_lower_offset->offset)
+					prev_line_with_lower_offset = line;
 			}
-			
-			ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
+			codeview_line* found_line = prev_line_with_lower_offset;
+
+			*out_src_loc = { src.filename, found_line->start_line_number };
+			return true;
 		}
 		return false;
 	}
@@ -1636,34 +1487,6 @@ public:
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;
 
-		//u32 sec_id = 0;
-		//auto* sec = mod->pdb->find_section_for_addr(mod_raddr, &sec_id);
-		//if (!sec) {
-		//	//return "Section not found";
-		//	return nullptr;
-		//}
-		//
-		//uintptr_t sec_raddr = mod_raddr - sec->base_addr;
-		//assert(sec_raddr < 0x7fffffff);
-		//
-		//auto* sc = mod->pdb->find_section_contribution(sec_id, (s32)sec_raddr);
-		//if (!sc) {
-		//	//return "Section contribution not found";
-		//	return nullptr;
-		//}
-		//
-		//auto& pdb_mod = mod->pdb->modules[sc->module_index];
-		//auto* ps = mod->pdb->find_procsym(pdb_mod, sec_id, (u32)sec_raddr);
-		//if (!ps) {
-		//	return "Symbol not found (find_procsym)";
-		//}
-
-		//SourceLoc src_loc = {};
-		//if (!mod->pdb->find_source_loc(pdb_mod, sec_id, (u32)sec_raddr, &src_loc)) {
-		//	//return "Source location not found";
-		//	return nullptr;
-		//}
-		
 		SourceLoc src_loc = {};
 		if (!mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
 			return nullptr;
