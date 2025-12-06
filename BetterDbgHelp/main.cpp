@@ -238,6 +238,8 @@ int main(int argc, const char** argv) {
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
 		
 		sym.warmup(exe + 0x21F0);
+		sym.warmup(ucrtbase + 0x1B370);
+
 		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
@@ -267,6 +269,12 @@ int main(int argc, const char** argv) {
 			at_addr(exe + 0x22A0 + 30); // inlining()
 			at_addr(exe + 0x22A0 + 40); // inlining()
 			at_addr(exe + 0x22A0 + 50); // inlining()
+			
+			at_addr(exe + 0x102B); // inlining()
+
+			at_addr(exe + 0x1010); // printf
+			at_addr(exe + 0x102E); // printf lea
+			at_addr(exe + 0x1000); // __local_stdio_printf_options
 
 			at_addr(exe + 0x2154); // malloc()
 			at_addr(exe + 0x16b0); // mainCRTStartup
@@ -284,6 +292,9 @@ int main(int argc, const char** argv) {
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
 		
 		sym.warmup(exe + 0x21FA0);
+		sym.warmup(assimp + 0x23990); // assimp
+		sym.warmup(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
+
 		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
@@ -323,6 +334,8 @@ int main(int argc, const char** argv) {
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
 		
 		sym.warmup(exe + 0x3011B80);
+		sym.warmup(ucrtbase + 0x1B370);
+
 		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);

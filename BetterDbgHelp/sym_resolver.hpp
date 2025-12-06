@@ -594,6 +594,7 @@ class PDB_File {
 	std::vector<char> names_data;
 	std::vector<char> DBI_data;
 	std::vector<char> section_header_dump_data;
+	std::vector<char> symbol_record_stream_data;
 
 	pdb_information_stream_header* info;
 
@@ -614,6 +615,109 @@ class PDB_File {
 
 	u32 num_section_contributions;
 	pdb_section_contribution* section_contributions;
+	
+public:
+	struct ProcSym {
+		PROCSYM32* proc;
+	};
+	struct Module {
+		pdb_module_information* mi;
+		std::string_view name;
+		std::string_view file_name;
+
+		std::vector<char> symbol_stream_data;
+		std::vector<ProcSym> procsyms;
+	};
+	std::vector<Module> modules;
+
+	struct Symbol {
+		uintptr_t base_addr; // relative to module
+		size_t size;
+		char const* name;
+
+		struct SrcLines {
+			uint32_t num_lines = 0;
+			char const* filename = nullptr;
+			codeview_line* lines = nullptr;
+		};
+		std::vector<SrcLines> src;
+	};
+	std::vector<Symbol> sym_sorted;
+
+	void sort_symbols () {
+		// sort based on base_addr
+		std::stable_sort(sym_sorted.begin(), sym_sorted.end(), [] (Symbol const& l, Symbol const& r) {
+			return std::less<uintptr_t>()(l.base_addr, r.base_addr);
+		});
+
+		// seems like functions like printf will appear both as procedure symbols with size in modules
+		// and as PUB32 symbols without a size but with mangled names, and thus we will always have overlapping symbols
+		
+		//// assert non overlap including size
+		//for (size_t i=1; i<sym_sorted.size(); i++) {
+		//	//assert(sym_sorted[i].base_addr > sym_sorted[i-1].base_addr + sym_sorted[i-1].size);
+		//	if (!(sym_sorted[i].base_addr > sym_sorted[i-1].base_addr + sym_sorted[i-1].size)) {
+		//		printf("!! Overlapping symbols: [%8llx] %s/%s\n", sym_sorted[i].base_addr, sym_sorted[i-1].name, sym_sorted[i].name);
+		//	}
+		//}
+	}
+	Symbol* find_symbol_for_addr (uintptr_t addr) {
+		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
+		// so use upper bound instead (returns first item bigger than addr), then use previous
+		auto dymmy_Symbol = Symbol{
+			addr, 0, nullptr
+		};
+		auto it = std::upper_bound(sym_sorted.begin(), sym_sorted.end(), dymmy_Symbol, [] (Symbol const& l, Symbol const& r) {
+			return l.base_addr < r.base_addr;
+		});
+		if (it <= sym_sorted.begin()) {
+			// first symbol after addr is first symbol, search failed
+			return nullptr;
+		}
+		it--;
+		return &*it;
+	}
+	
+	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
+		uintptr_t proc_raddr = addr - sym->base_addr;
+		if (proc_raddr >= sym->size) {
+			// past symbol address range, no valid line number
+			return false;
+		}
+
+		for (auto& src : sym->src) {
+			// codeview_lines seems to be sorted by offset, ie code address relative to start of function
+			// there is only offset, no size, so I assume any addresses between this offset and the next belong to the line as well
+			// lines can be out of order (earlier instructions belonging to later lines due to compiler optimizations for example)
+			// lines will be missing (empty lines or lines with no generated code)
+			// different entries can have the same line (single line to multiple instruction spans)
+			// the same offset can appear twice with different lines (I guess multiple related lines that do one thing, maybe also when a statement is split over lines?)
+			//  -> this part makes it confusing to resolve line numbers, as we would likely only return the first line (but debuggers via 'go to disassembly' or breakpoints might need info for each line!)
+			//     tracy should never double count samples, and indeed dbghelp only reports one line, which appears the first line
+			//     but it's unclear if the first match in this list is chosen or if it actively looks for the lowest line number TODO: determine via fuzzing and consider alternative datastructure)
+
+			// linear scan for the moment, profile to see how much this impacts perf
+			codeview_line* prev_line_with_lower_offset = src.lines;
+			for (u32 i=1; i<src.num_lines; i++) {
+				auto* line = &src.lines[i];
+
+				// scan all lines and pick lowest lineno TODO: this could probably be simplified/accelerated by first deduplicating lines and storing the list of end addresses instead
+				if (proc_raddr < line->offset) {
+					// proc_raddr is in range [prev_offset, offset), so it belongs to all instructions with prev_offset
+					// prev_line_with_lower_offset is the first one of these (lowest line number?)
+					break;
+				}
+				if (line->offset != prev_line_with_lower_offset->offset)
+					prev_line_with_lower_offset = line;
+			}
+			codeview_line* found_line = prev_line_with_lower_offset;
+
+			*out_src_loc = { src.filename, found_line->start_line_number };
+			return true;
+		}
+		return false;
+	}
+
 	
 	void* read_stream (u32 stream, u32 ptr) {
 		u32 page_idx    = ptr / header->page_size;
@@ -809,11 +913,7 @@ class PDB_File {
 			m.name = std::string_view(mod_name, mod_name_len);
 			m.file_name = std::string_view(file_name, file_name_len);
 
-			auto module_index = modules.size();
 			modules.push_back(m);
-
-			assert(module_index < 0xffff);
-			read_module_symbol_stream((s16)module_index);
 		}
 		assert((ptr - ptr2) == header->byte_size_of_the_module_information_substream);
 		ptr = ptr2 + header->byte_size_of_the_module_information_substream;
@@ -916,13 +1016,24 @@ class PDB_File {
 	
 	void read_symbol_record_stream () {
 		auto* dbi = (dbi_stream_header*)DBI_data.data();
-		auto srs_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
-		char* ptr = srs_data.data();
+		symbol_record_stream_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
+		char* ptr = symbol_record_stream_data.data();
 
 		char* ptr2 = ptr;
+
+		auto push_symbol = [&] (u32 offs, u32 size, u16 seg, const char* name) {
+			uintptr_t seg_addr = 0;
+			if (seg > 0) {
+				if (seg > sections_sorted.size()) {
+					return; // No idea why this happens
+				}
+				seg_addr = sections_sorted[seg-1].base_addr;
+			}
+			sym_sorted.push_back(Symbol{ offs + seg_addr, size, name });
+		};
 		
 		// TODO: these should be 
-		while (ptr < ptr2 + srs_data.size()) {
+		while (ptr < ptr2 + symbol_record_stream_data.size()) {
 			auto sym = (codeview_symbol_header*)ptr;
 			
 			ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
@@ -943,10 +1054,22 @@ class PDB_File {
 				//} break;
 				case S_LDATA32: case S_GDATA32: case S_LMANDATA: case S_GMANDATA: {
 					auto* s = (DATASYM32*)sym;
+					push_symbol(
+						s->off,
+						0, // TODO: these symbols don't have a size, possibly becasue the size is implicit based on the data type?,
+						s->seg,
+						(const char*)s->name
+					);
 					//printf("DATASYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
 				} break;
 				case S_PUB32: {
 					auto* s = (PUBSYM32*)sym;
+					push_symbol(
+						s->off,
+						0,
+						s->seg,
+						(const char*)s->name
+					);
 					//printf("PUBSYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
 				} break;
 				default: {
@@ -954,11 +1077,13 @@ class PDB_File {
 				}
 			}
 		}
-		assert((ptr - ptr2) == srs_data.size());
+		assert((ptr - ptr2) == symbol_record_stream_data.size());
 	}
 	void read_module_symbol_stream (s16 module_index) {
 		auto& mod = modules[module_index];
 		auto* mi = mod.mi;
+		
+		std::unordered_map<uintptr_t, size_t> lookup_proc_sym;
 
 		if (mi->stream_index_of_module_symbol_stream == 0xffff)
 			return; // no symbol data
@@ -988,11 +1113,20 @@ class PDB_File {
 					//	proc->seg, proc->len, proc->off, proc->name);
 
 					mod.procsyms.push_back({ proc });
+					
+
+					uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
+
+					lookup_proc_sym.emplace(module_raddr, sym_sorted.size());
+
+					sym_sorted.push_back(Symbol{
+						module_raddr, proc->len, (const char*)proc->name
+					});
 				} break;
 			}
 		}
 		assert((ptr - ptr2) == mi->byte_size_of_symbol_information);
-		
+
 		//auto* c11_line_information = (u8*)ptr;
 		ptr += mi->byte_size_of_c11_line_information;
 		
@@ -1003,49 +1137,6 @@ class PDB_File {
 
 		// first pass to find FILECHKSMS ptr
 		char* filechksms_ptr = nullptr;
-		while (ptr < ptr2 + mi->byte_size_of_c13_line_information) {
-			auto* header = (codeview_subsection_header*)ptr;
-			ptr += sizeof(codeview_subsection_header);
-
-			if (header->type == DEBUG_S_FILECHKSMS) {
-				filechksms_ptr = ptr;
-				//read_file_checksum(header);
-				break;
-			}
-			else {
-				ptr += header->length;
-			}
-		}
-		ptr = ptr2; // reset ptr
-		
-		auto read_line_numbers = [&] (codeview_subsection_header* header) {
-			auto* ptr3 = ptr;
-
-			// With usual compiler, this is once per function
-			auto* lines = (codeview_line_header*)ptr;
-			ptr += sizeof(codeview_line_header);
-			assert(lines->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
-
-			//printf(">> Header %d, %8x %8x\n", lines->contribution_section_id, lines->contribution_offset, lines->contribution_size);
-			
-			while (ptr < ptr3 + header->length) {
-				auto* line_block = (codeview_line_block_header*)ptr;
-				ptr += sizeof(codeview_line_block_header);
-
-				auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
-				auto* name = &names[cksm->offset_in_string_table];
-
-				//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, name);
-
-				for (u32 i=0; i<line_block->amount_of_lines; i++) {
-					auto* line = (codeview_line*)ptr;
-					ptr += sizeof(codeview_line);
-
-					//printf(">>  Line %d %d\n", line->start_line_number, line->offset);
-				}
-			}
-			assert((ptr - ptr3) == header->length);
-		};
 		auto read_file_checksums = [&] (codeview_subsection_header* header) {
 			auto* ptr3 = ptr;
 			while (ptr < ptr3 + header->length) {
@@ -1060,6 +1151,79 @@ class PDB_File {
 			}
 			assert((ptr - ptr3) == header->length);
 		};
+		while (ptr < ptr2 + mi->byte_size_of_c13_line_information) {
+			auto* header = (codeview_subsection_header*)ptr;
+			ptr += sizeof(codeview_subsection_header);
+
+			if (header->type == DEBUG_S_FILECHKSMS) {
+				filechksms_ptr = ptr;
+				//read_file_checksum(header);
+				break;
+			}
+			ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
+		}
+		ptr = ptr2; // reset ptr
+		
+		auto read_line_numbers = [&] (codeview_subsection_header* header) {
+			auto* ptr3 = ptr;
+
+			// With usual compiler, this is once per function
+			auto* lines = (codeview_line_header*)ptr;
+			ptr += sizeof(codeview_line_header);
+			assert(lines->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
+
+			//printf(">> Header %d, %8x %8x\n", lines->contribution_section_id, lines->contribution_offset, lines->contribution_size);
+			
+			uintptr_t sec_offs = sections_sorted[lines->contribution_section_id-1].base_addr;
+			uintptr_t module_raddr = lines->contribution_offset + sec_offs;
+			auto it = lookup_proc_sym.find(module_raddr);
+			auto* sym = it != lookup_proc_sym.end() ? &sym_sorted[it->second] : nullptr;
+
+			//while (ptr < ptr3 + header->length) {
+			//	auto* line_block = (codeview_line_block_header*)ptr;
+			//	ptr += sizeof(codeview_line_block_header);
+			//
+			//	auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
+			//	auto* name = &names[cksm->offset_in_string_table];
+			//
+			//	//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, name);
+			//
+			//	for (u32 i=0; i<line_block->amount_of_lines; i++) {
+			//		auto* line = (codeview_line*)ptr;
+			//		ptr += sizeof(codeview_line);
+			//
+			//		//printf(">>  Line %d %d\n", line->start_line_number, line->offset);
+			//	}
+			//}
+			//assert((ptr - ptr3) == header->length);
+
+			if (sym) {
+				assert(module_raddr == sym->base_addr); // lines section contribtion offset need to be procedure symbol offset
+				
+				//if (strcmp(sym->name, "main") == 0) {
+				//	printf("");
+				//}
+
+				ptr = ptr3;
+				ptr += sizeof(codeview_line_header);
+
+				while (ptr < ptr3 + header->length) {
+					auto* line_block = (codeview_line_block_header*)ptr;
+					ptr += sizeof(codeview_line_block_header);
+
+					auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
+					auto* name = &names[cksm->offset_in_string_table];
+
+					sym->src.push_back(Symbol::SrcLines {
+						line_block->amount_of_lines,
+						name,
+						(codeview_line*)ptr,
+					});
+
+					ptr += line_block->amount_of_lines * sizeof(codeview_line);
+				}
+			}
+		};
 
 		while (ptr < ptr2 + mi->byte_size_of_c13_line_information) {
 			auto* header = (codeview_subsection_header*)ptr;
@@ -1069,13 +1233,8 @@ class PDB_File {
 				case DEBUG_S_LINES: {
 					read_line_numbers(header);
 				} break;
-				//case DEBUG_S_FILECHKSMS: {
-				//	read_file_checksum(header);
-				//} break;
-				default: {
-					ptr += header->length;
-				}
 			}
+			ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
 		}
 		assert((ptr - ptr2) == mi->byte_size_of_c13_line_information);
 
@@ -1088,20 +1247,41 @@ class PDB_File {
 		
 		assert((ptr - mod.symbol_stream_data.data()) == streams[mi->stream_index_of_module_symbol_stream].size);
 	}
-	
-public:
-	struct ProcSym {
-		PROCSYM32* proc;
-	};
-	struct Module {
-		pdb_module_information* mi;
-		std::string_view name;
-		std::string_view file_name;
 
-		std::vector<char> symbol_stream_data;
-		std::vector<ProcSym> procsyms;
-	};
-	std::vector<Module> modules;
+	static std::unique_ptr<PDB_File> try_load_pdb (std::string&& path) {
+		try {
+			return std::make_unique<PDB_File>(std::move(path));
+		} catch (std::exception&) {
+			//fprintf(stderr, "PDB loading exception: %s\n", ex.what());
+		}
+		return nullptr;
+	}
+	PDB_File (std::string&& path) {
+		if (!load_file(path, &data)) {
+			throw std::runtime_error("File not found: "+ path);
+		}
+
+		printf("%s data loaded\n", path.c_str());
+		
+		read_header();
+		read_stream_table();
+		read_pdb_info();
+		read_names();
+		read_DBI();
+		
+		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
+		read_section_header_dump();
+
+		read_symbol_record_stream();
+
+		for (s16 module_index=0; module_index<(s16)modules.size(); module_index++) {
+			read_module_symbol_stream(module_index);
+		}
+
+		sort_symbols();
+
+		printf("PDB read.\n");
+	}
 
 	const Section* find_section_for_addr (uintptr_t raddr, u32* out_sec_id) {
 		for (u32 id=0; id<sections_sorted.size(); id++) {
@@ -1185,15 +1365,15 @@ public:
 			ptr += sizeof(codeview_subsection_header);
 
 			if (header->type == DEBUG_S_LINES) {
-				auto* lines = (codeview_line_header*)ptr;
+				auto* line_header = (codeview_line_header*)ptr;
 				ptr += sizeof(codeview_line_header);
-				assert(lines->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
+				assert(line_header->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
 					
-				if (  lines->contribution_section_id == sec_id &&
-					  sec_raddr >= lines->contribution_offset && sec_raddr < lines->contribution_offset + lines->contribution_size) {
-					u32 proc_raddr = sec_raddr - lines->contribution_offset;
+				if (  line_header->contribution_section_id == sec_id &&
+					  sec_raddr >= line_header->contribution_offset && sec_raddr < line_header->contribution_offset + line_header->contribution_size) {
+					u32 proc_raddr = sec_raddr - line_header->contribution_offset;
 
-					while (ptr < (char*)lines + header->length) {
+					while (ptr < (char*)line_header + header->length) {
 						auto* line_block = (codeview_line_block_header*)ptr;
 						ptr += sizeof(codeview_line_block_header);
 						if (line_block->amount_of_lines > 0) {
@@ -1231,42 +1411,13 @@ public:
 							return true;
 						}
 					}
-					assert(ptr == (char*)lines + header->length);
+					assert(ptr == (char*)line_header + header->length);
 				}
 			}
 			
 			ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
 		}
 		return false;
-	}
-
-	static std::unique_ptr<PDB_File> try_load_pdb (std::string&& path) {
-		try {
-			return std::make_unique<PDB_File>(std::move(path));
-		} catch (std::exception&) {
-			//fprintf(stderr, "PDB loading exception: %s\n", ex.what());
-		}
-		return nullptr;
-	}
-	PDB_File (std::string&& path) {
-		if (!load_file(path, &data)) {
-			throw std::runtime_error("File not found: "+ path);
-		}
-
-		printf("%s data loaded\n", path.c_str());
-		
-		read_header();
-		read_stream_table();
-		read_pdb_info();
-		read_names();
-		read_DBI();
-		
-		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
-		read_section_header_dump();
-
-		read_symbol_record_stream();
-
-		printf("PDB read.\n");
 	}
 };
 
@@ -1282,27 +1433,29 @@ class SymResolver {
 		std::unique_ptr<PDB_File> pdb;
 
 		LoadedModule (std::string&& path, uintptr_t base_addr, size_t size) {
-			auto pdb_path = std::filesystem::path(path);
 			this->path = std::move(path);
 			this->base_addr = base_addr;
 			this->size = size;
-
+		}
+		void load_pdb () {
 			// Techically there might be more correct ways to find the pdb, and also ways that allow getting pdbs from microsoft servers
 			// see above link
+			auto pdb_path = std::filesystem::path(path);
 			pdb_path.replace_extension({".pdb"});
 			pdb = PDB_File::try_load_pdb(pdb_path.string());
 		}
 	};
 	struct ModuleCache {
 		TimerMeasurement ttry_get_and_cache_module = TimerMeasurement("try_get_and_cache_module");
+		TimerMeasurement tload_pdb = TimerMeasurement("load_pdb");
 
 		std::vector<LoadedModule> sorted;
 		
-		const LoadedModule* cache (LoadedModule&& m) {
+		LoadedModule* cache (LoadedModule&& m) {
 			auto base_addr = m.base_addr;
 			sorted.push_back(std::move(m));
 			// re-sort
-			std::sort(sorted.begin(), sorted.end(), [] (LoadedModule& l, LoadedModule& r) {
+			std::sort(sorted.begin(), sorted.end(), [] (LoadedModule const& l, LoadedModule const& r) {
 				return std::less<uintptr_t>()(l.base_addr, r.base_addr);
 			});
 
@@ -1320,68 +1473,52 @@ class SymResolver {
 				}
 			}
 			
-			TimerMeasZone(ttry_get_and_cache_module);
 			return try_get_and_cache_module(inspectee, addr);
 		}
 
 		const LoadedModule* try_get_and_cache_module (HANDLE inspectee, uintptr_t addr) {
-			// Only works for addresses in this process
-			//// Do not use FreeLibrary because we set the flag GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT
-			//// see https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-getmodulehandleexa to get more information
-			//constexpr DWORD flag = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
-			//HMODULE mod = NULL;
-			//
-			//if (!GetModuleHandleExA(flag, (char*)addr, &mod)) {
-			//	MODULEINFO info;
-			//	if( GetModuleInformation( proc, mod, &info, sizeof( info ) ) != 0 )
-			//	{
-			//		const auto base = uint64_t( info.lpBaseOfDll );
-			//		if( addr >= base && addr < ( base + info.SizeOfImage ) )
-			//		{
-			//			char name[1024];
-			//			const auto nameLength = GetModuleFileNameA( mod, name, sizeof( name ) );
-			//			if( nameLength > 0 )
-			//			{
-			//				// since this is the first time we encounter this module, load its symbols (needed for modules loaded after SymInitialize)
-			//				ImageEntry* cachedModule = LoadSymbolsForModuleAndCache( name, nameLength, (DWORD64)info.lpBaseOfDll, info.SizeOfImage );
-			//				return ModuleNameAndBaseAddress{ cachedModule->m_name, cachedModule->m_startAddress };
-			//			}
-			//		}
-			//	}
-			//}
+			LoadedModule* loaded = nullptr;
+			{
+				TimerMeasZone(ttry_get_and_cache_module);
+				HMODULE modules[1024];
+				DWORD needed = 0;
+				if (!EnumProcessModules(inspectee, modules, sizeof(modules), &needed) || needed > sizeof(modules)) { // TODO: properly handle error
+					print_err_throw("EnumProcessModules");
+				}
 
-			HMODULE modules[1024];
-			DWORD needed = 0;
-			if (!EnumProcessModules(inspectee, modules, sizeof(modules), &needed) || needed > sizeof(modules)) { // TODO: properly handle error
-				print_err_throw("EnumProcessModules");
-			}
+				// only return, and cache, the module that addr was in (as opposed to simply aching anything GetModuleInformation returns)
+				// this causes more EnumProcessModules calls, but could help might make find_module_for_addr faster in the case where modules are never queried
+				for (int i=0; i<needed/sizeof(HMODULE); i++) {
+					auto& mod = modules[i];
 
-			// only return, and cache, the module that addr was in (as opposed to simply aching anything GetModuleInformation returns)
-			// this causes more EnumProcessModules calls, but could help might make find_module_for_addr faster in the case where modules are never queried
-			for (int i=0; i<needed/sizeof(HMODULE); i++) {
-				auto& mod = modules[i];
-
-				MODULEINFO info = {};
-				if (GetModuleInformation(inspectee, mod, &info, sizeof(info))) {
-					auto base = (uintptr_t)info.lpBaseOfDll;
-					auto size = (size_t)info.SizeOfImage;
-					if (addr >= base && addr < base + size) {
-						char name[1024];
-						auto nameLength = GetModuleFileNameExA(inspectee, mod, name, sizeof(name));
-						if (nameLength > 0) {
-							return cache(LoadedModule(std::string(name, nameLength), base, size));
+					MODULEINFO info = {};
+					if (GetModuleInformation(inspectee, mod, &info, sizeof(info))) {
+						auto base = (uintptr_t)info.lpBaseOfDll;
+						auto size = (size_t)info.SizeOfImage;
+						if (addr >= base && addr < base + size) {
+							char name[1024];
+							auto nameLength = GetModuleFileNameExA(inspectee, mod, name, sizeof(name));
+							if (nameLength > 0) {
+								loaded = cache(LoadedModule(std::string(name, nameLength), base, size));
+								break;
+							}
 						}
 					}
 				}
 			}
-
-			return nullptr;
+			if (loaded) {
+				TimerMeasZone(tload_pdb);
+				loaded->load_pdb();
+			}
+			return loaded;
 		}
 	};
 
 	ModuleCache mod_cache;
 	
-	TimerMeasurement twarmup = TimerMeasurement("warmup");
+	// warmup time not meaningful as it includes pdb loading
+	// only warmup to avoid including pdb loading in later measurement
+	//TimerMeasurement twarmup = TimerMeasurement("warmup");
 	TimerMeasurement taddr2sym = TimerMeasurement("addr2sym");
 
 public:
@@ -1431,13 +1568,20 @@ public:
 				printf("> dbghelp:dll: \"?!%s\"\n", r.sym_name);
 			}
 			if (   has_source() != r.has_source()
-				&& strcmp(src_filepath, r.src_filepath) != 0 && src_lineno != r.src_lineno ) {
+				|| strcmp(src_filepath, r.src_filepath) != 0 || src_lineno != r.src_lineno) {
 				
 				if (has_source()) {
 					printf("> sym:         \"%s:%d\" !=\n", src_filepath,src_lineno);
 				}
+				else {
+					printf("> sym:         (No source info) !=\n");
+				}
+
 				if (r.has_source()) {
-					printf("> dbghelp:dll: \"%s:%d\" !=\n", r.src_filepath,r.src_lineno);
+					printf("> dbghelp:dll: \"%s:%d\"\n", r.src_filepath,r.src_lineno);
+				}
+				else {
+					printf("> dbghelp:dll: (No source info)\n");
 				}
 			}
 		}
@@ -1457,8 +1601,6 @@ public:
 		return true;
 	}
 	void warmup_addr2sym (char* ptr) {
-		TimerMeasZone(twarmup);
-
 		Result res = {};
 		addr2sym(ptr, &res);
 	}
@@ -1483,34 +1625,50 @@ public:
 		}
 
 		uintptr_t mod_raddr = addr - mod->base_addr;
-
-		u32 sec_id = 0;
-		auto* sec = mod->pdb->find_section_for_addr(mod_raddr, &sec_id);
-		if (!sec) {
-			return "Section not found";
-		}
-
-		uintptr_t sec_raddr = mod_raddr - sec->base_addr;
-		assert(sec_raddr < 0x7fffffff);
 		
-		auto* sc = mod->pdb->find_section_contribution(sec_id, (s32)sec_raddr);
-		if (!sc) {
-			return "Section contribution not found";
-		}
-
-		auto& pdb_mod = mod->pdb->modules[sc->module_index];
-		auto* ps = mod->pdb->find_procsym(pdb_mod, sec_id, (u32)sec_raddr);
-		if (!ps) {
+		auto sym = mod->pdb->find_symbol_for_addr(mod_raddr);
+		if (!sym) {
 			return "Symbol not found";
 		}
 		
+		res->module_path = mod->path.c_str();
+		res->sym_name = sym->name;
+		res->src_filepath = nullptr;
+		res->src_lineno = 0;
+
+		//u32 sec_id = 0;
+		//auto* sec = mod->pdb->find_section_for_addr(mod_raddr, &sec_id);
+		//if (!sec) {
+		//	//return "Section not found";
+		//	return nullptr;
+		//}
+		//
+		//uintptr_t sec_raddr = mod_raddr - sec->base_addr;
+		//assert(sec_raddr < 0x7fffffff);
+		//
+		//auto* sc = mod->pdb->find_section_contribution(sec_id, (s32)sec_raddr);
+		//if (!sc) {
+		//	//return "Section contribution not found";
+		//	return nullptr;
+		//}
+		//
+		//auto& pdb_mod = mod->pdb->modules[sc->module_index];
+		//auto* ps = mod->pdb->find_procsym(pdb_mod, sec_id, (u32)sec_raddr);
+		//if (!ps) {
+		//	return "Symbol not found (find_procsym)";
+		//}
+
+		//SourceLoc src_loc = {};
+		//if (!mod->pdb->find_source_loc(pdb_mod, sec_id, (u32)sec_raddr, &src_loc)) {
+		//	//return "Source location not found";
+		//	return nullptr;
+		//}
+		
 		SourceLoc src_loc = {};
-		if (!mod->pdb->find_source_loc(pdb_mod, sec_id, (u32)sec_raddr, &src_loc)) {
-			return "Source location not found";
+		if (!mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
+			return nullptr;
 		}
 
-		res->module_path = mod->path.c_str();
-		res->sym_name = (const char*)ps->proc->name;
 		res->src_filepath = src_loc.filepath;
 		res->src_lineno = src_loc.lineno;
 		return nullptr;
@@ -1518,7 +1676,7 @@ public:
 
 	void print_timings () {
 		mod_cache.ttry_get_and_cache_module.print();
-		twarmup.print();
+		mod_cache.tload_pdb.print();
 		taddr2sym.print();
 	}
 };

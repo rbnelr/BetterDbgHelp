@@ -17,7 +17,6 @@ class Debughelp {
 public:
 	
 	TimerMeasurement tDebughelp_init = TimerMeasurement("Debughelp_init");
-	TimerMeasurement twarmup = TimerMeasurement("warmup");
 	TimerMeasurement tSymFromAddr = TimerMeasurement("SymFromAddr");
 	TimerMeasurement tSymGetLineFromAddr64 = TimerMeasurement("SymGetLineFromAddr64");
 	TimerMeasurement tSymAddrIncludeInlineTrace = TimerMeasurement("SymAddrIncludeInlineTrace");
@@ -143,7 +142,6 @@ public:
 	}
 	
 	void warmup_addr2sym (char* addr) {
-		TimerMeasZone(twarmup);
 		// simply measure_addr2sym without timers
 
 		constexpr size_t MaxNameSize = 8192;
@@ -300,7 +298,6 @@ public:
 
 	void print_timings () {
 		tDebughelp_init.print();
-		twarmup.print();
 
 		tSymFromAddr.print();
 		tSymGetLineFromAddr64.print();

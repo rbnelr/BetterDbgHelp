@@ -1,0 +1,11 @@
+PDB addr2sym entirely unoptimized (linear searches!)
+
+TinyProgram.exe:       15.319us -> 0.219us  65x faster
+city_builder_rel.exe:  24.697us -> 2.603us  9.5x faster
+rust_bevy_test.exe:    90.204us -> 94.105us 0.96x slower
+
+PDB addr2sym with binary searches and linear line search (mostly unoptimized, just simplified lookups)
+
+TinyProgram.exe:       14.871us -> 0.107us  139x faster
+city_builder_rel.exe:  23.807us -> 0.178us  134x faster
+rust_bevy_test.exe:    88.705us -> 94.105us 457x faster
