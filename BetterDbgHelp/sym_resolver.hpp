@@ -21,6 +21,7 @@ typedef unsigned long   CV_typ_t;
 typedef unsigned long   CV_pubsymflag_t;    // must be same as CV_typ_t.
 typedef unsigned short  _2BYTEPAD;
 typedef unsigned long   CV_tkn_t;
+typedef CV_typ_t CV_ItemId;
 
 typedef enum SYM_ENUM_e : u16 {
     S_COMPILE       =  0x0001,  // Compile flags symbol
@@ -287,6 +288,200 @@ typedef enum SYM_ENUM_e : u16 {
                                 // future PDBs (assuming no format change, etc).
 
 } SYM_ENUM_e;
+inline const char* SYM_ENUM_e_str (SYM_ENUM_e val) {
+	switch (val) {
+		case S_COMPILE: return "S_COMPILE";
+		case S_REGISTER_16t: return "S_REGISTER_16t";
+		case S_CONSTANT_16t: return "S_CONSTANT_16t";
+		case S_UDT_16t: return "S_UDT_16t";
+		case S_SSEARCH: return "S_SSEARCH";
+		case S_END: return "S_END";
+		case S_SKIP: return "S_SKIP";
+		case S_CVRESERVE: return "S_CVRESERVE";
+		case S_OBJNAME_ST: return "S_OBJNAME_ST";
+		case S_ENDARG: return "S_ENDARG";
+		case S_COBOLUDT_16t: return "S_COBOLUDT_16t";
+		case S_MANYREG_16t: return "S_MANYREG_16t";
+		case S_RETURN: return "S_RETURN";
+		case S_ENTRYTHIS: return "S_ENTRYTHIS";
+		case S_BPREL16: return "S_BPREL16";
+		case S_LDATA16: return "S_LDATA16";
+		case S_GDATA16: return "S_GDATA16";
+		case S_PUB16: return "S_PUB16";
+		case S_LPROC16: return "S_LPROC16";
+		case S_GPROC16: return "S_GPROC16";
+		case S_THUNK16: return "S_THUNK16";
+		case S_BLOCK16: return "S_BLOCK16";
+		case S_WITH16: return "S_WITH16";
+		case S_LABEL16: return "S_LABEL16";
+		case S_CEXMODEL16: return "S_CEXMODEL16";
+		case S_VFTABLE16: return "S_VFTABLE16";
+		case S_REGREL16: return "S_REGREL16";
+		case S_BPREL32_16t: return "S_BPREL32_16t";
+		case S_LDATA32_16t: return "S_LDATA32_16t";
+		case S_GDATA32_16t: return "S_GDATA32_16t";
+		case S_PUB32_16t: return "S_PUB32_16t";
+		case S_LPROC32_16t: return "S_LPROC32_16t";
+		case S_GPROC32_16t: return "S_GPROC32_16t";
+		case S_THUNK32_ST: return "S_THUNK32_ST";
+		case S_BLOCK32_ST: return "S_BLOCK32_ST";
+		case S_WITH32_ST: return "S_WITH32_ST";
+		case S_LABEL32_ST: return "S_LABEL32_ST";
+		case S_CEXMODEL32: return "S_CEXMODEL32";
+		case S_VFTABLE32_16t: return "S_VFTABLE32_16t";
+		case S_REGREL32_16t: return "S_REGREL32_16t";
+		case S_LTHREAD32_16t: return "S_LTHREAD32_16t";
+		case S_GTHREAD32_16t: return "S_GTHREAD32_16t";
+		case S_SLINK32: return "S_SLINK32";
+		case S_LPROCMIPS_16t: return "S_LPROCMIPS_16t";
+		case S_GPROCMIPS_16t: return "S_GPROCMIPS_16t";
+		case S_PROCREF_ST: return "S_PROCREF_ST";
+		case S_DATAREF_ST: return "S_DATAREF_ST";
+		case S_ALIGN: return "S_ALIGN";
+		case S_LPROCREF_ST: return "S_LPROCREF_ST";
+		case S_OEM: return "S_OEM";
+		case S_TI16_MAX: return "S_TI16_MAX";
+		case S_REGISTER_ST: return "S_REGISTER_ST";
+		case S_CONSTANT_ST: return "S_CONSTANT_ST";
+		case S_UDT_ST: return "S_UDT_ST";
+		case S_COBOLUDT_ST: return "S_COBOLUDT_ST";
+		case S_MANYREG_ST: return "S_MANYREG_ST";
+		case S_BPREL32_ST: return "S_BPREL32_ST";
+		case S_LDATA32_ST: return "S_LDATA32_ST";
+		case S_GDATA32_ST: return "S_GDATA32_ST";
+		case S_PUB32_ST: return "S_PUB32_ST";
+		case S_LPROC32_ST: return "S_LPROC32_ST";
+		case S_GPROC32_ST: return "S_GPROC32_ST";
+		case S_VFTABLE32: return "S_VFTABLE32";
+		case S_REGREL32_ST: return "S_REGREL32_ST";
+		case S_LTHREAD32_ST: return "S_LTHREAD32_ST";
+		case S_GTHREAD32_ST: return "S_GTHREAD32_ST";
+		case S_LPROCMIPS_ST: return "S_LPROCMIPS_ST";
+		case S_GPROCMIPS_ST: return "S_GPROCMIPS_ST";
+		case S_FRAMEPROC: return "S_FRAMEPROC";
+		case S_COMPILE2_ST: return "S_COMPILE2_ST";
+		case S_MANYREG2_ST: return "S_MANYREG2_ST";
+		case S_LPROCIA64_ST: return "S_LPROCIA64_ST";
+		case S_GPROCIA64_ST: return "S_GPROCIA64_ST";
+		case S_LOCALSLOT_ST: return "S_LOCALSLOT_ST";
+		case S_PARAMSLOT_ST: return "S_PARAMSLOT_ST";
+		case S_ANNOTATION: return "S_ANNOTATION";
+		case S_GMANPROC_ST: return "S_GMANPROC_ST";
+		case S_LMANPROC_ST: return "S_LMANPROC_ST";
+		case S_RESERVED1: return "S_RESERVED1";
+		case S_RESERVED2: return "S_RESERVED2";
+		case S_RESERVED3: return "S_RESERVED3";
+		case S_RESERVED4: return "S_RESERVED4";
+		case S_LMANDATA_ST: return "S_LMANDATA_ST";
+		case S_GMANDATA_ST: return "S_GMANDATA_ST";
+		case S_MANFRAMEREL_ST: return "S_MANFRAMEREL_ST";
+		case S_MANREGISTER_ST: return "S_MANREGISTER_ST";
+		case S_MANSLOT_ST: return "S_MANSLOT_ST";
+		case S_MANMANYREG_ST: return "S_MANMANYREG_ST";
+		case S_MANREGREL_ST: return "S_MANREGREL_ST";
+		case S_MANMANYREG2_ST: return "S_MANMANYREG2_ST";
+		case S_MANTYPREF: return "S_MANTYPREF";
+		case S_UNAMESPACE_ST: return "S_UNAMESPACE_ST";
+		case S_ST_MAX: return "S_ST_MAX";
+		case S_OBJNAME: return "S_OBJNAME";
+		case S_THUNK32: return "S_THUNK32";
+		case S_BLOCK32: return "S_BLOCK32";
+		case S_WITH32: return "S_WITH32";
+		case S_LABEL32: return "S_LABEL32";
+		case S_REGISTER: return "S_REGISTER";
+		case S_CONSTANT: return "S_CONSTANT";
+		case S_UDT: return "S_UDT";
+		case S_COBOLUDT: return "S_COBOLUDT";
+		case S_MANYREG: return "S_MANYREG";
+		case S_BPREL32: return "S_BPREL32";
+		case S_LDATA32: return "S_LDATA32";
+		case S_GDATA32: return "S_GDATA32";
+		case S_PUB32: return "S_PUB32";
+		case S_LPROC32: return "S_LPROC32";
+		case S_GPROC32: return "S_GPROC32";
+		case S_REGREL32: return "S_REGREL32";
+		case S_LTHREAD32: return "S_LTHREAD32";
+		case S_GTHREAD32: return "S_GTHREAD32";
+		case S_LPROCMIPS: return "S_LPROCMIPS";
+		case S_GPROCMIPS: return "S_GPROCMIPS";
+		case S_COMPILE2: return "S_COMPILE2";
+		case S_MANYREG2: return "S_MANYREG2";
+		case S_LPROCIA64: return "S_LPROCIA64";
+		case S_GPROCIA64: return "S_GPROCIA64";
+		case S_LOCALSLOT: return "S_LOCALSLOT";
+		case S_PARAMSLOT: return "S_PARAMSLOT";
+		case S_LMANDATA: return "S_LMANDATA";
+		case S_GMANDATA: return "S_GMANDATA";
+		case S_MANFRAMEREL: return "S_MANFRAMEREL";
+		case S_MANREGISTER: return "S_MANREGISTER";
+		case S_MANSLOT: return "S_MANSLOT";
+		case S_MANMANYREG: return "S_MANMANYREG";
+		case S_MANREGREL: return "S_MANREGREL";
+		case S_MANMANYREG2: return "S_MANMANYREG2";
+		case S_UNAMESPACE: return "S_UNAMESPACE";
+		case S_PROCREF: return "S_PROCREF";
+		case S_DATAREF: return "S_DATAREF";
+		case S_LPROCREF: return "S_LPROCREF";
+		case S_ANNOTATIONREF: return "S_ANNOTATIONREF";
+		case S_TOKENREF: return "S_TOKENREF";
+		case S_GMANPROC: return "S_GMANPROC";
+		case S_LMANPROC: return "S_LMANPROC";
+		case S_TRAMPOLINE: return "S_TRAMPOLINE";
+		case S_MANCONSTANT: return "S_MANCONSTANT";
+		case S_ATTR_FRAMEREL: return "S_ATTR_FRAMEREL";
+		case S_ATTR_REGISTER: return "S_ATTR_REGISTER";
+		case S_ATTR_REGREL: return "S_ATTR_REGREL";
+		case S_ATTR_MANYREG: return "S_ATTR_MANYREG";
+		case S_SEPCODE: return "S_SEPCODE";
+		case S_LOCAL_2005: "S_LOCAL_2005";
+		case S_DEFRANGE_2005: return "S_DEFRANGE_2005";
+		case S_DEFRANGE2_2005: return "S_DEFRANGE2_2005";
+		case S_SECTION: return "S_SECTION";
+		case S_COFFGROUP: return "S_COFFGROUP";
+		case S_EXPORT: return "S_EXPORT";
+		case S_CALLSITEINFO: return "S_CALLSITEINFO";
+		case S_FRAMECOOKIE: return "S_FRAMECOOKIE";
+		case S_DISCARDED: return "S_DISCARDED";
+		case S_COMPILE3: return "S_COMPILE3";
+		case S_ENVBLOCK: return "S_ENVBLOCK";
+		case S_LOCAL: return "S_LOCAL";
+		case S_DEFRANGE: return "S_DEFRANGE";
+		case S_DEFRANGE_SUBFIELD: return "S_DEFRANGE_SUBFIELD";
+		case S_DEFRANGE_REGISTER: return "S_DEFRANGE_REGISTER";
+		case S_DEFRANGE_FRAMEPOINTER_REL: return "S_DEFRANGE_FRAMEPOINTER_REL";
+		case S_DEFRANGE_SUBFIELD_REGISTER: return "S_DEFRANGE_SUBFIELD_REGISTER";
+		case S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE: return "S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE";
+		case S_DEFRANGE_REGISTER_REL: return "S_DEFRANGE_REGISTER_REL";
+		case S_LPROC32_ID: return "S_LPROC32_ID";
+		case S_GPROC32_ID: return "S_GPROC32_ID";
+		case S_LPROCMIPS_ID: return "S_LPROCMIPS_ID";
+		case S_GPROCMIPS_ID: return "S_GPROCMIPS_ID";
+		case S_LPROCIA64_ID: return "S_LPROCIA64_ID";
+		case S_GPROCIA64_ID: return "S_GPROCIA64_ID";
+		case S_BUILDINFO: return "S_BUILDINFO";
+		case S_INLINESITE: return "S_INLINESITE";
+		case S_INLINESITE_END: return "S_INLINESITE_END";
+		case S_PROC_ID_END: return "S_PROC_ID_END";
+		case S_DEFRANGE_HLSL: return "S_DEFRANGE_HLSL";
+		case S_GDATA_HLSL: return "S_GDATA_HLSL";
+		case S_LDATA_HLSL: return "S_LDATA_HLSL";
+		case S_FILESTATIC: return "S_FILESTATIC";
+		case S_ARMSWITCHTABLE: return "S_ARMSWITCHTABLE";
+		case S_CALLEES: return "S_CALLEES";
+		case S_CALLERS: return "S_CALLERS";
+		case S_POGODATA: return "S_POGODATA";
+		case S_INLINESITE2: return "S_INLINESITE2";
+		case S_HEAPALLOCSITE: return "S_HEAPALLOCSITE";
+		case S_MOD_TYPEREF: return "S_MOD_TYPEREF";
+		case S_REF_MINIPDB: return "S_REF_MINIPDB";
+		case S_PDBMAP: return "S_PDBMAP";
+		case S_GDATA_HLSL32: return "S_GDATA_HLSL32";
+		case S_LDATA_HLSL32: return "S_LDATA_HLSL32";
+		case S_GDATA_HLSL32_EX: return "S_GDATA_HLSL32_EX";
+		case S_LDATA_HLSL32_EX: return "S_LDATA_HLSL32_EX";
+	}
+	return "[unknown]";
+}
 
 
 typedef struct CV_PROCFLAGS {
@@ -368,6 +563,14 @@ typedef struct PUBSYM32 {
     unsigned short  seg;
     unsigned char   name[1];    // Length-prefixed name
 } PUBSYM32;
+typedef struct INLINESITESYM {
+    unsigned short  reclen;    // Record length
+    unsigned short  rectyp;    // S_INLINESITE
+    unsigned long   pParent;   // pointer to the inliner
+    unsigned long   pEnd;      // pointer to this block's end
+    CV_ItemId       inlinee;   // CV_ItemId of inlinee
+    unsigned char   binaryAnnotations[1];   // an array of compressed binary annotations.
+} INLINESITESYM;
 
 // https://github.com/PascalBeyer/PDB-Documentation/?tab=readme-ov-file
 struct msf_header{
@@ -515,6 +718,25 @@ enum DEBUG_S_SUBSECTION_TYPE : u32 {
 
 	DEBUG_S_COFF_SYMBOL_RVA,
 };
+inline const char* DEBUG_S_SUBSECTION_TYPE_e_str (DEBUG_S_SUBSECTION_TYPE val) {
+	switch (val) {
+		case DEBUG_S_SYMBOLS				: return "DEBUG_S_SYMBOLS";
+		case DEBUG_S_LINES					: return "DEBUG_S_LINES";
+		case DEBUG_S_STRINGTABLE			: return "DEBUG_S_STRINGTABLE";
+		case DEBUG_S_FILECHKSMS				: return "DEBUG_S_FILECHKSMS";
+		case DEBUG_S_FRAMEDATA				: return "DEBUG_S_FRAMEDATA";
+		case DEBUG_S_INLINEELINES			: return "DEBUG_S_INLINEELINES";
+		case DEBUG_S_CROSSSCOPEIMPORTS		: return "DEBUG_S_CROSSSCOPEIMPORTS";
+		case DEBUG_S_CROSSSCOPEEXPORTS		: return "DEBUG_S_CROSSSCOPEEXPORTS";
+		case DEBUG_S_IL_LINES				: return "DEBUG_S_IL_LINES";
+		case DEBUG_S_FUNC_MDTOKEN_MAP		: return "DEBUG_S_FUNC_MDTOKEN_MAP";
+		case DEBUG_S_TYPE_MDTOKEN_MAP		: return "DEBUG_S_TYPE_MDTOKEN_MAP";
+		case DEBUG_S_MERGED_ASSEMBLYINPUT	: return "DEBUG_S_MERGED_ASSEMBLYINPUT	";
+		case DEBUG_S_COFF_SYMBOL_RVA		: return "DEBUG_S_COFF_SYMBOL_RVA";
+	}
+	return "[unknown]";
+}
+
 struct codeview_subsection_header{
 	DEBUG_S_SUBSECTION_TYPE type;
 	u32 length;
@@ -542,6 +764,141 @@ struct codeview_line{
 	u32 optional_delta_to_end : 7;
 	u32 is_a_statement        : 1;
 };
+
+struct codeview_inlinee_source_line_header{
+	u32 signature;
+};
+#define CV_INLINEE_SOURCE_LINE_SIGNATURE     0x0
+#define CV_INLINEE_SOURCE_LINE_SIGNATURE_EX  0x1
+
+typedef struct tagInlineeSourceLine {
+    CV_ItemId      inlinee;       // function id.
+    CV_off32_t     fileId;        // offset into file table DEBUG_S_FILECHKSMS
+    CV_off32_t     sourceLineNum; // definition start line number.
+} InlineeSourceLine;
+
+typedef struct tagInlineeSourceLineEx {
+    CV_ItemId      inlinee;       // function id
+    CV_off32_t     fileId;        // offset into file table DEBUG_S_FILECHKSMS
+    CV_off32_t     sourceLineNum; // definition start line number
+    unsigned int   countOfExtraFiles;
+    CV_off32_t     extraFileId[1];
+} InlineeSourceLineEx;
+
+typedef uint8_t CompressedAnnotation;
+typedef CompressedAnnotation* PCompressedAnnotation;
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// Uncompress the data in pData and store the result into pDataOut.
+//
+// Return value is the uncompressed unsigned integer.  pData is incremented to
+// point to the next piece of uncompressed data.
+// 
+// Returns -1 if what is passed in is incorrectly compressed data, such as
+// (*pBytes & 0xE0) == 0xE0.
+//
+///////////////////////////////////////////////////////////////////////////////
+
+inline uint32_t CVUncompressData(
+    PCompressedAnnotation & pData)    // [IN,OUT] compressed data 
+{
+    uint32_t res = (uint32_t)(-1);
+
+    if ((*pData & 0x80) == 0x00) {
+        // 0??? ????
+
+        res = (uint32_t)(*pData++);
+    }
+    else if ((*pData & 0xC0) == 0x80) {
+        // 10?? ????
+
+        res = (uint32_t)((*pData++ & 0x3f) << 8);
+        res |= *pData++;
+    }
+    else if ((*pData & 0xE0) == 0xC0) {
+        // 110? ???? 
+
+        res = (*pData++ & 0x1f) << 24;
+        res |= *pData++ << 16;
+        res |= *pData++ << 8;
+        res |= *pData++;
+    }
+
+    return res; 
+}
+inline __int32 DecodeSignedInt32(unsigned __int32 input)
+{
+    __int32 rotatedInput;
+
+    if (input & 1) {
+        rotatedInput = - (int)(input >> 1);
+    } else {
+        rotatedInput = input >> 1;
+    }
+
+    return rotatedInput;
+}
+
+// BinaryAnnotations ::= BinaryAnnotationInstruction+
+// BinaryAnnotationInstruction ::= BinaryAnnotationOpcode Operand+
+//
+// The binary annotation mechanism supports recording a list of annotations
+// in an instruction stream.  The X64 unwind code and the DWARF standard have
+// similar design.
+//
+// One annotation contains opcode and a number of 32bits operands.
+//
+// The initial set of annotation instructions are for line number table
+// encoding only.  These annotations append to S_INLINESITE record, and
+// operands are unsigned except for BA_OP_ChangeLineOffset.
+
+enum BinaryAnnotationOpcode : u32 {
+    BA_OP_Invalid,               // link time pdb contains PADDINGs
+    BA_OP_CodeOffset,            // param : start offset 
+    BA_OP_ChangeCodeOffsetBase,  // param : nth separated code chunk (main code chunk == 0)
+    BA_OP_ChangeCodeOffset,      // param : delta of offset
+    BA_OP_ChangeCodeLength,      // param : length of code, default next start
+    BA_OP_ChangeFile,            // param : fileId 
+    BA_OP_ChangeLineOffset,      // param : line offset (signed)
+    BA_OP_ChangeLineEndDelta,    // param : how many lines, default 1
+    BA_OP_ChangeRangeKind,       // param : either 1 (default, for statement)
+                                 //         or 0 (for expression)
+
+    BA_OP_ChangeColumnStart,     // param : start column number, 0 means no column info
+    BA_OP_ChangeColumnEndDelta,  // param : end column number delta (signed)
+
+    // Combo opcodes for smaller encoding size.
+
+    BA_OP_ChangeCodeOffsetAndLineOffset,  // param : ((sourceDelta << 4) | CodeDelta)
+    BA_OP_ChangeCodeLengthAndCodeOffset,  // param : codeLength, codeOffset
+
+    BA_OP_ChangeColumnEnd,       // param : end column number
+};
+inline const char* BinaryAnnotationOpcode_str (BinaryAnnotationOpcode val) {
+	switch (val) {
+		case BA_OP_Invalid							: return "BA_OP_Invalid";
+		case BA_OP_CodeOffset						: return "BA_OP_CodeOffset";
+		case BA_OP_ChangeCodeOffsetBase				: return "BA_OP_ChangeCodeOffsetBase";
+		case BA_OP_ChangeCodeOffset					: return "BA_OP_ChangeCodeOffset";
+		case BA_OP_ChangeCodeLength					: return "BA_OP_ChangeCodeLength";
+		case BA_OP_ChangeFile						: return "BA_OP_ChangeFile";
+		case BA_OP_ChangeLineOffset					: return "BA_OP_ChangeLineOffset";
+		case BA_OP_ChangeLineEndDelta				: return "BA_OP_ChangeLineEndDelta";
+		case BA_OP_ChangeRangeKind					: return "BA_OP_ChangeRangeKind";
+		case BA_OP_ChangeColumnStart				: return "BA_OP_ChangeColumnStart";
+		case BA_OP_ChangeColumnEndDelta				: return "BA_OP_ChangeColumnEndDelta";
+		case BA_OP_ChangeCodeOffsetAndLineOffset	: return "BA_OP_ChangeCodeOffsetAndLineOffset";
+		case BA_OP_ChangeCodeLengthAndCodeOffset	: return "BA_OP_ChangeCodeLengthAndCodeOffset";
+		case BA_OP_ChangeColumnEnd					: return "BA_OP_ChangeColumnEnd";
+	}
+	return "[unknown]";
+}
+
+inline int BinaryAnnotationInstructionOperandCount(BinaryAnnotationOpcode op)
+{
+    return (op == BA_OP_ChangeCodeLengthAndCodeOffset) ? 2 : 1;
+}
 
 struct SourceLoc {
 	const char* filepath;
@@ -575,7 +932,10 @@ class PDB_File {
 		u32 page_idx_page     = page_idx / u32_per_page;
 		u32 page_idx_page_idx = page_idx % u32_per_page;
 
-		assert(page_idx_page == 0);
+		// Only huge pdb files have more then one here, assert meant to test that case, but didn't see it yet
+		// code should work fine though
+		//assert(page_idx_page == 0);
+		assert((char*)&header->page_list_of_stream_table_stream_page_list[page_idx_page] - (char*)header < header->page_size);
 		u32* sts_pages = (u32*)get_page(header->page_list_of_stream_table_stream_page_list[page_idx_page]);
 
 		return (char*)get_page(sts_pages[page_idx_page_idx]) + ptr_in_page;
@@ -977,156 +1337,22 @@ class PDB_File {
 		auto* mi = mod.mi;
 		
 		std::unordered_map<uintptr_t, size_t> lookup_proc_sym;
+		std::unordered_map<CV_ItemId, InlineeSourceLine*> inlinee_c13;
+		size_t first_sym = sym_sorted.size();
 
 		if (mi->stream_index_of_module_symbol_stream == 0xffff)
 			return; // no symbol data
 		mod.symbol_stream_data = copy_into_consecutive(mi->stream_index_of_module_symbol_stream);
 		char* ptr = mod.symbol_stream_data.data();
+
+		char* sym_info = ptr;
+		ptr += mi->byte_size_of_symbol_information;
 		
-		//// Symbol info
-		char* ptr2 = ptr;
-		u32 signature = *(u32*)ptr;
-		ptr += sizeof(u32);
-		assert(signature == 4); // CV_SIGNATURE_C13
-		
-		while (ptr < ptr2 + mi->byte_size_of_symbol_information) {
-			auto sym = (codeview_symbol_header*)ptr;
-			
-			ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
-			ptr = align_up(ptr, 4);
-
-			//printf("> %4x %d\n", sym->kind, sym->length);
-
-			switch (sym->kind) {
-				case S_GPROC32: case S_LPROC32:
-				case S_GPROC32_ID: case S_LPROC32_ID: {
-					auto* proc = (PROCSYM32*)sym;
-					//printf(">> %s %4d %4d %8x %s\n",
-					//	sym->kind == S_LPROC32 ? "L":"G",
-					//	proc->seg, proc->len, proc->off, proc->name);
-
-					uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
-
-					lookup_proc_sym.emplace(module_raddr, sym_sorted.size());
-
-					sym_sorted.push_back(Symbol{
-						module_raddr, proc->len, (const char*)proc->name
-					});
-				} break;
-			}
-		}
-		assert((ptr - ptr2) == mi->byte_size_of_symbol_information);
-
 		//auto* c11_line_information = (u8*)ptr;
 		ptr += mi->byte_size_of_c11_line_information;
-		
-		//// C13 line info
-		//printf("> c13_line_information\n");
 
-		ptr2 = ptr;
-
-		// first pass to find FILECHKSMS ptr
-		char* filechksms_ptr = nullptr;
-		auto read_file_checksums = [&] (codeview_subsection_header* header) {
-			auto* ptr3 = ptr;
-			while (ptr < ptr3 + header->length) {
-				auto* file = (codeview_file_checksum*)ptr;
-				ptr += sizeof(codeview_file_checksum);
-				ptr += file->checksum_size;
-				ptr = align_up(ptr, 4);
-
-				auto* name = &names[file->offset_in_string_table];
-
-				//printf(">> File Checksum %s\n", name);
-			}
-			assert((ptr - ptr3) == header->length);
-		};
-		while (ptr < ptr2 + mi->byte_size_of_c13_line_information) {
-			auto* header = (codeview_subsection_header*)ptr;
-			ptr += sizeof(codeview_subsection_header);
-
-			if (header->type == DEBUG_S_FILECHKSMS) {
-				filechksms_ptr = ptr;
-				//read_file_checksum(header);
-				break;
-			}
-			ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
-		}
-		ptr = ptr2; // reset ptr
-		
-		auto read_line_numbers = [&] (codeview_subsection_header* header) {
-			auto* ptr3 = ptr;
-
-			// With usual compiler, this is once per function
-			auto* lines = (codeview_line_header*)ptr;
-			ptr += sizeof(codeview_line_header);
-			assert(lines->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
-
-			//printf(">> Header %d, %8x %8x\n", lines->contribution_section_id, lines->contribution_offset, lines->contribution_size);
-			
-			uintptr_t sec_offs = sections_sorted[lines->contribution_section_id-1].base_addr;
-			uintptr_t module_raddr = lines->contribution_offset + sec_offs;
-			auto it = lookup_proc_sym.find(module_raddr);
-			auto* sym = it != lookup_proc_sym.end() ? &sym_sorted[it->second] : nullptr;
-
-			//while (ptr < ptr3 + header->length) {
-			//	auto* line_block = (codeview_line_block_header*)ptr;
-			//	ptr += sizeof(codeview_line_block_header);
-			//
-			//	auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
-			//	auto* name = &names[cksm->offset_in_string_table];
-			//
-			//	//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, name);
-			//
-			//	for (u32 i=0; i<line_block->amount_of_lines; i++) {
-			//		auto* line = (codeview_line*)ptr;
-			//		ptr += sizeof(codeview_line);
-			//
-			//		//printf(">>  Line %d %d\n", line->start_line_number, line->offset);
-			//	}
-			//}
-			//assert((ptr - ptr3) == header->length);
-
-			if (sym) {
-				assert(module_raddr == sym->base_addr); // lines section contribtion offset need to be procedure symbol offset
-				
-				//if (strcmp(sym->name, "main") == 0) {
-				//	printf("");
-				//}
-
-				ptr = ptr3;
-				ptr += sizeof(codeview_line_header);
-
-				while (ptr < ptr3 + header->length) {
-					auto* line_block = (codeview_line_block_header*)ptr;
-					ptr += sizeof(codeview_line_block_header);
-
-					auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
-					auto* name = &names[cksm->offset_in_string_table];
-
-					sym->src.push_back(Symbol::SrcLines {
-						line_block->amount_of_lines,
-						name,
-						(codeview_line*)ptr,
-					});
-
-					ptr += line_block->amount_of_lines * sizeof(codeview_line);
-				}
-			}
-		};
-
-		while (ptr < ptr2 + mi->byte_size_of_c13_line_information) {
-			auto* header = (codeview_subsection_header*)ptr;
-			ptr += sizeof(codeview_subsection_header);
-
-			switch (header->type) {
-				case DEBUG_S_LINES: {
-					read_line_numbers(header);
-				} break;
-			}
-			ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
-		}
-		assert((ptr - ptr2) == mi->byte_size_of_c13_line_information);
+		char* c13_line_information = ptr;
+		ptr += mi->byte_size_of_c13_line_information;
 
 		auto global_references_bytes_size = *(u32*)ptr;
 		auto num_global_references = global_references_bytes_size / 4;
@@ -1136,6 +1362,382 @@ class PDB_File {
 		ptr += global_references_bytes_size;
 		
 		assert((ptr - mod.symbol_stream_data.data()) == streams[mi->stream_index_of_module_symbol_stream].size);
+		
+		char* filechksms_ptr = nullptr;
+
+		if (strcmp(mod.file_name.data(), "C:\\coding\\BetterDbgHelp\\TinyProgram\\x64\\Release\\main.obj") == 0) {
+			printf("");
+		}
+		
+		//// Symbol info
+		auto parse_symbol_info = [&] () {
+			char* ptr = sym_info;
+
+			u32 signature = *(u32*)ptr;
+			ptr += sizeof(u32);
+			assert(signature == 4); // CV_SIGNATURE_C13
+		
+			printf(">> symbol_information\n");
+
+			while (ptr < sym_info + mi->byte_size_of_symbol_information) {
+				auto sym = (codeview_symbol_header*)ptr;
+			
+				ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
+				ptr = align_up(ptr, 4);
+
+				int entry_offs = (int)((char*)sym - sym_info);
+				printf("> %7d [%4x] %d %s\n", entry_offs, sym->kind, sym->length, SYM_ENUM_e_str(sym->kind));
+
+				switch (sym->kind) {
+					case S_GPROC32: case S_LPROC32:
+					case S_GPROC32_ID: case S_LPROC32_ID: {
+						auto* proc = (PROCSYM32*)sym;
+						printf(">> %s %4d %4d %8x %s\n",
+							sym->kind == S_LPROC32 ? "L":"G",
+							proc->seg, proc->len, proc->off, proc->name);
+
+						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
+
+						lookup_proc_sym.emplace(module_raddr, sym_sorted.size());
+
+						Symbol s;
+						s.base_addr = module_raddr;
+						s.size = proc->len;
+						s.name = (const char*)proc->name;
+						s.sym_entry = proc;
+						sym_sorted.push_back(std::move(s));
+					} break;
+					case S_INLINESITE: {
+						auto* inl = (INLINESITESYM*)sym;
+						//inl->pParent // byte offs from symbol_information start of prev PROCSYM32 or INLINESITESYM, ie caller
+						//inl->pEnd // byte offs of INLINESITE_END
+						// inl->inlinee seems to be some kind of id that lets us look up line info, but not sure where that is and if that lineinfo is encoded horribly
+						// no idea what inl->binaryAnnotations is
+						//printf(">> INLINESITE inlinee: %d\n", inl->inlinee);
+					} break;
+				}
+			}
+			assert((ptr - sym_info) == mi->byte_size_of_symbol_information);
+		};
+		auto parse_inlinesite_lineno_annotations = [&] (Symbol* sym) {
+			auto parse = [&] (INLINESITESYM* inl) {
+				PCompressedAnnotation cur = (PCompressedAnnotation)inl->binaryAnnotations;
+				PCompressedAnnotation end = (PCompressedAnnotation)((char*)inl + sizeof(u16) + inl->reclen); // length field of codeview_symbol_header not contained in length
+			
+				auto it = inlinee_c13.find(inl->inlinee);
+				if (it == inlinee_c13.end()) {
+					assert(false);
+					return;
+				}
+				auto* c13 = it->second;
+
+				u32 file_index = c13->fileId;
+				u32 code_offset_base = 0;
+				u32 code_offset = 0; // TODO: according to getsentry, has to be parent offset, so partent inlinesite/or actual function?
+				u32 code_length = 0; // 0 = null
+				u32 lineno = c13->sourceLineNum;
+				u32 line_length = 1;
+				u32 kind = 1; // 0 == Expression, 1 == Statement
+
+				u32 prev_code_offset = -1;
+
+				struct Line {
+					u32 code_offset;
+					u32 code_length;
+					u32 lineno;
+					u32 line_length;
+					u32 file_index;
+					u32 kind;
+				};
+				std::vector<Line> lines;
+				auto prev = [&] () -> Line* {
+					if (lines.empty()) return nullptr;
+					return &lines.back();
+				};
+
+				while (cur < end) {
+
+					auto opcode = (BinaryAnnotationOpcode)CVUncompressData(cur);
+					if (opcode == BA_OP_Invalid)
+						continue;
+					//if (BinaryAnnotationInstructionOperandCount(opcode) == 1) {
+					//	auto val1 = CVUncompressData(cur);
+					//	printf(">>> %s: %d\n", BinaryAnnotationOpcode_str(opcode), val1);
+					//}
+					//else {
+					//	auto val1 = CVUncompressData(cur);
+					//	auto val2 = CVUncompressData(cur);
+					//	printf(">>> %s: %d %d\n", BinaryAnnotationOpcode_str(opcode), val1, val2);
+					//}
+
+					Line* prev = lines.empty() ? nullptr : &lines.back();
+					bool emit = false;
+
+					auto arg1 = CVUncompressData(cur);
+					switch (opcode) {
+						case BA_OP_CodeOffset: {
+							code_offset = arg1;
+						} break;
+						case BA_OP_ChangeCodeOffsetBase: {
+							code_offset_base = arg1;
+						} break;
+						case BA_OP_ChangeCodeOffset: {
+							code_offset += arg1;
+							emit = true;
+						} break;
+						case BA_OP_ChangeCodeLength: {
+							if (prev) {
+								if (prev->code_length == 0 && prev->kind == kind) {
+									prev->code_length = arg1;
+								}
+							}
+							code_offset += arg1;
+						} break;
+						case BA_OP_ChangeFile: {
+							// https://github.com/getsentry/pdb/blob/master/src/modi/c13.rs
+							// NOTE: There seems to be a bug in VS2015-VS2019 compilers that generates
+							// invalid binary annotations when file changes are involved. This can be
+							// triggered by #including files directly into inline functions. The
+							// `ChangeFile` annotations are generated in the wrong spot or missing
+							// completely. This renders information on the file effectively useless in a lot
+							// of cases.
+
+							file_index = arg1;
+						} break;
+						case BA_OP_ChangeLineOffset: {
+							lineno += DecodeSignedInt32(arg1);
+						} break;
+						case BA_OP_ChangeLineEndDelta: {
+							line_length = arg1;
+						} break;
+						case BA_OP_ChangeRangeKind: {
+							assert(arg1 == 0 || arg1 == 1);
+							kind = arg1;
+						} break;
+						case BA_OP_ChangeColumnStart: {
+							// ignore column info
+						} break;
+						case BA_OP_ChangeColumnEndDelta: {
+							// ignore column info
+						} break;
+						case BA_OP_ChangeCodeOffsetAndLineOffset: {
+							// param : ((sourceDelta << 4) | CodeDelta)
+							u32 CodeDelta = arg1 & 0b1111;
+							s32 sourceDelta = DecodeSignedInt32(arg1 >> 4);
+
+							code_offset += CodeDelta;
+							lineno += sourceDelta;
+							emit = true;
+						} break;
+						case BA_OP_ChangeCodeLengthAndCodeOffset: {
+							auto arg2 = CVUncompressData(cur);
+							code_length = arg1;
+							code_offset += arg2;
+							emit = true;
+						} break;
+						case BA_OP_ChangeColumnEnd: {
+							// ignore column info
+						} break;
+						default: {
+							assert(false);
+						}
+					}
+
+					if (!emit) {
+						continue;
+					}
+
+					u32 offset = code_offset + code_offset_base;
+					if (prev) {
+						if (prev->code_length == 0 && prev->kind == kind) {
+							prev->code_length = offset - prev->code_offset;
+						}
+					}
+
+					lines.push_back({
+						offset,
+						code_length,
+						lineno,
+						line_length,
+						file_index,
+						kind,
+					});
+
+					// Code length resets with every line record.
+					code_length = 0;
+				}
+
+				for (auto& l : lines) {
+					auto* cksm = (codeview_file_checksum*)(filechksms_ptr + l.file_index);
+					auto* name = &names[cksm->offset_in_string_table];
+
+					printf(">>> %4x %4x %s:%d (%d %d)\n", l.code_offset, l.code_length, name, l.lineno, l.line_length, l.kind);
+				}
+
+				assert(cur == end);
+			};
+			
+			assert(sym->sym_entry);
+			if (sym->sym_entry == nullptr)
+				return;
+			
+			printf("> for %s:\n", sym->name);
+
+			char* ptr = (char*)sym->sym_entry;
+			for (;;) {
+				auto sym = (codeview_symbol_header*)ptr;
+				ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
+				ptr = align_up(ptr, 4);
+
+				switch (sym->kind) {
+					case S_INLINESITE: {
+						auto* inl = (INLINESITESYM*)sym;
+						printf(">> INLINESITE %d:\n", inl->inlinee);
+						parse(inl);
+					} break;
+					case S_END: {
+						return;
+					} break;
+				}
+			}
+		};
+
+		//// C13 line info
+		auto parse_c13 = [&] () {
+			//printf("> c13_line_information\n");
+			char* ptr = c13_line_information;
+			
+			// first pass to find FILECHKSMS ptr
+			while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
+				auto* header = (codeview_subsection_header*)ptr;
+				ptr += sizeof(codeview_subsection_header);
+
+				if (header->type == DEBUG_S_FILECHKSMS) {
+					filechksms_ptr = ptr;
+					//read_file_checksum(header);
+					break;
+				}
+				ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
+			}
+			ptr = c13_line_information; // reset ptr
+		
+			auto read_line_numbers = [&] (codeview_subsection_header* subsec) {
+				auto* ptr3 = ptr;
+
+				// With usual compiler, this is once per function
+				auto* header = (codeview_line_header*)ptr;
+				ptr += sizeof(codeview_line_header);
+				assert(header->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
+
+				//printf(">> Header %d, %8x %8x\n", lines->contribution_section_id, lines->contribution_offset, lines->contribution_size);
+			
+				uintptr_t sec_offs = sections_sorted[header->contribution_section_id-1].base_addr;
+				uintptr_t module_raddr = header->contribution_offset + sec_offs;
+				auto it = lookup_proc_sym.find(module_raddr);
+				auto* sym = it != lookup_proc_sym.end() ? &sym_sorted[it->second] : nullptr;
+
+				while (ptr < ptr3 + subsec->length) {
+					auto* line_block = (codeview_line_block_header*)ptr;
+					ptr += sizeof(codeview_line_block_header);
+			
+					auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
+					auto* name = &names[cksm->offset_in_string_table];
+			
+					//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, name);
+			
+					for (u32 i=0; i<line_block->amount_of_lines; i++) {
+						auto* line = (codeview_line*)ptr;
+						ptr += sizeof(codeview_line);
+			
+						//printf(">>  Line %d %d\n", line->start_line_number, line->offset);
+					}
+				}
+				assert((ptr - ptr3) == subsec->length);
+
+				if (sym) {
+					assert(module_raddr == sym->base_addr); // lines section contribtion offset need to be procedure symbol offset
+				
+					//if (strcmp(sym->name, "main") == 0) {
+					//	printf("");
+					//}
+
+					ptr = ptr3;
+					ptr += sizeof(codeview_line_header);
+
+					while (ptr < ptr3 + subsec->length) {
+						auto* line_block = (codeview_line_block_header*)ptr;
+						ptr += sizeof(codeview_line_block_header);
+
+						auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
+						auto* name = &names[cksm->offset_in_string_table];
+
+						sym->src.push_back(Symbol::SrcLines {
+							line_block->amount_of_lines,
+							name,
+							(codeview_line*)ptr,
+						});
+
+						ptr += line_block->amount_of_lines * sizeof(codeview_line);
+					}
+				}
+			};
+			auto read_inlinee_line_numbers = [&] (codeview_subsection_header* subsec) {
+				auto* ptr3 = ptr;
+
+				///// Flag indicating the default format of `DEBUG_S_INLINEELINEINFO`
+				//pub const CV_INLINEE_SOURCE_LINE_SIGNATURE: u32 = 0x0;
+				///// Flag indicating the extended format of `DEBUG_S_INLINEELINEINFO`
+				//pub const CV_INLINEE_SOURCE_LINE_SIGNATURE_EX: u32 = 0x1;
+
+				auto* header = (codeview_inlinee_source_line_header*)ptr;
+				ptr += sizeof(codeview_inlinee_source_line_header);
+				assert(header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE);
+			
+				while (ptr < ptr3 + subsec->length) {
+					auto* line = (InlineeSourceLine*)ptr;
+					ptr += sizeof(InlineeSourceLine);
+			
+					auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line->fileId);
+					auto* name = &names[cksm->offset_in_string_table];
+
+					printf(">>  Line %d %s %d\n", line->sourceLineNum, name, line->inlinee);
+
+					inlinee_c13.emplace(line->inlinee, line);
+				}
+				assert((ptr - ptr3) == subsec->length);
+			};
+
+			while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
+				auto* header = (codeview_subsection_header*)ptr;
+				ptr += sizeof(codeview_subsection_header);
+
+				printf(">> %s\n", DEBUG_S_SUBSECTION_TYPE_e_str(header->type));
+
+				if ((header->type & DEBUG_S_IGNORE) == 0) {
+					switch (header->type) {
+						case DEBUG_S_LINES: {
+							read_line_numbers(header);
+						} break;
+						case DEBUG_S_INLINEELINES: {
+							read_inlinee_line_numbers(header);
+						} break;
+					}
+				}
+				ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
+			}
+			assert((ptr - c13_line_information) == mi->byte_size_of_c13_line_information);
+		};
+		
+		parse_symbol_info();
+		parse_c13();
+
+		for (size_t i=first_sym; i<sym_sorted.size(); i++) {
+			parse_inlinesite_lineno_annotations(&sym_sorted[i]);
+		}
+
+		if (strcmp(mod.file_name.data(), "C:\\coding\\BetterDbgHelp\\TinyProgram\\x64\\Release\\main.obj") == 0) {
+			printf("");
+		}
 	}
 
 public:
@@ -1194,6 +1796,8 @@ public:
 			codeview_line* lines = nullptr;
 		};
 		std::vector<SrcLines> src;
+
+		PROCSYM32* sym_entry; // needed for scanning INLINESITEs later
 	};
 	std::vector<Symbol> sym_sorted;
 
@@ -1448,7 +2052,13 @@ public:
 			return false;
 		}
 
-		printf("#[%16llx]: %-15s!%s %s:%d\n", (uintptr_t)ptr, res.module_path, res.sym_name, res.src_filepath, res.src_lineno);
+		printf("#[%16llx]: %-15s!%s ", (uintptr_t)ptr, res.module_path, res.sym_name);
+		if (res.has_source()) {
+			printf("%s:%d\n", res.src_filepath, res.src_lineno);
+		}
+		else {
+			printf("(No source info)\n");
+		}
 		return true;
 	}
 	void warmup_addr2sym (char* ptr) {

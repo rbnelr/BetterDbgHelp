@@ -92,10 +92,10 @@ public:
 		BOOL res2 = SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line);
 
 		//printf("[%16p]: sz: %4d flags: %4d D%4d %-15s", addr, si->Size, si->Flags, Displacement, si->Name);
-		printf("[%16p]: %-15s", addr, si->Name);
+		printf("[%16p]: %-15s ", addr, si->Name);
 		
 		if (!res2) { // tracy has another check here: line.LineNumber >= 0xF00000 but this is undocumented
-			printf("\n");
+			printf("(No source info)\n");
 			//print_err("SymGetLineFromAddr64"); // Not having a line number is normal for certain addresses
 			return;
 		}
