@@ -65,9 +65,26 @@ namespace kiss {
 	struct TimerMeasureZone {
 		TimerMeasurement* meas;
 		Timer t;
-		TimerMeasureZone (TimerMeasurement* meas): meas{meas}, t{Timer::start()} {}
+		
+		float elapsed = 0;
+		float excluded = 0;
+		bool ended = false;
+
+		TimerMeasureZone (TimerMeasurement* meas, bool active=true): meas{meas}, t{Timer::start()} {}
 		~TimerMeasureZone () {
-			meas->push(t.elapsed_sec());
+			end();
+		}
+
+		void end () {
+			if (!ended) {
+				elapsed = t.elapsed_sec();
+				meas->push(elapsed - excluded);
+			}
+			ended = true;
+		}
+		// only works on still running zones
+		void exclude (TimerMeasureZone& other) {
+			excluded += other.elapsed;
 		}
 	};
 }

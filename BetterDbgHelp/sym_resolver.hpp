@@ -159,18 +159,16 @@ class SymResolver {
 	// only warmup to avoid including pdb loading in later measurement
 	//TimerMeasurement twarmup = TimerMeasurement("warmup");
 	TimerMeasurement taddr2sym = TimerMeasurement("addr2sym");
+	TimerMeasurement ttrace_inlinesites = TimerMeasurement("trace_inlinesites");
 
 public:
 	SymResolver (HANDLE inspectee): inspectee{inspectee} {}
 	
 	void measure_addr2sym (char* ptr) {
 		SymResult res = {};
-		{
-			TimerMeasZone(taddr2sym);
-			addr2sym(ptr, &res);
-		}
+		measure_addr2sym(ptr, &res);
 	}
-
+	
 	bool addr2sym (void* ptr, SymResult* res) {
 		uintptr_t addr = (uintptr_t)ptr;
 		*res = {};
@@ -204,7 +202,56 @@ public:
 			res->src_lineno = src_loc.lineno;
 		}
 
-		mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, 64, &res->num_inlines);
+		{
+			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, 64, &res->num_inlines);
+		}
+
+		return res->valid();
+	}
+
+	bool measure_addr2sym (void* ptr, SymResult* res) {
+		auto _taddr2sym = kiss::TimerMeasureZone(&taddr2sym);
+
+		uintptr_t addr = (uintptr_t)ptr;
+		*res = {};
+
+		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
+		if (!mod) {
+			res->err = "Module not found";
+			return false;
+		}
+		if (!mod->pdb) {
+			res->err = "Module pdb not found";
+			return false;
+		}
+
+		uintptr_t mod_raddr = addr - mod->base_addr;
+		
+		auto sym = mod->pdb->find_symbol_for_addr(mod_raddr);
+		if (!sym) {
+			res->err = "Symbol not found";
+			return false;
+		}
+		
+		res->module_path = mod->path.c_str();
+		res->sym_name = sym->name;
+		res->src_filepath = nullptr;
+		res->src_lineno = 0;
+
+		SourceLoc src_loc = {};
+		if (mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
+			res->src_filepath = src_loc.filepath;
+			res->src_lineno = src_loc.lineno;
+		}
+
+		{
+			auto _ttrace_inlinesites = kiss::TimerMeasureZone(&ttrace_inlinesites);
+
+			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, 64, &res->num_inlines);
+
+			_ttrace_inlinesites.end();
+			_taddr2sym.exclude(_ttrace_inlinesites);
+		}
 
 		return res->valid();
 	}
@@ -213,5 +260,6 @@ public:
 		mod_cache.ttry_get_and_cache_module.print();
 		mod_cache.tload_pdb.print();
 		taddr2sym.print();
+		ttrace_inlinesites.print();
 	}
 };
