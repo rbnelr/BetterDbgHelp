@@ -155,6 +155,7 @@ public:
 	bool tests_failed = false;
 
 	SymTesting (std::string const& exe_filepath, float max_run_time = 2.0f) {
+		printf("\n-------------------------------------\n\n");
 		printf("Starting %s\n", exe_filepath.c_str());
 		start_debugging_child_process(exe_filepath, max_run_time);
 		dbghelp = std::make_unique<Debughelp>(pi.hProcess);
@@ -174,35 +175,30 @@ public:
 		return (char*)loaded_modules.get_ptr(name);
 	}
 	void show_addr2sym (char* addr) {
-		dbghelp->show_addr2sym(addr);
-		resolver->show_addr2sym(addr);
+		SymResult res={}, res_dbghelp={};
+
+		dbghelp->addr2sym(addr, &res_dbghelp);
+		printf("dbghelp.dll: [%16llx] ", (uintptr_t)addr);
+		res_dbghelp.print();
+
+		resolver->addr2sym(addr, &res);
+		printf("SymResolver: [%16llx] ", (uintptr_t)addr);
+		res.print();
 	}
 	void measure_addr2sym (char* addr) {
 		dbghelp->measure_addr2sym(addr);
 		resolver->measure_addr2sym(addr);
 	}
 	void test_addr2sym (char* addr) {
-		SymResolver::Result res={}, res_dbghelp={};
+		SymResult res={}, res_dbghelp={};
 
 		auto err_dbghelp = dbghelp->addr2sym(addr, &res_dbghelp);
 		auto err         = resolver->addr2sym(addr, &res);
-		
-		if (err_dbghelp) {
-			printf("!!! [%16llx %s] dbghelp.dll Error: %s\n", (uintptr_t)addr, res_dbghelp.sym_name, err_dbghelp);
-			tests_failed = true;
-			return;
-		}
-		if (err) {
-			printf("!!! [%16llx %s] SymResolver Error: %s\n", (uintptr_t)addr, res_dbghelp.sym_name, err);
-			tests_failed = true;
-			return;
-		}
 		
 		if (res != res_dbghelp) {
 			printf("!!! [%16llx %s] Result Mismatch:\n", (uintptr_t)addr, res_dbghelp.sym_name);
 			res.print_diff(res_dbghelp);
 			tests_failed = true;
-			return;
 		}
 	}
 
@@ -224,8 +220,9 @@ public:
 		resolver->print_timings();
 	}
 	void warmup (char* addr) {
-		dbghelp->warmup_addr2sym(addr);
-		resolver->warmup_addr2sym(addr);
+		SymResult sym = {};
+		dbghelp->addr2sym(addr, &sym);
+		resolver->addr2sym(addr, &sym);
 	}
 };
 

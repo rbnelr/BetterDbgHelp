@@ -117,90 +117,35 @@ public:
 
 		//printf("> Inline %d %d %d\n", inlineNum, doInline, ctx);
 		
-		for (DWORD i=0; i<inlineNum; i++) {
-			res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
-			if (!res1) {
-				print_err("SymFromInlineContext");
-				//printf("> Not found\n");
-				continue;
+		// These are from inner to outermost inline
+		if (doInline) {
+			for (DWORD i=0; i<inlineNum; i++) {
+				res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
+				if (!res1) {
+					print_err("SymFromInlineContext");
+					//printf("> Not found\n");
+					ctx++;
+					continue;
+				}
+
+				res2 = _SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
+
+				printf("> %-15s", si->Name);
+
+				if (!res2) {
+					printf("\n");
+					//print_err("SymGetLineFromInlineContext");
+					ctx++;
+					continue;
+				}
+
+				printf(" @ %s:%d\n", line.FileName, line.LineNumber);
+
+				ctx++;
 			}
-
-			res2 = _SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
-
-			printf("> %-15s", si->Name);
-
-			if (!res2) {
-				printf("\n");
-				//print_err("SymGetLineFromInlineContext");
-				continue;
-			}
-
-			printf(" @ %s:%d\n", line.FileName, line.LineNumber);
-
-			ctx++;
 		}
 	}
 	
-	void warmup_addr2sym (char* addr) {
-		// simply measure_addr2sym without timers
-
-		constexpr size_t MaxNameSize = 8192;
-		char buf[sizeof(SYMBOL_INFO) + MaxNameSize] = {};
-		auto* si = (SYMBOL_INFO*)buf;
-		si->SizeOfStruct = sizeof(SYMBOL_INFO);
-		si->MaxNameLen = MaxNameSize;
-
-		DWORD Displacement = 0;
-
-		IMAGEHLP_LINE64 line = {};
-		line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-
-		BOOL res1;
-		{
-			res1 = SymFromAddr(inspectee, (DWORD64)addr, nullptr, si);
-		}
-		if (!res1) {
-			return;
-		}
-		
-		BOOL res2;
-		{
-			res2 = SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line);
-		}
-
-		
-		BOOL doInline = FALSE;
-		DWORD ctx = 0;
-		DWORD inlineNum = 0;
-		if (_SymAddrIncludeInlineTrace) {
-			{
-				inlineNum = _SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
-			}
-
-			DWORD idx;
-			if (inlineNum != 0) {
-				doInline = _SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
-			}
-		}
-		
-		for (DWORD i=0; i<inlineNum; i++) {
-			{
-				res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
-			}
-			if (!res1) {
-				continue;
-			}
-			
-			{
-				res2 = _SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
-			}
-			if (!res2) {
-				continue;
-			}
-
-			ctx++;
-		}
-	}
 	void measure_addr2sym (char* addr) {
 		constexpr size_t MaxNameSize = 8192;
 		char buf[sizeof(SYMBOL_INFO) + MaxNameSize] = {};
@@ -245,33 +190,46 @@ public:
 			}
 		}
 		
-		for (DWORD i=0; i<inlineNum; i++) {
-			{
-				TimerMeasZone(tSymFromInlineContext);
-				res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
-			}
-			if (!res1) {
-				continue;
-			}
+		if (doInline) {
+			for (DWORD i=0; i<inlineNum; i++) {
+				{
+					TimerMeasZone(tSymFromInlineContext);
+					res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
+				}
 			
-			{
-				TimerMeasZone(tSymGetLineFromInlineContext);
-				res2 = _SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
-			}
-			if (!res2) {
-				continue;
-			}
+				if (res1) {
+					TimerMeasZone(tSymGetLineFromInlineContext);
+					res2 = _SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
+				}
 
-			ctx++;
+				ctx++;
+			}
 		}
 	}
 
-	SymResolver::err_t addr2sym (void* addr, SymResolver::Result* res) {
-		char buf[sizeof(SYMBOL_INFO) + SymResolver::Result::STRBUF_SIZE] = {};
+	bool addr2sym (void* addr, SymResult* res) {
+		*res = {};
+
+		size_t strbuf_cur = 0;
+		auto copy_to_strbuf = [&] (const char* str, size_t len) -> const char* {
+			char* out = res->str_buf + strbuf_cur;
+			size_t remain = SymResult::STRBUF_SIZE - strbuf_cur;
+			size_t bytes_to_copy = remain >= len+1 ? len+1 : remain;
+			if (bytes_to_copy <= 0) {
+				return nullptr;
+			}
+			// copies whole or truncated
+			memcpy(out, str, bytes_to_copy);
+			strbuf_cur += bytes_to_copy;
+			return out;
+		};
+
+		// SymFromAddr expects SYMBOL_INFO followed by string buffer memory
+		char buf[sizeof(SYMBOL_INFO) + SymResult::STRBUF_SIZE] = {};
 
 		auto* si = (SYMBOL_INFO*)buf;
 		si->SizeOfStruct = sizeof(SYMBOL_INFO);
-		si->MaxNameLen = SymResolver::Result::STRBUF_SIZE;
+		si->MaxNameLen = SymResult::STRBUF_SIZE;
 
 		DWORD Displacement = 0;
 
@@ -279,21 +237,53 @@ public:
 		line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
 
 		if (!SymFromAddr(inspectee, (DWORD64)addr, nullptr, si)) {
-			return "SymFromAddr error";
+			res->err = "SymFromAddr error";
+			return false;
 		}
 
-		strcpy(res->str_buf, si->Name);
-
-		res->sym_name = res->str_buf;
+		// need to copy into per-SymResult string buffer
+		res->module_path = nullptr; // dbghelp.dll does not seem to return this, module_path is mainly for completeness sake, tracy actually determines this itself
+		res->sym_name = copy_to_strbuf(si->Name, si->NameLen);
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;
 		
-		if (!SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line)) {
-			return nullptr;
+		if (SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line)) {
+			//res->src_filepath = copy_to_strbuf(line.FileName, strlen(line.FileName));
+			res->src_filepath = line.FileName; // stays valid? if not use copy_to_strbuf
+			res->src_lineno = line.LineNumber;
 		}
-		res->src_filepath = line.FileName;
-		res->src_lineno = line.LineNumber;
-		return nullptr;
+
+		BOOL doInline = FALSE;
+		DWORD ctx = 0;
+		DWORD inlineNum = 0;
+		if (_SymAddrIncludeInlineTrace) {
+			inlineNum = _SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
+
+			DWORD idx;
+			if (inlineNum != 0) {
+				doInline = _SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
+			}
+		}
+		
+		if (doInline) {
+			res->num_inlines = (int)inlineNum;
+			for (int i=res->num_inlines-1; i>=0; i--) {
+				res->inlines[i] = {};
+
+				if (_SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si)) {
+					res->inlines[i].fnname = copy_to_strbuf(si->Name, si->NameLen);
+
+					if (_SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line)) {
+						//res->inlines[i].filepath = copy_to_strbuf(line.FileName, strlen(line.FileName));
+						res->inlines[i].filepath = line.FileName;
+						res->inlines[i].lineno = line.LineNumber;
+					}
+				}
+
+				ctx++;
+			}
+		}
+		return res->valid();
 	}
 
 	void print_timings () {

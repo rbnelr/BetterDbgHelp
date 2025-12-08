@@ -137,9 +137,14 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="dbghelp.hpp" />
+    <ClInclude Include="module_lookup.hpp" />
+    <ClInclude Include="pdb.hpp" />
     <ClInclude Include="sym_resolver.hpp" />
     <ClInclude Include="timer.hpp" />
     <ClInclude Include="util.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="codeview.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
