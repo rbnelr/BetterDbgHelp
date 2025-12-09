@@ -209,7 +209,7 @@ public:
 		std::function<void(char*)> fmeas = std::bind(&SymTesting::measure_addr2sym, this, _1);
 		std::function<void(char*)> ftest = std::bind(&SymTesting::test_addr2sym, this, _1);
 
-		//run_examples(fshow);
+		run_examples(fshow);
 		run_examples(ftest);
 
 		for (int i=0; i<1000; i++) {

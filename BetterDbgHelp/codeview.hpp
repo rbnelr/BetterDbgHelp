@@ -18,6 +18,9 @@ typedef unsigned short  _2BYTEPAD;
 typedef unsigned long   CV_tkn_t;
 typedef CV_typ_t CV_ItemId;
 
+typedef unsigned short ushort;
+typedef unsigned long  ulong;
+
 typedef enum SYM_ENUM_e : u16 {
     S_COMPILE       =  0x0001,  // Compile flags symbol
     S_REGISTER_16t  =  0x0002,  // Register variable
@@ -806,7 +809,44 @@ typedef struct lfMFuncId {
     unsigned char   name[1]; 
 } lfMFuncId;
 
-// https://github.com/PascalBeyer/PDB-Documentation/?tab=readme-ov-file
+typedef struct CV_prop_t {
+    unsigned short  packed      :1;     // true if structure is packed
+    unsigned short  ctor        :1;     // true if constructors or destructors present
+    unsigned short  ovlops      :1;     // true if overloaded operators present
+    unsigned short  isnested    :1;     // true if this is a nested class
+    unsigned short  cnested     :1;     // true if this class contains nested types
+    unsigned short  opassign    :1;     // true if overloaded assignment (=)
+    unsigned short  opcast      :1;     // true if casting methods
+    unsigned short  fwdref      :1;     // true if forward reference (incomplete defn)
+    unsigned short  scoped      :1;     // scoped definition
+    unsigned short  hasuniquename :1;   // true if there is a decorated name following the regular name
+    unsigned short  sealed      :1;     // true if class cannot be used as a base class
+    unsigned short  hfa         :2;     // CV_HFA_e
+    unsigned short  intrinsic   :1;     // true if class is an intrinsic type (e.g. __m128d)
+    unsigned short  mocom       :2;     // CV_MOCOM_UDT_e
+} CV_prop_t;
+typedef struct lfClass {
+    unsigned short  leaf;           // LF_CLASS, LF_STRUCT, LF_INTERFACE
+    unsigned short  count;          // count of number of elements in class
+    CV_prop_t       property;       // property attribute field (prop_t)
+    CV_typ_t        field;          // type index of LF_FIELD descriptor list
+    CV_typ_t        derived;        // type index of derived from list if not zero
+    CV_typ_t        vshape;         // type index of vshape table for this class
+    unsigned char   data[1];         // data describing length of structure in
+                                    // bytes and name
+} lfClass;
+typedef lfClass lfStructure;
+typedef lfClass lfInterface;
+
+typedef struct lfUnion {
+    unsigned short  leaf;           // LF_UNION
+    unsigned short  count;          // count of number of elements in class
+    CV_prop_t       property;       // property attribute field
+    CV_typ_t        field;          // type index of LF_FIELD descriptor list
+    unsigned char   data[1];         // variable length data describing length of
+                                    // structure and name
+} lfUnion;
+
 struct msf_header{
 	u8  signature[32];
 	u32 page_size;
@@ -1151,4 +1191,45 @@ inline const char* BinaryAnnotationOpcode_str (BinaryAnnotationOpcode val) {
 		case BA_OP_ChangeColumnEnd					: return "BA_OP_ChangeColumnEnd";
 	}
 	return "[unknown]";
+}
+
+size_t CbExtractNumeric(BYTE *pb, ulong *pul)
+{
+    ushort leaf = *(ushort *) pb;
+
+    if (leaf < LF_NUMERIC) {
+        *pul = leaf;
+
+        return sizeof(leaf);
+    }
+
+    switch (leaf) {
+        case LF_CHAR:
+            *pul = *(char *) pb;
+            return sizeof(leaf) + sizeof(char);
+
+        case LF_SHORT:
+            *pul = *(short *) pb;
+            return sizeof(leaf) + sizeof(short);
+
+        case LF_USHORT:
+            *pul = *(ushort *) pb;
+            return sizeof(leaf) + sizeof(ushort);
+
+        case LF_LONG:
+            *pul = *(long *) pb;
+            return sizeof(leaf) + sizeof(long);
+
+        case LF_ULONG:
+            *pul = *(ulong *) pb;
+            return sizeof(leaf) + sizeof(ulong);
+
+        case LF_QUADWORD:
+            return sizeof(leaf) + sizeof(__int64);
+
+        case LF_UQUADWORD:
+            return sizeof(leaf) + sizeof(unsigned __int64);
+    }
+
+    return 0;
 }

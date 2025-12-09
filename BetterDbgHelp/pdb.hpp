@@ -2,6 +2,8 @@
 #include "util.hpp"
 #include "codeview.hpp"
 
+// https://github.com/PascalBeyer/PDB-Documentation
+
 struct SourceLoc {
 	const char* filepath;
 	uint32_t    lineno;
@@ -59,6 +61,7 @@ class PDB_File {
 	
 	std::vector<char> pdb_info_data;
 	std::vector<char> names_data;
+	std::vector<char> TPI_data;
 	std::vector<char> IPI_data;
 	std::vector<char> DBI_data;
 	std::vector<char> section_header_dump_data;
@@ -71,6 +74,72 @@ class PDB_File {
 	const char* names;
 
 	optional_debug_header_substream* opt_streams;
+
+	std::unordered_map<CV_ItemId, const char*> struct_typeid2name;
+
+	struct Strbuf {
+		std::vector<char> buf;
+
+		Strbuf () {
+			buf.reserve(1024*8);
+		}
+
+		const char* operator[] (u32 offset) {
+			return buf.data() + offset;
+		}
+		
+		u32 push (const char* str, size_t len) {
+			auto offset = buf.size();
+			buf.insert(buf.begin()+offset, str, str+len+1);
+
+			if (offset > 0xffffffff) {
+				assert(false);
+			}
+			return (u32)offset;
+		}
+		u32 push (const char* str) {
+			return push(str, strlen(str));
+		}
+
+		u32 push_concat (const char* a, const char* b, const char* c) {
+			auto offs = push(a, strlen(a)-1);
+			push(b, strlen(b)-1);
+			push(c, strlen(c));
+			return offs;
+		}
+
+		//u32 vpushf (char const* format, va_list vl) {
+		//	size_t offset = buf.size();
+		//	size_t reserve = 3;
+		//	buf.push_back(reserve);
+		//
+		//	auto ret = vsnprintf(buf.data() + offset, reserve, format, vl);
+		//	ret = ret >= 0 ? ret : 0;
+		//	bool was_big_enough = (size_t)ret < (reserve-1);
+		//	buf.resize(offset + ret + 1);
+		//	if (!was_big_enough) {
+		//		// buffer was too small, buffer size was increased
+		//		// now snprintf has to succeed, so call it again
+		//		auto ret2 = vsnprintf(buf.data() + offset, ret + 1, format, vl);
+		//		assert(ret2 <= ret);
+		//	}
+		//	if (offset > 0xffffffff) {
+		//		assert(false);
+		//	}
+		//	return (u32)offset;
+		//}
+		//
+		//u32 pushf (char const* format, ...) {
+		//	va_list vl;
+		//	va_start(vl, format);
+		//
+		//	auto ptr = vpushf(format, vl);
+		//
+		//	va_end(vl);
+		//	return ptr;
+		//}
+	};
+	Strbuf strbuf;
 
 	//// Final needed data
 	struct Section {
@@ -393,7 +462,6 @@ class PDB_File {
 			sym_sorted.push_back(Symbol{ offs + seg_addr, size, name });
 		};
 		
-		// TODO: these should be 
 		while (ptr < ptr2 + symbol_record_stream_data.size()) {
 			auto sym = (codeview_symbol_header*)ptr;
 			
@@ -470,8 +538,6 @@ class PDB_File {
 		
 		assert((ptr - mod.symbol_stream_data.data()) == streams[mi->stream_index_of_module_symbol_stream].size);
 		
-		char* filechksms_ptr = nullptr;
-
 		//// Symbol info
 		auto parse_symbol_info = [&] () {
 			char* ptr = sym_info;
@@ -506,7 +572,12 @@ class PDB_File {
 						s.size = proc->len;
 						s.name = (const char*)proc->name;
 						s.procsym = proc;
+						s.module_index = module_index;
 						sym_sorted.push_back(std::move(s));
+
+						//if (strcmp((const char*)proc->name, "nlohmann::json_abi_v3_11_2::basic_json<nlohmann::json_abi_v3_11_2::ordered_map,std::vector,std::basic_string<char,std::char_traits<char>,std::allocator<char> >,bool,__int64,unsigned __int64,double,std::allocator,nlohmann::json_abi_v3_11_2::adl_serializer,std::vector<unsigned char,std::allocator<unsigned char> > >::json_value::json_value") == 0) {
+						//	printf("");
+						//}
 					} break;
 					case S_INLINESITE: {
 						auto* inl = (INLINESITESYM*)sym;
@@ -514,7 +585,7 @@ class PDB_File {
 						//inl->pEnd // byte offs of INLINESITE_END
 						// inl->inlinee seems to be some kind of id that lets us look up line info, but not sure where that is and if that lineinfo is encoded horribly
 						// no idea what inl->binaryAnnotations is
-						//printf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, proc_typeid2name[inl->inlinee]);
+						//printf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, strbuf[proc_typeid2nameid[inl->inlinee]]);
 					} break;
 				}
 			}
@@ -532,8 +603,7 @@ class PDB_File {
 				ptr += sizeof(codeview_subsection_header);
 
 				if (header->type == DEBUG_S_FILECHKSMS) {
-					filechksms_ptr = ptr;
-					//read_file_checksum(header);
+					mod.file_checksum_ptr = ptr;
 					break;
 				}
 				ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
@@ -558,11 +628,8 @@ class PDB_File {
 				while (ptr < ptr3 + subsec->length) {
 					auto* line_block = (codeview_line_block_header*)ptr;
 					ptr += sizeof(codeview_line_block_header);
-			
-					auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
-					auto* name = &names[cksm->offset_in_string_table];
-			
-					//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, name);
+					
+					//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, get_filepath(mod, line_block->offset_in_file_checksums));
 			
 					for (u32 i=0; i<line_block->amount_of_lines; i++) {
 						auto* line = (codeview_line*)ptr;
@@ -576,10 +643,6 @@ class PDB_File {
 				if (sym) {
 					assert(module_raddr == sym->base_addr); // lines section contribtion offset need to be procedure symbol offset
 				
-					//if (strcmp(sym->name, "main") == 0) {
-					//	printf("");
-					//}
-
 					ptr = ptr3;
 					ptr += sizeof(codeview_line_header);
 
@@ -587,12 +650,9 @@ class PDB_File {
 						auto* line_block = (codeview_line_block_header*)ptr;
 						ptr += sizeof(codeview_line_block_header);
 
-						auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line_block->offset_in_file_checksums);
-						auto* name = &names[cksm->offset_in_string_table];
-
 						sym->src.push_back(Symbol::SrcLines {
 							line_block->amount_of_lines,
-							name,
+							get_filepath(mod, line_block->offset_in_file_checksums),
 							(codeview_line*)ptr,
 						});
 
@@ -610,25 +670,21 @@ class PDB_File {
 					while (ptr < ptr3 + subsec->length) {
 						auto* line = (InlineeSourceLine*)ptr;
 						ptr += sizeof(InlineeSourceLine);
-			
-						auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line->fileId);
-						auto* name = &names[cksm->offset_in_string_table];
-
-						//printf(">>  Line %d %s %d\n", line->sourceLineNum, name, line->inlinee);
-
-						inlinee_c13.emplace(line->inlinee, InlineeC13{ line, filechksms_ptr });
+						
+						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_filepath(mod, line->fileId), line->inlinee);
+						
+						assert(mod.inlinee_c13.find(line->inlinee) == mod.inlinee_c13.end());
+						mod.inlinee_c13.try_emplace(line->inlinee, line);
 					}
 				} else if (header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE_EX) {
 					while (ptr < ptr3 + subsec->length) {
 						auto* line = (InlineeSourceLineEx*)ptr;
 						ptr += sizeof(InlineeSourceLineEx);
-			
-						auto* cksm = (codeview_file_checksum*)(filechksms_ptr + line->fileId);
-						auto* name = &names[cksm->offset_in_string_table];
 
-						//printf(">>  Line %d %s %d\n", line->sourceLineNum, name, line->inlinee);
-
-						inlinee_c13.emplace(line->inlinee, InlineeC13{ (InlineeSourceLine*)line, filechksms_ptr });
+						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_filepath(mod, line->fileId), line->inlinee);
+						
+						assert(mod.inlinee_c13.find(line->inlinee) == mod.inlinee_c13.end());
+						mod.inlinee_c13.try_emplace(line->inlinee, (InlineeSourceLine*)line);
 
 						ptr += line->countOfExtraFiles * sizeof(CV_off32_t);
 					}
@@ -667,7 +723,11 @@ class PDB_File {
 		//}
 	}
 	
-	/*
+typedef struct lfFieldList {
+    unsigned short  leaf;           // LF_FIELDLIST
+    char            data[1];         // field list sub lists
+} lfFieldList;
+
 	// Only contains type info like arg and return types for type ids, no type names
 	void read_TPI_stream () {
 		TPI_data = copy_into_consecutive(2);
@@ -683,20 +743,55 @@ class PDB_File {
 
 		char* type_info = ptr;
 		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
-			auto lf = (codeview_type_record_header*)ptr;
+			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
+			
+			//if (id == 4415) {
+			//	printf("");
+			//}
 
 			switch (lf->kind) {
+				case LF_FIELDLIST: {
+					auto* fl = (lfFieldList*)lf;
+					
+					ulong size = 0;
+					size_t dcb = CbExtractNumeric((unsigned char*)fl->data, &size);
+					auto* name = (const char *)fl->data + dcb;
+
+					//printf("");
+				} break;
+				case LF_STRUCTURE:
+				case LF_CLASS: {
+					auto* struc = (lfClass*)lf;
+
+					ulong size = 0;
+					size_t dcb = CbExtractNumeric(struc->data, &size);
+					auto* name = (const char *)struc->data + dcb;
+
+					//if (strcmp(name, "Vec3") == 0) {
+					//	printf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
+					//}
+					struct_typeid2name.emplace(id, name);
+				} break;
+				case LF_UNION: {
+					auto* struc = (lfUnion*)lf;
+
+					ulong size = 0;
+					size_t dcb = CbExtractNumeric(struc->data, &size);
+					auto* name = (const char *)struc->data + dcb;
+					//printf(">> lfClass: [%4x]: %s\n", id, name);
+					struct_typeid2name.emplace(id, name);
+				} break;
 				case LF_PROCEDURE: {
 					auto* proc = (lfProc*)lf;
-					printf("Proc: id: [%4x]\n", id);
+					//printf("Proc: id: [%4x]\n", id);
 				} break;
 			}
 
 			id++;
 		}
 		assert((ptr - type_info) == header->byte_count_of_type_record_data_following_the_header);
-	}*/
+	}
 	void read_IPI_stream () {
 		IPI_data = copy_into_consecutive(4);
 		char* ptr = IPI_data.data();
@@ -711,21 +806,36 @@ class PDB_File {
 
 		char* type_info = ptr;
 		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
-			auto lf = (codeview_type_record_header*)ptr;
+			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
 
 			switch (lf->kind) {
+				//case LF_STRUCTURE:
+				//case LF_CLASS: {
+				//	auto* struc = (lfClass*)lf;
+				//	printf(">> lfClass: [%4x]\n", id);
+				//} break;
 				case LF_FUNC_ID: {
+					// free function
 					auto* func = (lfFuncId*)lf;
 					// not sure what func->type is, counting id like we are doing is the actual type of of the func as referenced by INLINESITE
+					// -> Oh, probably function signature in TPI_stream
 					//printf(">> lfFuncId: [%4x]=%s\n", id, func->name);
-					proc_typeid2name.emplace((CV_ItemId)id, (const char*)func->name);
+					//if (strcmp((const char*)func->name, "_Allocate") == 0) {
+					//	printf("");
+					//}
+					proc_typeid2nameid.emplace((CV_ItemId)id, strbuf.push((const char*)func->name));
 				} break;
 				case LF_MFUNC_ID: {
+					// member function (just the function name, struct name missing!)
 					auto* func = (lfMFuncId*)lf;
-					// not sure what func->type is, counting id like we are doing is the actual type of of the func as referenced by INLINESITE
-					//printf(">> lfFuncId: [%4x]=%s\n", id, func->name);
-					proc_typeid2name.emplace((CV_ItemId)id, (const char*)func->name);
+					auto* parent_name = struct_typeid2name[func->parentType];
+					assert(parent_name);
+					if (parent_name) {
+						//printf(">> lfMFuncId: [%4x]=%s::%s\n", id, parent_name, func->name);
+						auto formatted_strid = strbuf.push_concat(parent_name, "::", (const char*)func->name);
+						proc_typeid2nameid.emplace((CV_ItemId)id, formatted_strid);
+					}
 				} break;
 			}
 
@@ -754,8 +864,8 @@ public:
 		read_stream_table();
 		read_pdb_info();
 		read_names();
+		read_TPI_stream();
 		read_IPI_stream();
-		//read_TPI_stream();
 		read_DBI();
 		
 		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
@@ -771,20 +881,39 @@ public:
 
 		printf("PDB read.\n");
 	}
-
+	
 	struct Module {
 		pdb_module_information* mi;
 		std::string_view name;
 		std::string_view file_name;
 
 		std::vector<char> symbol_stream_data;
+		
+		// It seems like we can get duplicate entries of the same inlinee id across different modules via InlineeSourceLine
+		// So in every module with a INLINESITE, the corresponding InlineeSourceLine and filename in DEBUG_S_FILECHKSMS exist in the same module
+		// but the same inlinee file id can exist in multiple modules
+		// this could be because due to link time optimization (the same function being inlined into different translation lines)
+		// but actually, sometimes the filepath differs (same header, paths, compiled on different machines?)
+		// so functions compiled from different copies of a header can get the same id
+		char* file_checksum_ptr = nullptr;
+		std::unordered_map<CV_ItemId, InlineeSourceLine*> inlinee_c13;
+
 	};
 	std::vector<Module> modules;
+
+	const char* get_filepath (Module const& mod, CV_off32_t fileId) const {
+		auto* cksm = (codeview_file_checksum*)(mod.file_checksum_ptr + fileId);
+		auto* name = &names[cksm->offset_in_string_table];
+		return name;
+	}
 
 	struct Symbol {
 		uintptr_t base_addr; // relative to module
 		size_t size;
 		char const* name;
+		
+		s16 module_index = -1;
+		PROCSYM32* procsym = nullptr; // needed for scanning INLINESITEs later
 
 		struct SrcLines {
 			uint32_t num_lines = 0;
@@ -792,18 +921,10 @@ public:
 			codeview_line* lines = nullptr;
 		};
 		std::vector<SrcLines> src;
-
-		PROCSYM32* procsym; // needed for scanning INLINESITEs later
 	};
 	std::vector<Symbol> sym_sorted;
 
-	std::unordered_map<CV_ItemId, const char*> proc_typeid2name;
-	
-	struct InlineeC13 {
-		InlineeSourceLine* line;
-		char* file_checksum_ptr;
-	};
-	std::unordered_map<CV_ItemId, InlineeC13> inlinee_c13;
+	std::unordered_map<CV_ItemId, u32> proc_typeid2nameid;
 
 	void sort_symbols () {
 		// sort based on base_addr
@@ -1051,7 +1172,21 @@ public:
 	*/
 
 	void trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs, int* out_num_locs) {
-		auto find_srcloc_in_encoded = [this] (INLINESITESYM* inl, InlineeC13 const& c13, uintptr_t proc_raddr, SourceLoc* out_loc) -> bool {
+				*out_num_locs = 0;
+		if (sym->procsym == nullptr)
+			return;
+		assert(sym->module_index >= 0);
+		auto& mod = modules[sym->module_index];
+
+		auto find_srcloc_in_encoded = [this, &mod] (INLINESITESYM* inl, uintptr_t proc_raddr, SourceLoc* out_loc) -> bool {
+			
+			auto it = mod.inlinee_c13.find(inl->inlinee);
+			if (it == mod.inlinee_c13.end()) {
+				assert(false);
+				return false;
+			}
+			auto* c13_line = it->second;
+			
 			// While BinaryAnnotationOpcode enum was released, the exact definition or code was apparently to released(?)
 			// Only possible thanks to these implementations:
 			// https://github.com/EpicGamesExt/raddebugger/blob/08642d2745da516387fa0f43639b7a8776a154b0/src/codeview/codeview_parse.c#L277
@@ -1060,11 +1195,11 @@ public:
 			PCompressedAnnotation cur = (PCompressedAnnotation)inl->binaryAnnotations;
 			PCompressedAnnotation end = (PCompressedAnnotation)((char*)inl + sizeof(u16) + inl->reclen); // length field of codeview_symbol_header not contained in length
 			
-			u32 file_id = c13.line->fileId;
+			u32 file_id = c13_line->fileId;
 			u32 code_offset_base = 0;
-			u32 code_offset = 0; // I think relative to inliner function (Not parent inlinesite) TODO: true?
+			u32 code_offset = 0;
 			u32 code_length = 0; // 0 = null
-			u32 lineno = c13.line->sourceLineNum;
+			u32 lineno = c13_line->sourceLineNum;
 			u32 num_lines = 1;
 			u32 kind = 1; // 0 == Expression, 1 == Statement
 
@@ -1094,6 +1229,7 @@ public:
 						code_offset = param1;
 					} break;
 					case BA_OP_ChangeCodeOffsetBase: {
+						assert(false);
 						// Is this never used?
 						code_offset_base = param1;
 					} break;
@@ -1109,7 +1245,10 @@ public:
 						code_offset += param1;
 					} break;
 					case BA_OP_ChangeFile: {
+						assert(false);
 						// supposedly there are bugs with file changes inside functions, but presumably functions are almost always inside one file, so this should be rare anyway
+						// TODO: these file_ids likely are local to the module that contained this INLINESITESYM with CompressedAnnotation,
+						// while my current lookup for inlinee id and InlineeSourceLine can come from different modules as that data seems to be duplicated
 						file_id = param1;
 					} break;
 					case BA_OP_ChangeLineOffset: {
@@ -1178,10 +1317,7 @@ public:
 
 			for (auto& l : lines) {
 				if (proc_raddr >= l.code_offset && proc_raddr < l.code_offset + l.code_length) {
-					auto* cksm = (codeview_file_checksum*)(c13.file_checksum_ptr + l.file_id);
-					auto* src_filename = &names[cksm->offset_in_string_table];
-
-					out_loc->filepath = src_filename;
+					out_loc->filepath = get_filepath(mod, l.file_id);
 					out_loc->lineno = l.lineno;
 					return true;
 				}
@@ -1189,9 +1325,6 @@ public:
 			return false;
 		};
 
-		*out_num_locs = 0;
-		if (sym->procsym == nullptr)
-			return;
 		uintptr_t proc_raddr = addr - sym->base_addr;
 
 		int depth = 0;
@@ -1205,27 +1338,23 @@ public:
 
 			switch (sym->kind) {
 				case S_INLINESITE: {
+					auto* inl = (INLINESITESYM*)sym;
 					if (depth < num_locs) { // here: depth > 0 && out_locs[depth-1].filepath != nullptr
-						auto* inl = (INLINESITESYM*)sym;
+						SourceLoc encoded_loc = {};
+						if (find_srcloc_in_encoded(inl, proc_raddr, &encoded_loc)) {
+							assert(out_locs[depth].filepath == nullptr);
 
-						auto it = inlinee_c13.find(inl->inlinee);
-						if (it == inlinee_c13.end()) {
-							assert(false);
-						}
-						else {
-							auto& c13 = it->second;
-							SourceLoc encoded_loc = {};
-							if (find_srcloc_in_encoded(inl, c13, proc_raddr, &encoded_loc)) {
-								assert(out_locs[depth].filepath == nullptr);
+							auto it = proc_typeid2nameid.find(inl->inlinee);
+							assert(it != proc_typeid2nameid.end());
+							auto* name = it == proc_typeid2nameid.end() ? "[unknown]":strbuf[it->second];
+							out_locs[depth].fnname = name;
 
-								out_locs[depth].filepath = encoded_loc.filepath;
-								out_locs[depth].lineno = encoded_loc.lineno;
-								out_locs[depth].fnname = proc_typeid2name[inl->inlinee];
+							out_locs[depth].filepath = encoded_loc.filepath;
+							out_locs[depth].lineno = encoded_loc.lineno;
 
-								max_written_depth = std::max(max_written_depth, depth+1);
+							max_written_depth = std::max(max_written_depth, depth+1);
 
-								// TODO: in theory: only if there is line info can further inlinesites have line info, which would be an optimization
-							}
+							// TODO: in theory: only if there is line info can further inlinesites have line info, which would be an optimization
 						}
 					}
 					depth++;
