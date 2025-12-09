@@ -79,9 +79,6 @@ public:
 
 		DWORD Displacement = 0;
 
-		IMAGEHLP_LINE64 line = {};
-		line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-
 		BOOL res1;
 		{
 			TimerMeasZone(tSymFromAddr);
@@ -94,6 +91,9 @@ public:
 		BOOL res2;
 		{
 			TimerMeasZone(tSymGetLineFromAddr64);
+
+			IMAGEHLP_LINE64 line = {};
+			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
 			res2 = SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line);
 		}
 
@@ -120,9 +120,12 @@ public:
 					TimerMeasZone(tSymFromInlineContext);
 					res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
 				}
-			
+				
 				if (res1) {
 					TimerMeasZone(tSymGetLineFromInlineContext);
+
+					IMAGEHLP_LINE64 line = {};
+					line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
 					res2 = _SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
 				}
 
@@ -157,9 +160,6 @@ public:
 
 		DWORD Displacement = 0;
 
-		IMAGEHLP_LINE64 line = {};
-		line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-
 		if (!SymFromAddr(inspectee, (DWORD64)addr, nullptr, si)) {
 			res->err = "SymFromAddr error";
 			return false;
@@ -171,10 +171,13 @@ public:
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;
 		
-		if (SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line)) {
-			//res->src_filepath = copy_to_strbuf(line.FileName, strlen(line.FileName));
-			res->src_filepath = line.FileName; // stays valid? if not use copy_to_strbuf
-			res->src_lineno = line.LineNumber;
+		{
+			IMAGEHLP_LINE64 line = {};
+			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+			if (SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line)) {
+				res->src_filepath = copy_to_strbuf(line.FileName, strlen(line.FileName));
+				res->src_lineno = line.LineNumber;
+			}
 		}
 
 		BOOL doInline = FALSE;
@@ -196,10 +199,11 @@ public:
 
 				if (_SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si)) {
 					res->inlines[i].fnname = copy_to_strbuf(si->Name, si->NameLen);
-
+					
+					IMAGEHLP_LINE64 line = {};
+					line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
 					if (_SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line)) {
-						//res->inlines[i].filepath = copy_to_strbuf(line.FileName, strlen(line.FileName));
-						res->inlines[i].filepath = line.FileName;
+						res->inlines[i].filepath = copy_to_strbuf(line.FileName, strlen(line.FileName));
 						res->inlines[i].lineno = line.LineNumber;
 					}
 				}

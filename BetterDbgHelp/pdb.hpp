@@ -665,6 +665,29 @@ class PDB_File {
 
 				auto* header = (codeview_inlinee_source_line_header*)ptr;
 				ptr += sizeof(codeview_inlinee_source_line_header);
+				
+				// rust (LLVM) seems to be output duplicate inlinee entries (same inlinee func id) even within the same module
+				// filepath can differ:
+				//                                   /rustc/1159e78c4747b02ef996e55082b704c09b970588/library\core\src\convert\mod.rs
+				// C:\Users\Me\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\src\rust\library\core\src\convert\mod.rs
+				// and even line numbers can differ for some bizzare reason
+				// I have no idea how to handle this case correctly, there might be one InlineeSourceLine per INLINESITE, but I can't confirm this
+				// I will have to see if my output matches dbghelp when taking the first or last entry instead of trying to match them by order
+				auto verify_duplicates = [&] (InlineeSourceLine* line) {
+					auto it = mod.inlinee_c13.find(line->inlinee);
+					if (it != mod.inlinee_c13.end()) {
+						// duplicate entry, verify they are functionally identical
+						//assert(line->sourceLineNum == it->second->sourceLineNum);
+
+						//assert(line->fileId == it->second->fileId);
+						//auto* a = get_filepath(mod, line->fileId);
+						//auto* b = get_filepath(mod, it->second->fileId);
+						//assert(strcmp(a,b)==0);
+
+						//printf(">>>>>> %s\n", a);
+						//printf(">>>>>> %s\n", b);
+					}
+				};
 
 				if (header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE) {
 					while (ptr < ptr3 + subsec->length) {
@@ -673,7 +696,7 @@ class PDB_File {
 						
 						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_filepath(mod, line->fileId), line->inlinee);
 						
-						assert(mod.inlinee_c13.find(line->inlinee) == mod.inlinee_c13.end());
+						verify_duplicates(line);
 						mod.inlinee_c13.try_emplace(line->inlinee, line);
 					}
 				} else if (header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE_EX) {
@@ -683,7 +706,7 @@ class PDB_File {
 
 						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_filepath(mod, line->fileId), line->inlinee);
 						
-						assert(mod.inlinee_c13.find(line->inlinee) == mod.inlinee_c13.end());
+						verify_duplicates((InlineeSourceLine*)line);
 						mod.inlinee_c13.try_emplace(line->inlinee, (InlineeSourceLine*)line);
 
 						ptr += line->countOfExtraFiles * sizeof(CV_off32_t);
@@ -1245,7 +1268,6 @@ public:
 						code_offset += param1;
 					} break;
 					case BA_OP_ChangeFile: {
-						assert(false);
 						// supposedly there are bugs with file changes inside functions, but presumably functions are almost always inside one file, so this should be rare anyway
 						// TODO: these file_ids likely are local to the module that contained this INLINESITESYM with CompressedAnnotation,
 						// while my current lookup for inlinee id and InlineeSourceLine can come from different modules as that data seems to be duplicated

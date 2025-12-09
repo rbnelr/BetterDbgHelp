@@ -178,11 +178,11 @@ public:
 		SymResult res={}, res_dbghelp={};
 
 		dbghelp->addr2sym(addr, &res_dbghelp);
-		printf("dbghelp.dll: [%16llx] ", (uintptr_t)addr);
+		printf("dbghelp.dll: [%llx] ", (uintptr_t)addr);
 		res_dbghelp.print();
 
 		resolver->addr2sym(addr, &res);
-		printf("SymResolver: [%16llx] ", (uintptr_t)addr);
+		printf("SymResolver: [%llx] ", (uintptr_t)addr);
 		res.print();
 	}
 	void measure_addr2sym (char* addr) {
@@ -196,7 +196,7 @@ public:
 		auto err         = resolver->addr2sym(addr, &res);
 		
 		if (res != res_dbghelp) {
-			printf("!!! [%16llx %s] Result Mismatch:\n", (uintptr_t)addr, res_dbghelp.sym_name);
+			printf("!!! [%llx] (%s) Result Mismatch:\n", (uintptr_t)addr, res_dbghelp.sym_name);
 			res.print_diff(res_dbghelp);
 			tests_failed = true;
 		}
@@ -209,7 +209,7 @@ public:
 		std::function<void(char*)> fmeas = std::bind(&SymTesting::measure_addr2sym, this, _1);
 		std::function<void(char*)> ftest = std::bind(&SymTesting::test_addr2sym, this, _1);
 
-		run_examples(fshow);
+		//run_examples(fshow);
 		run_examples(ftest);
 
 		for (int i=0; i<1000; i++) {
@@ -349,7 +349,7 @@ int main(int argc, const char** argv) {
 			at_addr(exe + 0x2DB2BF0); // rand_chacha::guts::refill_wide
 			at_addr(exe + 0x2DB2BF0+21); // rand_chacha::guts::refill_wide
 	
-			//at_addr(ucrtbase + 0x69FB30); // ucrtbase.dll!sinf(), returns wrong symbol for some reason, I even double checked everything, am I missing something?
+			at_addr(ucrtbase + 0x69FB30); // ucrtbase.dll!sinf(), returns wrong symbol for some reason, I even double checked everything, am I missing something?
 			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf, weirdly this one works, so it's even the same ucrtbase.dll as the two other executables
 		});
 	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
