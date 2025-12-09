@@ -19,6 +19,7 @@ struct LoadedModule {
 		this->size = size;
 	}
 	void load_pdb () {
+		ZoneScoped;
 		// Techically there might be more correct ways to find the pdb, and also ways that allow getting pdbs from microsoft servers
 		// see above link
 		auto pdb_path = std::filesystem::path(path);
@@ -48,6 +49,8 @@ struct ModuleCache {
 	}
 
 	const LoadedModule* find_module_for_addr (HANDLE inspectee, uintptr_t addr) {
+		ZoneScoped;
+
 		for (auto& m : sorted) {
 			if (addr >= m.base_addr && addr < m.base_addr + m.size) {
 				return &m;
@@ -58,6 +61,8 @@ struct ModuleCache {
 	}
 
 	const LoadedModule* try_get_and_cache_module (HANDLE inspectee, uintptr_t addr) {
+		ZoneScoped;
+
 		LoadedModule* loaded = nullptr;
 		{
 			TimerMeasZone(ttry_get_and_cache_module);

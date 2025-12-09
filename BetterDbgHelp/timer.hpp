@@ -70,21 +70,29 @@ namespace kiss {
 		float excluded = 0;
 		bool ended = false;
 
-		TimerMeasureZone (TimerMeasurement* meas, bool active=true): meas{meas}, t{Timer::start()} {}
+		TimerMeasureZone (TimerMeasurement* meas, bool start=true): meas{meas} {
+			if (start) this->start();
+		}
 		~TimerMeasureZone () {
 			end();
 		}
 
+		void start () {
+			t = Timer::start();
+		}
 		void end () {
 			if (!ended) {
 				elapsed = t.elapsed_sec();
-				meas->push(elapsed - excluded);
+				if (meas) meas->push(elapsed - excluded);
 			}
 			ended = true;
 		}
 		// only works on still running zones
 		void exclude (TimerMeasureZone& other) {
 			excluded += other.elapsed;
+		}
+		void exclude (float sec) {
+			excluded += sec;
 		}
 	};
 }

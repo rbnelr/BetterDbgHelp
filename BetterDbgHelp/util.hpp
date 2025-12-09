@@ -38,6 +38,8 @@ using namespace kiss;
 #undef BF_TOP
 #undef ERROR
 
+#include "tracy/Tracy.hpp"
+
 inline void print_err(const char* operation) {
 	auto err = GetLastError();
 

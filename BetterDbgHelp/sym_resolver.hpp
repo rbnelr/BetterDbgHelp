@@ -160,6 +160,7 @@ class SymResolver {
 	//TimerMeasurement twarmup = TimerMeasurement("warmup");
 	TimerMeasurement taddr2sym = TimerMeasurement("addr2sym");
 	TimerMeasurement ttrace_inlinesites = TimerMeasurement("trace_inlinesites");
+	TimerMeasurement tCombinedAddr2sym = TimerMeasurement("CombinedAddr2sym");
 
 public:
 	SymResolver (HANDLE inspectee): inspectee{inspectee} {}
@@ -210,7 +211,9 @@ public:
 	}
 
 	bool measure_addr2sym (void* ptr, SymResult* res) {
+		auto _tCombinedAddr2sym = kiss::TimerMeasureZone(&tCombinedAddr2sym);
 		auto _taddr2sym = kiss::TimerMeasureZone(&taddr2sym);
+		ZoneScoped;
 
 		uintptr_t addr = (uintptr_t)ptr;
 		*res = {};
@@ -248,7 +251,7 @@ public:
 			auto _ttrace_inlinesites = kiss::TimerMeasureZone(&ttrace_inlinesites);
 
 			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, 64, &res->num_inlines);
-
+			
 			_ttrace_inlinesites.end();
 			_taddr2sym.exclude(_ttrace_inlinesites);
 		}
@@ -261,5 +264,6 @@ public:
 		mod_cache.tload_pdb.print();
 		taddr2sym.print();
 		ttrace_inlinesites.print();
+		tCombinedAddr2sym.print();
 	}
 };

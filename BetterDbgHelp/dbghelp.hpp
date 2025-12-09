@@ -23,6 +23,7 @@ public:
 	TimerMeasurement tSymQueryInlineTrace = TimerMeasurement("SymQueryInlineTrace");
 	TimerMeasurement tSymFromInlineContext = TimerMeasurement("SymFromInlineContext");
 	TimerMeasurement tSymGetLineFromInlineContext = TimerMeasurement("SymGetLineFromInlineContext");
+	TimerMeasurement tCombinedAddr2sym = TimerMeasurement("CombinedAddr2sym");
 
 	// from tracy's code
 	t_SymAddrIncludeInlineTrace _SymAddrIncludeInlineTrace = 0;
@@ -71,8 +72,13 @@ public:
 	}
 	
 	void measure_addr2sym (char* addr) {
+		ZoneScoped;
+
 		constexpr size_t MaxNameSize = 8192;
 		char buf[sizeof(SYMBOL_INFO) + MaxNameSize] = {};
+
+		TimerMeasZone(tCombinedAddr2sym);
+
 		auto* si = (SYMBOL_INFO*)buf;
 		si->SizeOfStruct = sizeof(SYMBOL_INFO);
 		si->MaxNameLen = MaxNameSize;
@@ -96,40 +102,43 @@ public:
 			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
 			res2 = SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line);
 		}
-
 		
-		BOOL doInline = FALSE;
-		DWORD ctx = 0;
-		DWORD inlineNum = 0;
-		if (_SymAddrIncludeInlineTrace) {
-			{
-				TimerMeasZone(tSymAddrIncludeInlineTrace);
-				inlineNum = _SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
-			}
-
-			DWORD idx;
-			if (inlineNum != 0) {
-				TimerMeasZone(tSymQueryInlineTrace);
-				doInline = _SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
-			}
-		}
+		{
+			ZoneScopedN("inlining");
 		
-		if (doInline) {
-			for (DWORD i=0; i<inlineNum; i++) {
+			BOOL doInline = FALSE;
+			DWORD ctx = 0;
+			DWORD inlineNum = 0;
+			if (_SymAddrIncludeInlineTrace) {
 				{
-					TimerMeasZone(tSymFromInlineContext);
-					res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
+					TimerMeasZone(tSymAddrIncludeInlineTrace);
+					inlineNum = _SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
 				}
+
+				DWORD idx;
+				if (inlineNum != 0) {
+					TimerMeasZone(tSymQueryInlineTrace);
+					doInline = _SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
+				}
+			}
+		
+			if (doInline) {
+				for (DWORD i=0; i<inlineNum; i++) {
+					{
+						TimerMeasZone(tSymFromInlineContext);
+						res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
+					}
 				
-				if (res1) {
-					TimerMeasZone(tSymGetLineFromInlineContext);
+					if (res1) {
+						TimerMeasZone(tSymGetLineFromInlineContext);
 
-					IMAGEHLP_LINE64 line = {};
-					line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-					res2 = _SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
+						IMAGEHLP_LINE64 line = {};
+						line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+						res2 = _SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
+					}
+
+					ctx++;
 				}
-
-				ctx++;
 			}
 		}
 	}
@@ -224,6 +233,7 @@ public:
 		tSymQueryInlineTrace.print();
 		tSymFromInlineContext.print();
 		tSymGetLineFromInlineContext.print();
+		tCombinedAddr2sym.print();
 	}
 };
 

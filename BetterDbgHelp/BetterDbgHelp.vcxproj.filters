@@ -3,6 +3,7 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="timer.cpp" />
+    <ClCompile Include="..\tracy\public\TracyClient.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="timer.hpp" />

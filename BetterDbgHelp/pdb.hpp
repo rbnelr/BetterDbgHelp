@@ -1194,15 +1194,15 @@ public:
 	}
 	*/
 
-	void trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs, int* out_num_locs) {
+	void trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs, int* out_num_locs, TimerMeasurement* t_per_inlinesite=nullptr) {
 				*out_num_locs = 0;
+		ZoneScoped;
 		if (sym->procsym == nullptr)
 			return;
 		assert(sym->module_index >= 0);
 		auto& mod = modules[sym->module_index];
 
 		auto find_srcloc_in_encoded = [this, &mod] (INLINESITESYM* inl, uintptr_t proc_raddr, SourceLoc* out_loc) -> bool {
-			
 			auto it = mod.inlinee_c13.find(inl->inlinee);
 			if (it == mod.inlinee_c13.end()) {
 				assert(false);
@@ -1360,11 +1360,18 @@ public:
 
 			switch (sym->kind) {
 				case S_INLINESITE: {
+					ZoneScopedN("INLINESITE");
+					
 					auto* inl = (INLINESITESYM*)sym;
 					if (depth < num_locs) { // here: depth > 0 && out_locs[depth-1].filepath != nullptr
+						auto _tper_inlinesite = kiss::TimerMeasureZone(t_per_inlinesite);
+						
+						// TODO: could also optimize by preprocessing min/max ranges for each inlinesite and sorting them, which can then be binary searched per level
+						// probably should build a tree structure for this
+
 						SourceLoc encoded_loc = {};
 						if (find_srcloc_in_encoded(inl, proc_raddr, &encoded_loc)) {
-							assert(out_locs[depth].filepath == nullptr);
+							assert(out_locs[depth].filepath == nullptr); // TODO: another optimization, once first inlinesite was found for addr, iteration on that depth can skip future ones
 
 							auto it = proc_typeid2nameid.find(inl->inlinee);
 							assert(it != proc_typeid2nameid.end());
