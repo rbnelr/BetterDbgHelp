@@ -212,12 +212,12 @@ public:
 		//run_examples(fshow);
 		run_examples(ftest);
 
-		for (int i=0; i<1000; i++) {
-			run_examples(fmeas);
-		}
-		dbghelp->print_timings();
-		printf("---\n");
-		resolver->print_timings();
+		//for (int i=0; i<1000; i++) {
+		//	run_examples(fmeas);
+		//}
+		//dbghelp->print_timings();
+		//printf("---\n");
+		//resolver->print_timings();
 	}
 	void warmup (char* addr) {
 		SymResult sym = {};
@@ -227,6 +227,27 @@ public:
 };
 
 int main(int argc, const char** argv) {
+	
+	try {
+		SymTesting sym("Namespaces.exe", 0.5f);
+
+		char* exe = sym.get_addr(".exe");
+		
+		sym.warmup(exe + 0x11AC0);
+
+		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
+			at_addr(exe + 0);
+
+			at_addr(exe + 0x10D0); // main()
+			at_addr(exe + 0x1070); // global()
+			at_addr(exe + 0x1090); // space::namespaced() (This actually calls the the same address as namespaced2_same_code, as the functions are identical)
+			at_addr(exe + 0x1090); // space::nested::namespaced2_same_code()
+			at_addr(exe + 0x1080); // StructA::memberA()
+			at_addr(exe + 0x10A0); // space::StructB::memberB()
+			at_addr(exe + 0x10B0); // space::nested::StructC::StructD::memberCD()
+			at_addr(exe + 0x10C0); // space::nested::StructC::StructD::smemberCD()
+		});
+	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }\
 
 	try {
 		SymTesting sym("TinyProgram.exe", 0.5f);

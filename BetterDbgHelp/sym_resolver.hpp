@@ -120,7 +120,7 @@ struct SymResult {
 		//}
 		if (!my_strcmp(sym_name, r.sym_name)) {
 			printf("> SymResolver: \"%s!%s\" !=\n", module_path,sym_name);
-			printf("> dbghelp:dll: \"?!%s\"\n", r.sym_name);
+			printf("> dbghelp:dll: \"[unknown]!%s\"\n", r.sym_name);
 		}
 		if (   has_source() != r.has_source()
 			|| !my_strcmp(src_filepath, r.src_filepath) || src_lineno != r.src_lineno) {

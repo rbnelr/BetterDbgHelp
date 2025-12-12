@@ -63,10 +63,17 @@ inline std::string print_err_throw(const char* operation) {
 	throw std::runtime_error("Win32 Error");
 }
 
-static bool ends_with(std::string_view str, std::string_view suffix) {
+inline bool ends_with(std::string_view str, std::string_view suffix) {
 	return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
 }
 
+template <typename K, typename V, typename K2>
+inline V* try_get (std::unordered_map<K, V>& map, K2 const& key) {
+	auto it = map.find(key);
+	if (it == map.end())
+		return nullptr;
+	return &it->second;
+}
 
 inline bool load_file (std::string const& filepath, std::vector<char>* out_data) {
 	// https://stackoverflow.com/questions/51352863/what-is-the-idiomatic-c17-standard-approach-to-reading-binary-files

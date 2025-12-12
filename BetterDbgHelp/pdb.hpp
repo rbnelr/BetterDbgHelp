@@ -75,8 +75,10 @@ class PDB_File {
 
 	optional_debug_header_substream* opt_streams;
 
-	std::unordered_map<CV_ItemId, const char*> struct_typeid2name;
+	// TODO: profile and possibly use indices into string buffer (or on demand string buffer vs pointer into complete string in pdb?)
+	std::unordered_map<CV_typ_t, std::string> typeid2name;
 
+	/*
 	struct Strbuf {
 		std::vector<char> buf;
 
@@ -140,6 +142,7 @@ class PDB_File {
 		//}
 	};
 	Strbuf strbuf;
+	*/
 
 	//// Final needed data
 	struct Section {
@@ -565,7 +568,10 @@ class PDB_File {
 
 						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
 
-						lookup_proc_sym.emplace(module_raddr, sym_sorted.size());
+						// Functions with identical binary can be merged, in which dbghelp seems to output the symbol of the first entry which is what we will do as well
+						// this lookup, which is used to attach lineinfo to the symbols so we don't have to search the address space twice (like dbghelp does?)
+						// also needs to refer to the first occurance of the address, which we achieve with try_emplace() which does not overwrite existing entries
+						lookup_proc_sym.try_emplace(module_raddr, sym_sorted.size());
 
 						Symbol s;
 						s.base_addr = module_raddr;
@@ -622,14 +628,14 @@ class PDB_File {
 			
 				uintptr_t sec_offs = sections_sorted[header->contribution_section_id-1].base_addr;
 				uintptr_t module_raddr = header->contribution_offset + sec_offs;
-				auto it = lookup_proc_sym.find(module_raddr);
-				auto* sym = it != lookup_proc_sym.end() ? &sym_sorted[it->second] : nullptr;
+				auto* sym_idx = try_get(lookup_proc_sym, module_raddr);
+				auto* sym = sym_idx ? &sym_sorted[*sym_idx] : nullptr;
 
 				while (ptr < ptr3 + subsec->length) {
 					auto* line_block = (codeview_line_block_header*)ptr;
 					ptr += sizeof(codeview_line_block_header);
 					
-					//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, get_filepath(mod, line_block->offset_in_file_checksums));
+					//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, get_lineinfo_source_filepath(mod, line_block->offset_in_file_checksums));
 			
 					for (u32 i=0; i<line_block->amount_of_lines; i++) {
 						auto* line = (codeview_line*)ptr;
@@ -652,7 +658,7 @@ class PDB_File {
 
 						sym->src.push_back(Symbol::SrcLines {
 							line_block->amount_of_lines,
-							get_filepath(mod, line_block->offset_in_file_checksums),
+							get_lineinfo_source_filepath(mod, line_block->offset_in_file_checksums),
 							(codeview_line*)ptr,
 						});
 
@@ -680,8 +686,8 @@ class PDB_File {
 						//assert(line->sourceLineNum == it->second->sourceLineNum);
 
 						//assert(line->fileId == it->second->fileId);
-						//auto* a = get_filepath(mod, line->fileId);
-						//auto* b = get_filepath(mod, it->second->fileId);
+						//auto* a = get_lineinfo_source_filepath(mod, line->fileId);
+						//auto* b = get_lineinfo_source_filepath(mod, it->second->fileId);
 						//assert(strcmp(a,b)==0);
 
 						//printf(">>>>>> %s\n", a);
@@ -694,7 +700,7 @@ class PDB_File {
 						auto* line = (InlineeSourceLine*)ptr;
 						ptr += sizeof(InlineeSourceLine);
 						
-						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_filepath(mod, line->fileId), line->inlinee);
+						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates(line);
 						mod.inlinee_c13.try_emplace(line->inlinee, line);
@@ -704,7 +710,7 @@ class PDB_File {
 						auto* line = (InlineeSourceLineEx*)ptr;
 						ptr += sizeof(InlineeSourceLineEx);
 
-						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_filepath(mod, line->fileId), line->inlinee);
+						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates((InlineeSourceLine*)line);
 						mod.inlinee_c13.try_emplace(line->inlinee, (InlineeSourceLine*)line);
@@ -740,17 +746,8 @@ class PDB_File {
 		
 		parse_symbol_info();
 		parse_c13();
-
-		//if (strcmp(mod.file_name.data(), "C:\\coding\\BetterDbgHelp\\TinyProgram\\x64\\Release\\main.obj") == 0) {
-		//	printf("");
-		//}
 	}
 	
-typedef struct lfFieldList {
-    unsigned short  leaf;           // LF_FIELDLIST
-    char            data[1];         // field list sub lists
-} lfFieldList;
-
 	// Only contains type info like arg and return types for type ids, no type names
 	void read_TPI_stream () {
 		TPI_data = copy_into_consecutive(2);
@@ -769,20 +766,11 @@ typedef struct lfFieldList {
 			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
 			
-			//if (id == 4415) {
+			//if (id == 0x1127) {
 			//	printf("");
 			//}
 
 			switch (lf->kind) {
-				case LF_FIELDLIST: {
-					auto* fl = (lfFieldList*)lf;
-					
-					ulong size = 0;
-					size_t dcb = CbExtractNumeric((unsigned char*)fl->data, &size);
-					auto* name = (const char *)fl->data + dcb;
-
-					//printf("");
-				} break;
 				case LF_STRUCTURE:
 				case LF_CLASS: {
 					auto* struc = (lfClass*)lf;
@@ -791,10 +779,8 @@ typedef struct lfFieldList {
 					size_t dcb = CbExtractNumeric(struc->data, &size);
 					auto* name = (const char *)struc->data + dcb;
 
-					//if (strcmp(name, "Vec3") == 0) {
-					//	printf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
-					//}
-					struct_typeid2name.emplace(id, name);
+					//printf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
+					typeid2name.emplace(id, name);
 				} break;
 				case LF_UNION: {
 					auto* struc = (lfUnion*)lf;
@@ -802,13 +788,14 @@ typedef struct lfFieldList {
 					ulong size = 0;
 					size_t dcb = CbExtractNumeric(struc->data, &size);
 					auto* name = (const char *)struc->data + dcb;
+
 					//printf(">> lfClass: [%4x]: %s\n", id, name);
-					struct_typeid2name.emplace(id, name);
+					typeid2name.emplace(id, name);
 				} break;
-				case LF_PROCEDURE: {
-					auto* proc = (lfProc*)lf;
-					//printf("Proc: id: [%4x]\n", id);
-				} break;
+				//case LF_PROCEDURE: {
+				//	auto* proc = (lfProc*)lf;
+				//	printf("Proc: id: [%4x]\n", id);
+				//} break;
 			}
 
 			id++;
@@ -825,39 +812,101 @@ typedef struct lfFieldList {
 		assert(header->version == 20040203);
 
 		u32 count = header->one_past_last_type_index - header->minimal_type_index;
-		u32 id = header->minimal_type_index;
 
+		u32 id = header->minimal_type_index;
 		char* type_info = ptr;
+		
+		// LF_STRING_ID is what lfFuncId.scopeId points to
+		// do a pass first, TODO: LF_STRING_ID internally rely on only pointing to earlier entires, so this likely holds for following lfFuncId as well
+		std::unordered_map<u32, std::string> stringids;
+		
 		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
 			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
+			//assert((sizeof(u16) + lf->length)%4 == 0);
+
+			// LF_STRING_ID sometimes hold "id", which points to an earlier LF_SUBSTR_LIST, which holds a VLA of other LF_STRING_IDs
+			// in this case LF_STRING_ID seems to essentially represent the concatenated string lfStringId.name + LF_SUBSTR_LIST at lfStringId.id
+			// while LF_SUBSTR_LIST itself holds the concatenation of what each of its IDs point towards
+			// this appears to be used for strings past a certain length, which has to be chopped up for some reason
+			// I have no idea why, maybe because the pdb format is really old and hardware was limited
+			// I could not properly test the above, but lets see if it passes all my test executables vs dbghelp.dll later
+			// TODO: this should be rewritten to use a not build up a unordered_map, but instead provide a function that builds a queried LF_STRING_ID recursively to avoid processing and allocation
+			switch (lf->kind) {
+				case LF_SUBSTR_LIST: {
+					auto* str = (lfArgList*)lf;
+					//printf(">> lfArgList: [%4x]:\n", id);
+
+					auto s = std::string();
+					for (u32 i=0; i<str->count; i++) {
+						s += stringids[str->arg[i]];
+						//printf(">>> [%4x] \"%s\"\n", str->arg[i], stringids[str->arg[i]].c_str());
+					}
+					
+					stringids.emplace(id, std::move(s));
+				} break;
+				case LF_STRING_ID: {
+					auto* str = (lfStringId*)lf;
+					if (str->id == 0) {
+						//printf(">> lfStringId: [%4x] \"%s\"\n", id, str->name);
+						stringids.emplace(id, std::string((const char*)str->name));
+					}
+					else {
+						auto* other = try_get(stringids, str->id);
+						assert(other);
+						if (other) {
+							auto s = *other + (const char*)str->name;
+							
+							//printf(">> lfStringId (Composite): [%4x] id=%4x => \"%s\"\n", id, str->id, s.c_str());
+							stringids.emplace(id, std::move(s));
+						}
+					}
+
+				} break;
+			}
+
+			id++;
+		}
+		assert((ptr - type_info) == header->byte_count_of_type_record_data_following_the_header);
+		
+		id = header->minimal_type_index;
+		ptr = type_info;
+
+		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
+			auto* lf = (codeview_type_record_header*)ptr;
+			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
+			
+			if (id == 0x1127) {
+				printf("");
+			}
 
 			switch (lf->kind) {
-				//case LF_STRUCTURE:
-				//case LF_CLASS: {
-				//	auto* struc = (lfClass*)lf;
-				//	printf(">> lfClass: [%4x]\n", id);
-				//} break;
 				case LF_FUNC_ID: {
 					// free function
 					auto* func = (lfFuncId*)lf;
-					// not sure what func->type is, counting id like we are doing is the actual type of of the func as referenced by INLINESITE
-					// -> Oh, probably function signature in TPI_stream
 					//printf(">> lfFuncId: [%4x]=%s\n", id, func->name);
-					//if (strcmp((const char*)func->name, "_Allocate") == 0) {
-					//	printf("");
-					//}
-					proc_typeid2nameid.emplace((CV_ItemId)id, strbuf.push((const char*)func->name));
+
+					if (func->scopeId != 0) {
+						auto* scope_name = try_get(stringids, func->scopeId);
+						assert(scope_name);
+						if (scope_name) {
+							auto formatted_strid = *scope_name + "::" + (const char*)func->name;
+							typeid2name.emplace((CV_ItemId)id, std::move(formatted_strid));
+						}
+					}
+					else {
+						typeid2name.emplace((CV_ItemId)id, std::string((const char*)func->name));
+					}
 				} break;
 				case LF_MFUNC_ID: {
 					// member function (just the function name, struct name missing!)
 					auto* func = (lfMFuncId*)lf;
-					auto* parent_name = struct_typeid2name[func->parentType];
+					auto* parent_name = try_get(typeid2name, func->parentType);
 					assert(parent_name);
 					if (parent_name) {
-						//printf(">> lfMFuncId: [%4x]=%s::%s\n", id, parent_name, func->name);
-						auto formatted_strid = strbuf.push_concat(parent_name, "::", (const char*)func->name);
-						proc_typeid2nameid.emplace((CV_ItemId)id, formatted_strid);
+						//printf(">> lfMFuncId: [%4x]=%s::%s\n", id, parent_name->c_str(), (const char*)func->name);
+						auto formatted_strid = *parent_name + "::" + (const char*)func->name;
+						typeid2name.emplace((CV_ItemId)id, std::move(formatted_strid));
 					}
 				} break;
 			}
@@ -877,6 +926,8 @@ public:
 		return nullptr;
 	}
 	PDB_File (std::string&& path) {
+		// TODO: Use memory mapped file as this allows avoiding to load any pages not accessed (pdb pages are same size as ram pages)
+		// do memory mapped files allows the os to evict pages, so can it be used to read files without permanently consuming ram?
 		if (!load_file(path, &data)) {
 			throw std::runtime_error("File not found: "+ path);
 		}
@@ -924,7 +975,7 @@ public:
 	};
 	std::vector<Module> modules;
 
-	const char* get_filepath (Module const& mod, CV_off32_t fileId) const {
+	const char* get_lineinfo_source_filepath (Module const& mod, CV_off32_t fileId) const {
 		auto* cksm = (codeview_file_checksum*)(mod.file_checksum_ptr + fileId);
 		auto* name = &names[cksm->offset_in_string_table];
 		return name;
@@ -947,10 +998,10 @@ public:
 	};
 	std::vector<Symbol> sym_sorted;
 
-	std::unordered_map<CV_ItemId, u32> proc_typeid2nameid;
-
 	void sort_symbols () {
 		// sort based on base_addr
+		// use stable sorts as symbol can and will overlap, so try and preserve insertion order
+		// TODO: insertion order may not always actually replicate dbghelp.dll behavior though(?)
 		std::stable_sort(sym_sorted.begin(), sym_sorted.end(), [] (Symbol const& l, Symbol const& r) {
 			return std::less<uintptr_t>()(l.base_addr, r.base_addr);
 		});
@@ -967,6 +1018,9 @@ public:
 		//}
 	}
 	Symbol* find_symbol_for_addr (uintptr_t addr) {
+		// TODO: This comment is confusing, also in case of multiple symbols with same offset, which one do we return (last?)
+		// This seems to work currently, but should take another look at this
+
 		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
 		// so use upper bound instead (returns first item bigger than addr), then use previous
 		auto dymmy_Symbol = Symbol{
@@ -980,7 +1034,23 @@ public:
 			return nullptr;
 		}
 		it--;
-		return &*it;
+		
+		uintptr_t sym_addr = it->base_addr;
+		Symbol* result = &*it;
+
+		// iterate backwards through any symbols with equal address to find first one
+		// but ignore ones in the global symbol_record_stream, as they contain mangled version of the symbol without size, but we sometimes want those if there is no real symbol
+		// like __ImageBase
+		for (Symbol* cur=(&*it)-1; cur >= sym_sorted.data() && cur->base_addr == sym_addr; --cur) {
+			bool cur_from_module = cur->module_index != -1;
+			bool result_from_module = result->module_index != -1;
+			// earlier one always replaces, unless cur is not from module but previously written one was
+			if (cur_from_module || !result_from_module) {
+				result = cur;
+			}
+		}
+
+		return result;
 	}
 	
 	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
@@ -1022,178 +1092,7 @@ public:
 		}
 		return false;
 	}
-	/*
-	void parse_inlinesite_lineno_annotations (Symbol* sym) {
-		auto parse = [] (INLINESITESYM* inl, InlineeC13 const& c13) {
-			// While BinaryAnnotationOpcode enum was released, the exact definition or code was apparently to released(?)
-			// Only possible thanks to these implementations:
-			// https://github.com/EpicGamesExt/raddebugger/blob/08642d2745da516387fa0f43639b7a8776a154b0/src/codeview/codeview_parse.c#L277
-			// https://github.com/getsentry/pdb/blob/65c5b6d5c38c5f84225bfb3bc5365ea4097c8adf/src/modi/c13.rs#L1135
-
-			PCompressedAnnotation cur = (PCompressedAnnotation)inl->binaryAnnotations;
-			PCompressedAnnotation end = (PCompressedAnnotation)((char*)inl + sizeof(u16) + inl->reclen); // length field of codeview_symbol_header not contained in length
-			
-			u32 file_id = c13.line->fileId;
-			u32 code_offset_base = 0;
-			u32 code_offset = 0; // I think relative to inliner function (Not parent inlinesite) TODO: true?
-			u32 code_length = 0; // 0 = null
-			u32 lineno = c13.line->sourceLineNum;
-			u32 num_lines = 1;
-			u32 kind = 1; // 0 == Expression, 1 == Statement
-
-			u32 prev_code_offset = -1;
-
-			struct Line {
-				u32 code_offset;
-				u32 code_length;
-				u32 lineno;
-				u32 num_lines; // could mean one code range can be associated with a range of line numbers(?)
-				u32 file_id;
-				u32 kind;
-			};
-			std::vector<Line> lines;
-
-			while (cur < end) {
-				auto opcode = (BinaryAnnotationOpcode)CVUncompressData(cur);
-				if (opcode == BA_OP_Invalid)
-					continue;
-
-				Line* prev = lines.empty() ? nullptr : &lines.back();
-
-				auto param1 = CVUncompressData(cur);
-
-				printf(">>> %s: %d%s\n", BinaryAnnotationOpcode_str(opcode), param1, opcode == BA_OP_ChangeCodeLengthAndCodeOffset ? ", (param2 not printed)":"");
-
-				switch (opcode) {
-					case BA_OP_CodeOffset: {
-						code_offset = param1;
-					} break;
-					case BA_OP_ChangeCodeOffsetBase: {
-						// Is this never used?
-						code_offset_base = param1;
-					} break;
-					case BA_OP_ChangeCodeOffset: {
-						code_offset += param1;
-					} break;
-					case BA_OP_ChangeCodeLength: {
-						if (prev) {
-							if (prev->code_length == 0 && prev->kind == kind) {
-								prev->code_length = param1;
-							}
-						}
-						code_offset += param1;
-					} break;
-					case BA_OP_ChangeFile: {
-						// supposedly there are bugs with file changes inside functions, but presumably functions are almost always inside one file, so this should be rare anyway
-						file_id = param1;
-					} break;
-					case BA_OP_ChangeLineOffset: {
-						lineno += DecodeSignedInt32(param1);
-					} break;
-					case BA_OP_ChangeLineEndDelta: {
-						num_lines = param1;
-					} break;
-					case BA_OP_ChangeRangeKind: {
-						assert(param1 == 0 || param1 == 1);
-						kind = param1;
-					} break;
-					case BA_OP_ChangeCodeOffsetAndLineOffset: {
-						// param : ((sourceDelta << 4) | CodeDelta)
-						u32 CodeDelta = param1 & 0b1111;
-						s32 sourceDelta = DecodeSignedInt32(param1 >> 4); // signed int encoded weirdly because CVUncompressData chops off upper bits
-
-						code_offset += CodeDelta;
-						lineno += sourceDelta;
-					} break;
-					case BA_OP_ChangeCodeLengthAndCodeOffset: {
-						auto param2 = CVUncompressData(cur);
-						code_length = param1;
-						code_offset += param2;
-					} break;
-
-					case BA_OP_ChangeColumnStart:
-					case BA_OP_ChangeColumnEndDelta:
-					case BA_OP_ChangeColumnEnd: {
-						// ignore column info
-					} break;
-
-					default: {
-						assert(false);
-					}
-				}
-					
-				switch (opcode) {
-					case BA_OP_ChangeCodeOffset:
-					case BA_OP_ChangeCodeOffsetAndLineOffset:
-					case BA_OP_ChangeCodeLengthAndCodeOffset: {
-						// code_length is either explicitly given with BA_OP_ChangeCodeLengthAndCodeOffset
-						// or written after push_line with BA_OP_ChangeCodeLength
-						// or implicitly computed from last and current offset
-
-						u32 offset = code_offset + code_offset_base;
-						if (prev) {
-							if (prev->code_length == 0 && prev->kind == kind) {
-								prev->code_length = offset - prev->code_offset;
-							}
-						}
-
-						lines.push_back({
-							offset,
-							code_length,
-							lineno,
-							num_lines,
-							file_id,
-							kind,
-						});
-
-						code_length = 0;
-					} break;
-				}
-			}
-
-			for (auto& l : lines) {
-				auto* cksm = (codeview_file_checksum*)(c13.file_checksum_ptr + l.file_id);
-				auto* name = &names[cksm->offset_in_string_table];
-
-				printf(">>> [%4x, %4x) %s:%d (%d %d)\n", l.code_offset, l.code_offset+l.code_length, name, l.lineno, l.num_lines, l.kind);
-			}
-
-			assert(cur == end);
-		};
-		
-		if (sym->procsym == nullptr)
-			return;
-			
-		printf("> for %s:\n", sym->name);
-
-		char* ptr = (char*)sym->procsym;
-		for (;;) {
-			auto sym = (codeview_symbol_header*)ptr;
-			ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
-			ptr = align_up(ptr, 4);
-
-			switch (sym->kind) {
-				case S_INLINESITE: {
-					auto* inl = (INLINESITESYM*)sym;
-					printf(">> INLINESITE %d:\n", inl->inlinee);
-
-					auto it = inlinee_c13.find(inl->inlinee);
-					if (it == inlinee_c13.end()) {
-						assert(false);
-					}
-					else {
-						auto& c13 = it->second;
-						parse(inl, c13);
-					}
-				} break;
-				case S_END: {
-					return;
-				} break;
-			}
-		}
-	}
-	*/
-
+	
 	void trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs, int* out_num_locs, TimerMeasurement* t_per_inlinesite=nullptr) {
 				*out_num_locs = 0;
 		ZoneScoped;
@@ -1339,7 +1238,7 @@ public:
 
 			for (auto& l : lines) {
 				if (proc_raddr >= l.code_offset && proc_raddr < l.code_offset + l.code_length) {
-					out_loc->filepath = get_filepath(mod, l.file_id);
+					out_loc->filepath = get_lineinfo_source_filepath(mod, l.file_id);
 					out_loc->lineno = l.lineno;
 					return true;
 				}
@@ -1350,7 +1249,7 @@ public:
 		uintptr_t proc_raddr = addr - sym->base_addr;
 
 		int depth = 0;
-		int max_written_depth = 0;
+		int max_depth = 0;
 		
 		char* ptr = (char*)sym->procsym;
 		for (;;) {
@@ -1368,21 +1267,27 @@ public:
 						
 						// TODO: could also optimize by preprocessing min/max ranges for each inlinesite and sorting them, which can then be binary searched per level
 						// probably should build a tree structure for this
-
+						
 						SourceLoc encoded_loc = {};
 						if (find_srcloc_in_encoded(inl, proc_raddr, &encoded_loc)) {
+							// fnname (ie. symbol), can only be found if source location is found, as there can be multiple INLINESITEs for one depth
+							// and it does not store which address range it actually covers, this can only be found by iterating encoded lineinfo
+
 							assert(out_locs[depth].filepath == nullptr); // TODO: another optimization, once first inlinesite was found for addr, iteration on that depth can skip future ones
 
-							auto it = proc_typeid2nameid.find(inl->inlinee);
-							assert(it != proc_typeid2nameid.end());
-							auto* name = it == proc_typeid2nameid.end() ? "[unknown]":strbuf[it->second];
-							out_locs[depth].fnname = name;
-
+							auto* name = try_get(typeid2name, inl->inlinee);
+							assert(name);
+							if (name) {
+								out_locs[depth].fnname = name->c_str();
+							}
+							else {
+								out_locs[depth].fnname = "[unknown]";
+							}
 							out_locs[depth].filepath = encoded_loc.filepath;
 							out_locs[depth].lineno = encoded_loc.lineno;
-
-							max_written_depth = std::max(max_written_depth, depth+1);
-
+							
+							max_depth = std::max(max_depth, depth+1);
+							
 							// TODO: in theory: only if there is line info can further inlinesites have line info, which would be an optimization
 						}
 					}
@@ -1393,7 +1298,7 @@ public:
 					depth--;
 				} break;
 				case S_END: {
-					*out_num_locs = max_written_depth;
+					*out_num_locs = max_depth;
 					return;
 				} break;
 			}

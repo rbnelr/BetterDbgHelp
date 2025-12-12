@@ -18,6 +18,9 @@ typedef unsigned short  _2BYTEPAD;
 typedef unsigned long   CV_tkn_t;
 typedef CV_typ_t CV_ItemId;
 
+// seems like CV_typ_t are ids in TPI and IPI
+// while CV_ItemId are not, but they are for inlinees?
+
 typedef unsigned short ushort;
 typedef unsigned long  ulong;
 
@@ -788,6 +791,7 @@ typedef struct CV_funcattr_t {
     unsigned char  unused       :5;  // unused
 } CV_funcattr_t;
 typedef struct lfProc {
+    unsigned short  _len;
     unsigned short  leaf;           // LF_PROCEDURE
     CV_typ_t        rvtype;         // type index of return value
     unsigned char   calltype;       // calling convention (CV_call_t)
@@ -797,17 +801,35 @@ typedef struct lfProc {
 } lfProc;
 
 typedef struct lfFuncId {
+    unsigned short  _len;
     unsigned short  leaf;       // LF_FUNC_ID
     CV_ItemId       scopeId;    // parent scope of the ID, 0 if global
     CV_typ_t        type;       // function type
     unsigned char   name[1]; 
 } lfFuncId;
 typedef struct lfMFuncId {
+    unsigned short  _len;
     unsigned short  leaf;       // LF_MFUNC_ID
     CV_typ_t        parentType; // type index of parent
     CV_typ_t        type;       // function type
     unsigned char   name[1]; 
 } lfMFuncId;
+
+//typedef struct lfFieldList {
+//    unsigned short  leaf;           // LF_FIELDLIST
+//    char            data[1];         // field list sub lists
+//} lfFieldList;
+typedef struct lfArgList {
+    unsigned short  leaf;           // LF_ARGLIST, LF_SUBSTR_LIST
+    unsigned long   count;          // number of arguments
+    CV_typ_t        arg[1];      // number of arguments
+} lfArgList;
+typedef struct lfStringId {
+    unsigned short  _len;
+    unsigned short  leaf;       // LF_STRING_ID
+    CV_ItemId       id;         // ID to list of sub string IDs
+    unsigned char   name[1];
+} lfStringId;
 
 typedef struct CV_prop_t {
     unsigned short  packed      :1;     // true if structure is packed
@@ -826,6 +848,7 @@ typedef struct CV_prop_t {
     unsigned short  mocom       :2;     // CV_MOCOM_UDT_e
 } CV_prop_t;
 typedef struct lfClass {
+    unsigned short  _len;
     unsigned short  leaf;           // LF_CLASS, LF_STRUCT, LF_INTERFACE
     unsigned short  count;          // count of number of elements in class
     CV_prop_t       property;       // property attribute field (prop_t)
@@ -839,6 +862,7 @@ typedef lfClass lfStructure;
 typedef lfClass lfInterface;
 
 typedef struct lfUnion {
+    unsigned short  _len;
     unsigned short  leaf;           // LF_UNION
     unsigned short  count;          // count of number of elements in class
     CV_prop_t       property;       // property attribute field
