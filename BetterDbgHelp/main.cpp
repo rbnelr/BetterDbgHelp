@@ -1,5 +1,6 @@
 #include "util.hpp"
 #include <functional>
+#include <random>
 
 #include <psapi.h>
 #pragma comment(lib, "Kernel32.lib")
@@ -16,18 +17,19 @@ class SymTesting {
 	struct LoadedModule {
 		std::string path;
 		void* addr; // Virtual memory address module was loaded at in child process
+		size_t size;
 	};
 	struct LoadedModules {
 		std::vector<LoadedModule> list;
 
-		void add (std::string path, void* addr) {
-			list.push_back({ path, addr });
+		void add (std::string path, void* addr, size_t size) {
+			list.push_back({ path, addr, size });
 		}
 		
-		void* get_ptr (std::string_view name_suffix) {
+		LoadedModule const& find (std::string_view name_suffix) {
 			for (auto& m : list) {
 				if (ends_with(m.path, name_suffix)) {
-					return m.addr;
+					return m;
 				}
 			}
 			throw std::runtime_error(std::string(name_suffix) + " not found");
@@ -81,32 +83,37 @@ class SymTesting {
 				// Not sure if actually exited completely or stuck just before exiting
 				break; // don't call ContinueDebugEvent, effectively suspended
 			}
+
+			auto handle_loaded_image = [&] (HANDLE hFile, void* baseAddr) {
+				char name[1024] = {};
+				GetFinalPathNameByHandleA(hFile, name, sizeof(name), FILE_NAME_NORMALIZED);
+
+				HANDLE hMapping = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+				if (hMapping) {
+					LPVOID pView = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
+					if (pView) {
+						PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)pView;
+						PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)((BYTE*)pView + dosHeader->e_lfanew);
+						DWORD imageSize = ntHeaders->OptionalHeader.SizeOfImage;
+						
+						loaded_modules.add(std::string(name), baseAddr, imageSize);
+						
+						UnmapViewOfFile(pView);
+					}
+					CloseHandle(hMapping);
+				}
+				CloseHandle(hFile);
+			};
 			switch (de.dwDebugEventCode) {
 				case CREATE_PROCESS_DEBUG_EVENT: {
 					HANDLE hFile = de.u.CreateProcessInfo.hFile;
 					LPVOID addr  = de.u.CreateProcessInfo.lpBaseOfImage;
-
-					char name[1024] = {};
-					GetFinalPathNameByHandleA(hFile, name, sizeof(name), FILE_NAME_NORMALIZED);
-					loaded_modules.add(std::string(name), addr);
-
-					//printf("CREATE_PROCESS_DEBUG_EVENT: Module \"%50s\" at %p\n", name, addr);
-
-					CloseHandle(hFile);
-					de.u.CreateProcessInfo.hFile = NULL;
+					handle_loaded_image(hFile, addr);
 				} break;
 				case LOAD_DLL_DEBUG_EVENT: {
 					HANDLE hFile = de.u.LoadDll.hFile;
 					LPVOID addr  = de.u.LoadDll.lpBaseOfDll;
-
-					char name[1024] = {};
-					GetFinalPathNameByHandleA(hFile, name, sizeof(name), FILE_NAME_NORMALIZED);
-					loaded_modules.add(std::string(name), addr);
-
-					//printf("LOAD_DLL_DEBUG_EVENT:       Module \"%50s\" at %p\n", name, addr);
-
-					CloseHandle(hFile);
-					de.u.LoadDll.hFile = NULL;
+					handle_loaded_image(hFile, addr);
 				} break;
 				case CREATE_THREAD_DEBUG_EVENT: {
 					//printf("CREATE_THREAD_DEBUG_EVENT:\n");
@@ -151,6 +158,17 @@ class SymTesting {
 		CloseHandle(pi.hThread);
 		CloseHandle(pi.hProcess);
 	}
+
+	std::default_random_engine init_rng (uint32_t seed) {
+		return std::default_random_engine(seed);
+	}
+	std::default_random_engine init_rng () {
+		LARGE_INTEGER li;
+		QueryPerformanceCounter(&li);
+		auto seed = std::hash<uint64_t>()(li.QuadPart);
+
+		return init_rng((uint32_t)seed);
+	}
 public:
 	bool tests_failed = false;
 
@@ -171,9 +189,10 @@ public:
 
 	}
 
-	char* get_addr (std::string_view name) {
-		return (char*)loaded_modules.get_ptr(name);
+	char* get_addr (std::string_view filter) {
+		return (char*)loaded_modules.find(filter).addr;
 	}
+
 	void show_addr2sym (char* addr) {
 		SymResult res={}, res_dbghelp={};
 
@@ -201,6 +220,63 @@ public:
 			tests_failed = true;
 		}
 	}
+	
+	uintptr_t prev_addr = 0;
+	SymResult prev_res = {};
+	SymResult prev_res_dbghelp = {};
+	
+	void test_distinct_addr2sym (uintptr_t addr) {
+		show_and_test_distinct_addr2sym(addr, false);
+	}
+	void show_and_test_distinct_addr2sym (uintptr_t addr, bool show=true) {
+		SymResult res={}, res_dbghelp={};
+
+		dbghelp->addr2sym((void*)addr, &res_dbghelp);
+		resolver->addr2sym((void*)addr, &res);
+		
+		if (res != prev_res || res_dbghelp != prev_res_dbghelp) {
+			if (show) {
+				printf("SymResolver: [%llx-%llx] ", prev_addr, addr);
+				res.print();
+			}
+			
+			if (res != res_dbghelp) {
+				printf("!!! [%llx-%llx] (%s) Result Mismatch:\n", prev_addr, addr, res_dbghelp.sym_name);
+				res.print_diff(res_dbghelp);
+				tests_failed = true;
+			}
+
+			prev_addr = (uintptr_t)addr;
+			prev_res = res;
+			prev_res_dbghelp = res_dbghelp;
+		}
+	}
+	void show_distinct_sym_lineinfo (LoadedModule const& mod, uintptr_t addr) {
+		SymResult res={};
+
+		resolver->addr2sym((void*)addr, &res);
+		
+		if (!res.equal_no_inline(prev_res)) {
+			printf("[%llx-%llx] ", prev_addr - (uintptr_t)mod.addr, addr - (uintptr_t)mod.addr);
+			res.print_no_inline();
+
+			prev_addr = (uintptr_t)addr;
+			prev_res = res;
+		}
+	}
+	void show_distinct_sym (LoadedModule const& mod, uintptr_t addr) {
+		SymResult res={};
+
+		resolver->addr2sym((void*)addr, &res);
+		
+		if (!res.equal_sym(prev_res)) {
+			printf("[%llx-%llx] ", prev_addr - (uintptr_t)mod.addr, addr - (uintptr_t)mod.addr);
+			res.print_sym();
+
+			prev_addr = (uintptr_t)addr;
+			prev_res = res;
+		}
+	}
 
 	template <typename FUNC>
 	void run_examples_addresses (FUNC run_examples) {
@@ -224,31 +300,43 @@ public:
 		dbghelp->addr2sym(addr, &sym);
 		resolver->addr2sym(addr, &sym);
 	}
+
+	void sweep_mod (std::string_view filter) {
+		auto& mod = loaded_modules.find(filter);
+		auto start = (uintptr_t)mod.addr;
+		auto end = (uintptr_t)mod.addr + mod.size;
+
+	#if 1
+		int before = 0x100;
+		int after = 0x100;
+
+		printf("Sweep for module %s: [%llx-%llx] (-%x +%x)\n", mod.path.c_str(), start, end, before, after);
+		for (uintptr_t addr = start - before; addr < end + after; addr++) {
+			//show_and_test_distinct_addr2sym(addr);
+			test_distinct_addr2sym(addr);
+		}
+	#else
+		printf("Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
+		for (uintptr_t addr = start; addr < end; addr++) {
+			show_distinct_sym(mod, addr);
+		}
+	#endif
+	}
+	// seed=-1 => random seed
+	void fuzz_mod (std::string_view filter, int seed=-1, int count=10000) {
+		auto& mod = loaded_modules.find(filter);
+		
+		auto rng = seed < 0 ? init_rng() : init_rng((uint64_t)seed);
+		std::uniform_int_distribution<uint64_t> uniform_rng (std::numeric_limits<uint64_t>::min(), std::numeric_limits<uint64_t>::max());
+
+		for (int i=0; i<count; i++) {
+			auto addr = uniform_rng(rng);
+			test_addr2sym((char*)addr);
+		}
+	}
 };
 
-int main(int argc, const char** argv) {
-	
-	try {
-		SymTesting sym("Namespaces.exe", 0.5f);
-
-		char* exe = sym.get_addr(".exe");
-		
-		sym.warmup(exe + 0x11AC0);
-
-		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
-			at_addr(exe + 0);
-
-			at_addr(exe + 0x10D0); // main()
-			at_addr(exe + 0x1070); // global()
-			at_addr(exe + 0x1090); // space::namespaced() (This actually calls the the same address as namespaced2_same_code, as the functions are identical)
-			at_addr(exe + 0x1090); // space::nested::namespaced2_same_code()
-			at_addr(exe + 0x1080); // StructA::memberA()
-			at_addr(exe + 0x10A0); // space::StructB::memberB()
-			at_addr(exe + 0x10B0); // space::nested::StructC::StructD::memberCD()
-			at_addr(exe + 0x10C0); // space::nested::StructC::StructD::smemberCD()
-		});
-	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }\
-
+void example_addresses () {
 	try {
 		SymTesting sym("TinyProgram.exe", 0.5f);
 
@@ -302,6 +390,28 @@ int main(int argc, const char** argv) {
 	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	//Sleep(1000);
 	
+	try {
+		SymTesting sym("Namespaces.exe", 0.5f);
+
+		char* exe = sym.get_addr(".exe");
+		
+		sym.warmup(exe + 0x11AC0);
+
+		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
+			at_addr(exe + 0);
+
+			at_addr(exe + 0x10D0); // main()
+			at_addr(exe + 0x1070); // global()
+			at_addr(exe + 0x1090); // space::namespaced() (This actually calls the the same address as namespaced2_same_code, as the functions are identical)
+			at_addr(exe + 0x1090); // space::nested::namespaced2_same_code()
+			at_addr(exe + 0x1080); // StructA::memberA()
+			at_addr(exe + 0x10A0); // space::StructB::memberB()
+			at_addr(exe + 0x10B0); // space::nested::StructC::StructD::memberCD()
+			at_addr(exe + 0x10C0); // space::nested::StructC::StructD::smemberCD()
+		});
+	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }\
+
+
 	try {
 		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
 		
@@ -375,6 +485,20 @@ int main(int argc, const char** argv) {
 		});
 	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	//Sleep(1000);
+	
+}
+
+void test_entire_modules () {
+	try {
+		SymTesting sym("TinyProgram.exe", 0.5f);
+		sym.sweep_mod(".exe");
+	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+
+}
+
+int main(int argc, const char** argv) {
+	//example_addresses();
+	test_entire_modules();
 	
 	return 0;
 }

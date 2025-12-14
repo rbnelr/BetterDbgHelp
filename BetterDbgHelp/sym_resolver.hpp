@@ -43,8 +43,39 @@ struct SymResult {
 	bool has_source () const {
 		return src_filepath != nullptr;
 	}
+	
+	bool equal_sym (SymResult const& r) const {
+		if (valid() != r.valid()) return false;
 
-	// TODO: inline frames
+		if (valid()) {
+			// dbghelp.dll not returning module name, assume it's correct
+			//if (my_strcmp(module_path, r.module_path) != 0) return false;
+			if (!my_strcmp(sym_name, r.sym_name)) return false;
+		}
+		else {
+			// If both throw error it counts as a match as comparing errors may be hard
+		}
+		return true;
+	}
+	bool equal_no_inline (SymResult const& r) const {
+		if (valid() != r.valid()) return false;
+
+		if (valid()) {
+			// dbghelp.dll not returning module name, assume it's correct
+			//if (my_strcmp(module_path, r.module_path) != 0) return false;
+			if (!my_strcmp(sym_name, r.sym_name)) return false;
+
+			if (has_source() != r.has_source()) return false;
+			if (has_source()) {
+				if (!my_strcmp(src_filepath, r.src_filepath)) return false;
+				if (src_lineno != r.src_lineno) return false;
+			}
+		}
+		else {
+			// If both throw error it counts as a match as comparing errors may be hard
+		}
+		return true;
+	}
 
 	bool operator== (SymResult const& r) const {
 		if (valid() != r.valid()) return false;
@@ -69,12 +100,37 @@ struct SymResult {
 				if (li.lineno != ri.lineno) return false;
 			}
 		}
+		else {
+			// If both throw error it counts as a match as comparing errors may be hard
+		}
 		return true;
 	}
 	bool operator!= (SymResult const& r) const {
 		return !(*this == r);
 	}
+	
+	void print_sym () {
+		if (!valid()) {
+			printf("%s\n", err);
+			return;
+		}
 
+		printf("%15s!%s\n", module_path, sym_name);
+	}
+	void print_no_inline () {
+		if (!valid()) {
+			printf("%s\n", err);
+			return;
+		}
+
+		printf("%15s!%s ", module_path, sym_name);
+		if (has_source()) {
+			printf("%-15s:%d\n", src_filepath, src_lineno);
+		}
+		else {
+			printf("(No source info)\n");
+		}
+	}
 	void print () {
 		if (!valid()) {
 			printf("%s\n", err);

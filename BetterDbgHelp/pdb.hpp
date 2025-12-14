@@ -783,7 +783,6 @@ class PDB_File {
 		parse_c13();
 	}
 	
-	// Only contains type info like arg and return types for type ids, no type names
 	void read_TPI_stream () {
 		TPI_data = copy_into_consecutive(2);
 		char* ptr = TPI_data.data();
@@ -1115,7 +1114,7 @@ public:
 			// different entries can have the same line (single line to multiple instruction spans)
 			// the same offset can appear twice with different lines (I guess multiple related lines that do one thing, maybe also when a statement is split over lines?)
 			//  -> this part makes it confusing to resolve line numbers, as we would likely only return the first line (but debuggers via 'go to disassembly' or breakpoints might need info for each line!)
-			//     tracy should never double count samples, and indeed dbghelp only reports one line, which appears the first line
+			//     tracy should never double count samples, and indeed dbghelp only reports one line, which appears to be the first line
 			//     but it's unclear if the first match in this list is chosen or if it actively looks for the lowest line number TODO: determine via fuzzing and consider alternative datastructure)
 
 			// linear scan for the moment, profile to see how much this impacts perf
@@ -1141,7 +1140,8 @@ public:
 	}
 	
 	void trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs, int* out_num_locs, TimerMeasurement* t_per_inlinesite=nullptr) {
-				*out_num_locs = 0;
+		*out_num_locs = 0;
+
 		ZoneScoped;
 		if (sym->procsym == nullptr)
 			return;
