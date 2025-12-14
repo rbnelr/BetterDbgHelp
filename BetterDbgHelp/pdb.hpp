@@ -76,7 +76,10 @@ class PDB_File {
 	optional_debug_header_substream* opt_streams;
 
 	// TODO: profile and possibly use indices into string buffer (or on demand string buffer vs pointer into complete string in pdb?)
+	// Struct, Class and Union names from TPI
 	std::unordered_map<CV_typ_t, std::string> typeid2name;
+	// Func and MemberFunc names from IPI (IDs will overlap with typeid2name!)
+	std::unordered_map<CV_ItemId, std::string> IPI_id2name;
 
 	/*
 	struct Strbuf {
@@ -550,7 +553,9 @@ class PDB_File {
 			assert(signature == 4); // CV_SIGNATURE_C13
 		
 			//printf(">> symbol_information\n");
-
+			
+			std::vector<INLINESITESYM*> stack;
+			
 			while (ptr < sym_info + mi->byte_size_of_symbol_information) {
 				auto sym = (codeview_symbol_header*)ptr;
 			
@@ -587,11 +592,35 @@ class PDB_File {
 					} break;
 					case S_INLINESITE: {
 						auto* inl = (INLINESITESYM*)sym;
+
+						auto* parent = stack.empty() ? nullptr : stack.back();
+						stack.push_back(inl);
+
+						if (inl->inlinee == 9623) {
+							printf("S_INLINESITE %d\n", inl->inlinee);
+						}
+						
+						auto* parent_entry = (codeview_symbol_header*)(sym_info + inl->pParent);
+						auto* end_entry = (codeview_symbol_header*)(sym_info + inl->pEnd);
+						assert(parent_entry->kind == S_INLINESITE
+							|| parent_entry->kind == S_GPROC32
+							|| parent_entry->kind == S_LPROC32
+							|| parent_entry->kind == S_GPROC32_ID
+							|| parent_entry->kind == S_LPROC32_ID
+						);
+						if (parent_entry->kind == S_INLINESITE) {
+							assert(parent && parent == (INLINESITESYM*)parent_entry);
+						}
+						assert(end_entry->kind == S_INLINESITE_END);
+
 						//inl->pParent // byte offs from symbol_information start of prev PROCSYM32 or INLINESITESYM, ie caller
 						//inl->pEnd // byte offs of INLINESITE_END
 						// inl->inlinee seems to be some kind of id that lets us look up line info, but not sure where that is and if that lineinfo is encoded horribly
 						// no idea what inl->binaryAnnotations is
 						//printf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, strbuf[proc_typeid2nameid[inl->inlinee]]);
+					} break;
+					case S_INLINESITE_END: {
+						stack.pop_back();
 					} break;
 				}
 			}
@@ -623,7 +652,7 @@ class PDB_File {
 				auto* header = (codeview_line_header*)ptr;
 				ptr += sizeof(codeview_line_header);
 				assert(header->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
-
+				
 				//printf(">> Header %d, %8x %8x\n", lines->contribution_section_id, lines->contribution_offset, lines->contribution_size);
 			
 				uintptr_t sec_offs = sections_sorted[header->contribution_section_id-1].base_addr;
@@ -651,7 +680,7 @@ class PDB_File {
 				
 					ptr = ptr3;
 					ptr += sizeof(codeview_line_header);
-
+					
 					while (ptr < ptr3 + subsec->length) {
 						auto* line_block = (codeview_line_block_header*)ptr;
 						ptr += sizeof(codeview_line_block_header);
@@ -700,6 +729,9 @@ class PDB_File {
 						auto* line = (InlineeSourceLine*)ptr;
 						ptr += sizeof(InlineeSourceLine);
 						
+						if (line->inlinee == 9623) {
+							printf("InlineeSourceLine %d %s:%d\n", line->inlinee, get_lineinfo_source_filepath(mod, line->fileId), line->sourceLineNum);
+						}
 						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates(line);
@@ -709,7 +741,10 @@ class PDB_File {
 					while (ptr < ptr3 + subsec->length) {
 						auto* line = (InlineeSourceLineEx*)ptr;
 						ptr += sizeof(InlineeSourceLineEx);
-
+						
+						if (line->inlinee == 9623) {
+							printf("InlineeSourceLineEx %d %s:%d\n", line->inlinee, get_lineinfo_source_filepath(mod, line->fileId), line->sourceLineNum);
+						}
 						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates((InlineeSourceLine*)line);
@@ -766,9 +801,7 @@ class PDB_File {
 			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
 			
-			//if (id == 0x1127) {
-			//	printf("");
-			//}
+			assert(id < header->one_past_last_type_index);
 
 			switch (lf->kind) {
 				case LF_STRUCTURE:
@@ -780,6 +813,7 @@ class PDB_File {
 					auto* name = (const char *)struc->data + dcb;
 
 					//printf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
+					assert(typeid2name.find(id) == typeid2name.end());
 					typeid2name.emplace(id, name);
 				} break;
 				case LF_UNION: {
@@ -790,6 +824,7 @@ class PDB_File {
 					auto* name = (const char *)struc->data + dcb;
 
 					//printf(">> lfClass: [%4x]: %s\n", id, name);
+					assert(typeid2name.find(id) == typeid2name.end());
 					typeid2name.emplace(id, name);
 				} break;
 				//case LF_PROCEDURE: {
@@ -824,6 +859,7 @@ class PDB_File {
 			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
 			//assert((sizeof(u16) + lf->length)%4 == 0);
+			assert(id < header->one_past_last_type_index);
 
 			// LF_STRING_ID sometimes hold "id", which points to an earlier LF_SUBSTR_LIST, which holds a VLA of other LF_STRING_IDs
 			// in this case LF_STRING_ID seems to essentially represent the concatenated string lfStringId.name + LF_SUBSTR_LIST at lfStringId.id
@@ -876,9 +912,7 @@ class PDB_File {
 			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
 			
-			if (id == 0x1127) {
-				printf("");
-			}
+			assert(id < header->one_past_last_type_index);
 
 			switch (lf->kind) {
 				case LF_FUNC_ID: {
@@ -891,12 +925,19 @@ class PDB_File {
 						assert(scope_name);
 						if (scope_name) {
 							auto formatted_strid = *scope_name + "::" + (const char*)func->name;
-							typeid2name.emplace((CV_ItemId)id, std::move(formatted_strid));
+
+							assert(IPI_id2name.find(id) == IPI_id2name.end());
+							IPI_id2name.emplace(id, std::move(formatted_strid));
 						}
 					}
 					else {
-						typeid2name.emplace((CV_ItemId)id, std::string((const char*)func->name));
+						assert(IPI_id2name.find(id) == IPI_id2name.end());
+						IPI_id2name.emplace(id, std::string((const char*)func->name));
 					}
+
+					//if (strcmp((const char*)func->name, "from_axis_angle")==0) {
+					//	printf(""); // 24649
+					//}
 				} break;
 				case LF_MFUNC_ID: {
 					// member function (just the function name, struct name missing!)
@@ -906,8 +947,14 @@ class PDB_File {
 					if (parent_name) {
 						//printf(">> lfMFuncId: [%4x]=%s::%s\n", id, parent_name->c_str(), (const char*)func->name);
 						auto formatted_strid = *parent_name + "::" + (const char*)func->name;
-						typeid2name.emplace((CV_ItemId)id, std::move(formatted_strid));
+						
+						assert(IPI_id2name.find(id) == IPI_id2name.end());
+						IPI_id2name.emplace(id, std::move(formatted_strid));
 					}
+					
+					//if (strcmp((const char*)func->name, "from_axis_angle")==0) {
+					//	printf("");
+					//}
 				} break;
 			}
 
@@ -1253,15 +1300,15 @@ public:
 		
 		char* ptr = (char*)sym->procsym;
 		for (;;) {
-			auto sym = (codeview_symbol_header*)ptr;
-			ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
+			auto entry = (codeview_symbol_header*)ptr;
+			ptr += sizeof(u16) + entry->length; // length field of codeview_symbol_header not contained in length (but kind is)
 			ptr = align_up(ptr, 4);
 
-			switch (sym->kind) {
+			switch (entry->kind) {
 				case S_INLINESITE: {
 					ZoneScopedN("INLINESITE");
-					
-					auto* inl = (INLINESITESYM*)sym;
+					auto* inl = (INLINESITESYM*)entry;
+
 					if (depth < num_locs) { // here: depth > 0 && out_locs[depth-1].filepath != nullptr
 						auto _tper_inlinesite = kiss::TimerMeasureZone(t_per_inlinesite);
 						
@@ -1275,7 +1322,7 @@ public:
 
 							assert(out_locs[depth].filepath == nullptr); // TODO: another optimization, once first inlinesite was found for addr, iteration on that depth can skip future ones
 
-							auto* name = try_get(typeid2name, inl->inlinee);
+							auto* name = try_get(IPI_id2name, inl->inlinee);
 							assert(name);
 							if (name) {
 								out_locs[depth].fnname = name->c_str();
@@ -1290,6 +1337,10 @@ public:
 							
 							// TODO: in theory: only if there is line info can further inlinesites have line info, which would be an optimization
 						}
+
+						printf("# ");
+						for (int i=0; i<depth; i++) printf("  ");
+						printf("INLINESITE: %8d %s\n", inl->inlinee, try_get(IPI_id2name, inl->inlinee)->c_str());
 					}
 					depth++;
 				} break;
@@ -1298,6 +1349,7 @@ public:
 					depth--;
 				} break;
 				case S_END: {
+					assert(depth == 0);
 					*out_num_locs = max_depth;
 					return;
 				} break;

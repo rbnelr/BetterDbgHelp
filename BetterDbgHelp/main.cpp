@@ -209,15 +209,15 @@ public:
 		std::function<void(char*)> fmeas = std::bind(&SymTesting::measure_addr2sym, this, _1);
 		std::function<void(char*)> ftest = std::bind(&SymTesting::test_addr2sym, this, _1);
 
-		//run_examples(fshow);
+		run_examples(fshow);
 		run_examples(ftest);
 
-		//for (int i=0; i<1000; i++) {
-		//	run_examples(fmeas);
-		//}
-		//dbghelp->print_timings();
-		//printf("---\n");
-		//resolver->print_timings();
+		for (int i=0; i<1000; i++) {
+			run_examples(fmeas);
+		}
+		dbghelp->print_timings();
+		printf("---\n");
+		resolver->print_timings();
 	}
 	void warmup (char* addr) {
 		SymResult sym = {};
@@ -228,6 +228,7 @@ public:
 
 int main(int argc, const char** argv) {
 	
+	/*
 	try {
 		SymTesting sym("Namespaces.exe", 0.5f);
 
@@ -344,6 +345,7 @@ int main(int argc, const char** argv) {
 
 	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 	//Sleep(1000);
+	*/
 
 	try {
 		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
