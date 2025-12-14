@@ -554,7 +554,7 @@ class PDB_File {
 		
 			//printf(">> symbol_information\n");
 			
-			std::vector<INLINESITESYM*> stack;
+			//std::vector<INLINESITESYM*> stack;
 			
 			while (ptr < sym_info + mi->byte_size_of_symbol_information) {
 				auto sym = (codeview_symbol_header*)ptr;
@@ -593,13 +593,19 @@ class PDB_File {
 					case S_INLINESITE: {
 						auto* inl = (INLINESITESYM*)sym;
 
-						auto* parent = stack.empty() ? nullptr : stack.back();
-						stack.push_back(inl);
-
-						if (inl->inlinee == 9623) {
-							printf("S_INLINESITE %d\n", inl->inlinee);
-						}
+						// There is a weird test case I found where both dbghelp and my code return wrong results in a different way
+						// In my case one function name in the inlinee stack is wrong, yet the source line is correct
+						// I tried hard to find a bug in my code yet all seems to point to an inlinee id simply being wrong
+						// (INLINESITE and InlineeSourceLine match correctly, but inlinee id in IPI points to wrong name, correct name is at different id)
+						// This could suggest that I misunderstnad the way IDs work, yet all the other test cases work as expected
+						// I am 99% sure that the inlinee stack I return is correct other than the single wrong function name
+						// but the interesting bit is that dbghelp actually has the inlinee stack stop at this the level where I have the wrong function name
+						// this likely means that it detects something is wrong, but I can't seem to figure out how it does that
+						// so I have to assume a bug in LLVM, ideally I could also detect this error, but afaik there is no way of checking the correct callstack other than what I'm already doing
 						
+						//auto* parent = stack.empty() ? nullptr : stack.back();
+						//stack.push_back(inl);
+
 						auto* parent_entry = (codeview_symbol_header*)(sym_info + inl->pParent);
 						auto* end_entry = (codeview_symbol_header*)(sym_info + inl->pEnd);
 						assert(parent_entry->kind == S_INLINESITE
@@ -608,9 +614,9 @@ class PDB_File {
 							|| parent_entry->kind == S_GPROC32_ID
 							|| parent_entry->kind == S_LPROC32_ID
 						);
-						if (parent_entry->kind == S_INLINESITE) {
-							assert(parent && parent == (INLINESITESYM*)parent_entry);
-						}
+						//if (parent_entry->kind == S_INLINESITE) {
+						//	assert(parent && parent == (INLINESITESYM*)parent_entry);
+						//}
 						assert(end_entry->kind == S_INLINESITE_END);
 
 						//inl->pParent // byte offs from symbol_information start of prev PROCSYM32 or INLINESITESYM, ie caller
@@ -619,9 +625,9 @@ class PDB_File {
 						// no idea what inl->binaryAnnotations is
 						//printf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, strbuf[proc_typeid2nameid[inl->inlinee]]);
 					} break;
-					case S_INLINESITE_END: {
-						stack.pop_back();
-					} break;
+					//case S_INLINESITE_END: {
+					//	stack.pop_back();
+					//} break;
 				}
 			}
 			assert((ptr - sym_info) == mi->byte_size_of_symbol_information);
@@ -729,9 +735,6 @@ class PDB_File {
 						auto* line = (InlineeSourceLine*)ptr;
 						ptr += sizeof(InlineeSourceLine);
 						
-						if (line->inlinee == 9623) {
-							printf("InlineeSourceLine %d %s:%d\n", line->inlinee, get_lineinfo_source_filepath(mod, line->fileId), line->sourceLineNum);
-						}
 						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates(line);
@@ -742,9 +745,6 @@ class PDB_File {
 						auto* line = (InlineeSourceLineEx*)ptr;
 						ptr += sizeof(InlineeSourceLineEx);
 						
-						if (line->inlinee == 9623) {
-							printf("InlineeSourceLineEx %d %s:%d\n", line->inlinee, get_lineinfo_source_filepath(mod, line->fileId), line->sourceLineNum);
-						}
 						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates((InlineeSourceLine*)line);
@@ -1338,9 +1338,9 @@ public:
 							// TODO: in theory: only if there is line info can further inlinesites have line info, which would be an optimization
 						}
 
-						printf("# ");
-						for (int i=0; i<depth; i++) printf("  ");
-						printf("INLINESITE: %8d %s\n", inl->inlinee, try_get(IPI_id2name, inl->inlinee)->c_str());
+						//printf("# ");
+						//for (int i=0; i<depth; i++) printf("  ");
+						//printf("INLINESITE: %8d %s\n", inl->inlinee, try_get(IPI_id2name, inl->inlinee)->c_str());
 					}
 					depth++;
 				} break;
