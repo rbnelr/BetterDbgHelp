@@ -221,7 +221,6 @@ public:
 		}
 	}
 	
-	uintptr_t prev_addr = 0;
 	SymResult prev_res = {};
 	SymResult prev_res_dbghelp = {};
 	
@@ -236,17 +235,16 @@ public:
 		
 		if (res != prev_res || res_dbghelp != prev_res_dbghelp) {
 			if (show) {
-				printf("SymResolver: [%llx-%llx] ", prev_addr, addr);
+				printf("SymResolver: [%llx] ", addr);
 				res.print();
 			}
 			
 			if (res != res_dbghelp) {
-				printf("!!! [%llx-%llx] (%s) Result Mismatch:\n", prev_addr, addr, res_dbghelp.sym_name);
+				printf("!!! [%llx] (%s) Result Mismatch:\n", addr, res_dbghelp.sym_name);
 				res.print_diff(res_dbghelp);
 				tests_failed = true;
 			}
 
-			prev_addr = (uintptr_t)addr;
 			prev_res = res;
 			prev_res_dbghelp = res_dbghelp;
 		}
@@ -257,10 +255,9 @@ public:
 		resolver->addr2sym((void*)addr, &res);
 		
 		if (!res.equal_no_inline(prev_res)) {
-			printf("[%llx-%llx] ", prev_addr - (uintptr_t)mod.addr, addr - (uintptr_t)mod.addr);
+			printf("[%llx] ", addr - (uintptr_t)mod.addr);
 			res.print_no_inline();
 
-			prev_addr = (uintptr_t)addr;
 			prev_res = res;
 		}
 	}
@@ -270,10 +267,9 @@ public:
 		resolver->addr2sym((void*)addr, &res);
 		
 		if (!res.equal_sym(prev_res)) {
-			printf("[%llx-%llx] ", prev_addr - (uintptr_t)mod.addr, addr - (uintptr_t)mod.addr);
+			printf("[%llx] ", addr - (uintptr_t)mod.addr);
 			res.print_sym();
 
-			prev_addr = (uintptr_t)addr;
 			prev_res = res;
 		}
 	}
@@ -349,6 +345,9 @@ void example_addresses () {
 		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
+			
+			at_addr(exe + 0x1000); // __local_stdio_printf_options line 90
+			at_addr(exe + 0x1001); // __local_stdio_printf_options line 92 (weird dbghelp behavior)
 
 			at_addr(exe + 0x21F0); // main()
 			at_addr(exe + 0x2219); // main() printf call
@@ -491,14 +490,35 @@ void example_addresses () {
 void test_entire_modules () {
 	try {
 		SymTesting sym("TinyProgram.exe", 0.5f);
+		char* exe = sym.get_addr(".exe");
+
 		sym.sweep_mod(".exe");
+
+		//sym.show_addr2sym(exe + 0x1130);
+		sym.show_addr2sym(exe + 0x13c0); // TODO: linoinfo not found by me because lineheader stores address before symbol (and first line offset is symbol)
+		// not exact start address for some dumb reason, need to lookup not per hashmap but per binary search for each module, could then merge sorted lists per module into global sorted list with one scan
 	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 
+	try {
+		SymTesting sym("Namespaces.exe", 0.5f);
+		char* exe = sym.get_addr(".exe");
+
+		sym.sweep_mod(".exe");
+
+		sym.show_addr2sym(exe + 0x1090);
+	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+
+	try {
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+		char* exe = sym.get_addr(".exe");
+
+		sym.sweep_mod(".exe");
+	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
 }
 
 int main(int argc, const char** argv) {
-	//example_addresses();
-	test_entire_modules();
+	example_addresses();
+	//test_entire_modules();
 	
 	return 0;
 }
