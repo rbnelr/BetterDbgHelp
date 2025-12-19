@@ -282,7 +282,7 @@ public:
 		std::function<void(char*)> fmeas = std::bind(&SymTesting::measure_addr2sym, this, _1);
 		std::function<void(char*)> ftest = std::bind(&SymTesting::test_addr2sym, this, _1);
 
-		run_examples(fshow);
+		//run_examples(fshow);
 		run_examples(ftest);
 
 		mismatch_counts.print();
@@ -339,16 +339,6 @@ public:
 };
 
 void example_addresses () {
-	
-	try {
-		SymTesting sym("C:/Windows/System32/notepad.exe", 0.5f);
-	
-		char* exe = sym.get_addr(".exe");
-		char* ucrtbase = sym.get_addr("ucrtbase.dll");
-		
-		//sym.warmup(exe + 0x21F0);
-		sym.warmup(ucrtbase + 0x1B370);
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
 	try {
 		SymTesting sym("TinyProgram.exe", 0.5f);
@@ -436,7 +426,7 @@ void example_addresses () {
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
 		
 		sym.warmup(exe + 0x21FA0);
-		sym.warmup(assimp + 0x23990); // assimp
+		sym.warmup(assimp + 0x23990); // assimp, no pdb! (for testing)
 		sym.warmup(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
 
 		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
@@ -463,7 +453,7 @@ void example_addresses () {
 			at_addr(exe + 0x12EDB6+8); // clac_seg lambda + inline pick + get_dir_to_node
 			at_addr(exe + 0x12EDB6+10); // clac_seg lambda + inline pick + get_dir_to_node
 	
-			at_addr(assimp + 0x23990); // assimp
+			at_addr(assimp + 0x23990); // assimp, no pdb!
 	
 			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
 		});
@@ -504,12 +494,13 @@ void example_addresses () {
 	
 }
 
-void test_entire_modules () {
+void sweep_tests () {
 	try {
 		SymTesting sym("TinyProgram.exe", 0.5f);
 		char* exe = sym.get_addr(".exe");
 
 		sym.sweep_mod(".exe");
+		sym.sweep_mod("ucrtbase.dll");
 
 		//sym.show_addr2sym(exe + 0x1130);
 		//sym.show_addr2sym(exe + 0x13c0); // TODO: linoinfo not found by me because lineheader stores address before symbol (and first line offset is symbol)
@@ -523,9 +514,17 @@ void test_entire_modules () {
 
 		sym.sweep_mod(".exe");
 
-		sym.show_addr2sym(exe + 0x1090);
+		//sym.show_addr2sym(exe + 0x1090);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
-
+	
+	try {
+		SymTesting sym("C:/Windows/System32/notepad.exe", 0.5f);
+	
+		char* exe = sym.get_addr(".exe");
+		
+		sym.sweep_mod(".exe");
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
 	try {
 		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
 		char* exe = sym.get_addr(".exe");
@@ -543,7 +542,7 @@ void test_entire_modules () {
 
 int main(int argc, const char** argv) {
 	example_addresses();
-	//test_entire_modules();
+	//sweep_tests();
 	
 	return 0;
 }

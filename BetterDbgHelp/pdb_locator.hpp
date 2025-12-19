@@ -1,85 +1,15 @@
 #pragma once
 #include "util.hpp"
 
-#include <Shlwapi.h>
-#pragma comment(lib, "Shlwapi.lib")
 #include <Urlmon.h>
 #pragma comment(lib, "Urlmon.lib")
-//#include <Wininet.h>
-//#pragma comment(lib, "Wininet.lib")
-
-// https://www.jeremyong.com/winapi/io/2024/11/03/windows-memory-mapped-file-io/
-class MemoryMappedFile {
-	HANDLE file_mapping_handle = INVALID_HANDLE_VALUE;
-	void* _data = nullptr;
-	
-	friend void swap (MemoryMappedFile& l, MemoryMappedFile& r) {
-		std::swap(l.file_mapping_handle, r.file_mapping_handle);
-		std::swap(l._data, r._data);
-	}
-	MemoryMappedFile& operator= (MemoryMappedFile& r) = delete;
-	MemoryMappedFile (MemoryMappedFile& r) = delete;
-	MemoryMappedFile& operator= (MemoryMappedFile&& r) {	swap(*this, r);	return *this; }
-	MemoryMappedFile (MemoryMappedFile&& r) {				swap(*this, r); }
-
-public:
-	void* data () { return _data; }
-
-	bool open (const char* filepath) {
-		HANDLE file_handle = CreateFileA(
-			filepath,
-			GENERIC_READ,
-			FILE_SHARE_READ,
-			nullptr,
-			OPEN_EXISTING,
-			0,
-			nullptr);
-		if (file_handle != INVALID_HANDLE_VALUE) {
-			file_mapping_handle = CreateFileMappingA(
-				file_handle,
-				nullptr,
-				PAGE_READONLY,
-				// Passing zeroes for the high and low max-size params here will allow the
-				// entire file to be mappable.
-				0,
-				0,
-				nullptr);
-
-			// We can close this now because the file mapping retains an open handle to
-			// the underlying file.
-			CloseHandle(file_handle);
-
-			if (file_mapping_handle != NULL) {
-				_data = MapViewOfFile(
-					file_mapping_handle,
-					FILE_MAP_READ,
-					0, // Offset high
-					0, // Offset low
-					// A zero here indicates we want to map the entire range.
-					0);
-
-				if (_data != NULL) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	MemoryMappedFile () {}
-	~MemoryMappedFile () {
-		if (file_mapping_handle != INVALID_HANDLE_VALUE) {
-			// When we are done, closing the file mapping handle releases the file for use
-			// by other applications.
-			UnmapViewOfFile(_data);
-			CloseHandle(file_mapping_handle);
-		}
-	}
-};
 
 // The executable (.exe or .dll) itself contains data which can be used to find the associated pdb file
 // commonly when building your own application or when sometimes when downloading application, a pdb with the same name as the exe will simply be placed next to the exe
-// TODO: explain where pdbs end up being pulled from
+// so we first look for a pdb of the same name next to the exe
+// then we look at the absolute pdb path stored inside the exe RSDS debug info, which likely is where it was built in VS
+// if neither are found, we look at %temp%/SymbolCache/<pdb_filename>/<pdb_guid><pdb_age>/<pdb_filename>, which is where symbol server pdbs get placed by VS
+// if not, try to fetch it from https://msdl.microsoft.com/download/symbols/<pdb_name>/<pdb_guid><pdb_age>/<pdb_name> and cache it inside this folder ourselves
 class PDB_Locator {
 	MemoryMappedFile file;
 	
@@ -107,17 +37,17 @@ class PDB_Locator {
 		throw std::runtime_error("");
 	}
 
-	void open_image_and_find_rsds (std::string const& filepath) {
+	void open_image_and_find_rsds (std::filesystem::path const& filepath) {
 		if (!file.open(filepath.c_str()))
-			throw std::runtime_error("File not found: "+ filepath);
+			throw std::runtime_error("File not found: "+ filepath.u8string());
 
 		dos_header = (IMAGE_DOS_HEADER*)file.data();
 		if (dos_header->e_magic != 0x5A4D) // MZ
-			throw std::runtime_error("Error parsing image: "+ filepath);
+			throw std::runtime_error("Error parsing image: "+ filepath.u8string());
 		
 		nt_header = (IMAGE_NT_HEADERS*)((char*)file.data() + dos_header->e_lfanew);
 		if (nt_header->Signature != 0x00004550) // PE\0\0
-			throw std::runtime_error("Error parsing image: "+ filepath);
+			throw std::runtime_error("Error parsing image: "+ filepath.u8string());
 		
 		section_headers = (IMAGE_SECTION_HEADER*)((char*)file.data() + dos_header->e_lfanew + sizeof(IMAGE_NT_HEADERS));
 
@@ -130,62 +60,74 @@ class PDB_Locator {
 			if (d.Type == IMAGE_DEBUG_TYPE_CODEVIEW) {
 				rsds = (RSDSI*)((char*)file.data() + d.PointerToRawData);
 				if (rsds->dwSig != 0x53445352) // "RSDS"
-					throw std::runtime_error("Error parsing image: "+ filepath);
+					throw std::runtime_error("Error parsing image: "+ filepath.u8string());
 
 				return;
 			}
 		}
 	}
 	
-	std::filesystem::path exe_path;
+	std::filesystem::path const& exe_path;
 	std::filesystem::path pdb_path_in_exe;
-	std::string guid_age_str;
 	
-	std::string symbol_server_url;
+	std::wstring symbol_server_url;
 	std::filesystem::path cache_path;
 
-	std::string get_guid_age_str () {
+	void parse_rsds () {
 		auto& guid = rsds->guidSig;
 
-		char guid_age_str[128];
+		wchar_t guid_age_str[128];
 		// guid in hex + age (is this also hex?)
-		sprintf_s(guid_age_str, "%08X%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X%X",
+		swprintf(guid_age_str, 128, L"%08X%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X%X",
 			guid.Data1, guid.Data2, guid.Data3,
 			guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3],
 			guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7],
 			rsds->age);
+		
+		pdb_path_in_exe = std::string( (const char*)rsds->pdb_name );
+		auto pdb_name = pdb_path_in_exe.filename().wstring();
 
-		return guid_age_str;
+		symbol_server_url = get_symbol_server_url(guid_age_str, pdb_name);
+		cache_path = get_cache_path(guid_age_str, pdb_name);
 	}
 	
-	std::string get_symbol_server_url () {
-		auto pdb_name = pdb_path_in_exe.filename().u8string();
-
-		return "https://msdl.microsoft.com/download/symbols/"+ pdb_name +"/"+ guid_age_str +"/"+ pdb_name;
+	std::wstring get_symbol_server_url (const wchar_t* guid_age_str, std::wstring const& pdb_name) {
+		return std::wstring(L"https://msdl.microsoft.com/download/symbols/")+ pdb_name +L"/"+ guid_age_str +L"/"+ pdb_name;
 	}
-	std::filesystem::path get_cache_path () {
-		auto pdb_name = pdb_path_in_exe.filename().u8string();
+	std::filesystem::path get_cache_path (const wchar_t* guid_age_str, std::wstring const& pdb_name) {
 		// hardcode cache temp, I'm not sure if there's a more correct way to come up with this
 		// supposedly the _NT_SYMBOL_PATH env var exists, but apparently that's not what Visual Studio used, so screw that
 
 		// This cache often will contain no pdb at this path, but another subfolder called "stripped" which contains the file, presumably with just some functions names left in
-		auto path = std::filesystem::temp_directory_path() / "SymbolCache" / pdb_name / guid_age_str / pdb_name;
-		return path;
+		// I don't know I need to somehow respect that or not
+		return std::filesystem::temp_directory_path() / "SymbolCache" / pdb_name / guid_age_str / pdb_name;
 	}
 
 	std::filesystem::path try_downloading_pdb_if_not_in_cache () {
 		if (std::filesystem::exists(cache_path)) {
 			return cache_path;
 		}
+		
+		// Abuse URLOpenBlockingStreamW to avoid creating empty directories when no file can actually be downloaded
+		// Ideally I'd use the blocking stream to actually write the file out myself, but I don't want to incur overhead from manually doing writing out in chunks
+		// (maybe URLDownloadToFileW could be faster? It's simpler for me at least)
+		IStream* stream = nullptr;
+		HRESULT hr = URLOpenBlockingStreamW(NULL, symbol_server_url.c_str(), &stream, 0, NULL);
+		if (stream) stream->Release();
+		if (hr == S_OK) {
+			std::filesystem::create_directories(cache_path.parent_path());
 
-		std::filesystem::create_directories(cache_path.parent_path());
-
-		if (URLDownloadToFileA(NULL, symbol_server_url.c_str(), cache_path.u8string().c_str(), 0, NULL) == S_OK) {
-			return cache_path;
+			if (URLDownloadToFileW(NULL, symbol_server_url.c_str(), cache_path.c_str(), 0, NULL) == S_OK) {
+				return cache_path;
+			}
 		}
-		print_err("URLDownloadToFileA");
+		
+		// fail, return empty path
+		return {};
 
 		// Alternative:
+		//#include <Wininet.h>
+		//#pragma comment(lib, "Wininet.lib")
 		//auto hInternet = InternetOpenA("SymbolServerDownload", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 		//if (!hInternet) {
 		//	print_err("SymbolServerDownload");
@@ -205,33 +147,18 @@ class PDB_Locator {
 		//
 		//InternetCloseHandle(hConnect);
 		//InternetCloseHandle(hInternet);
-
-		logf("Could not download %s!\n", cache_path.u8string().c_str());
-		return {};
 	}
 
 public:
-	PDB_Locator (std::string const& filepath) {
-		exe_path = filepath;
-
-		open_image_and_find_rsds(filepath);
-
-		pdb_path_in_exe = std::string( (const char*)rsds->pdb_name );
-		guid_age_str = get_guid_age_str();
-
-		symbol_server_url = get_symbol_server_url();
-		cache_path = get_cache_path();
+	PDB_Locator (std::filesystem::path const& filepath): exe_path{filepath} {
+		open_image_and_find_rsds(exe_path);
+		parse_rsds();
 
 		//printf(">> %s ->\n>>> symbol_server_url: %s\n>>> cache_path: %s\n", filepath.c_str(), symbol_server_url.c_str(), cache_path.u8string().c_str());
 	}
 
 	std::filesystem::path get_pdb_path () {
-		if (pdb_path_in_exe.is_absolute()) {
-			if (std::filesystem::exists(pdb_path_in_exe)) {
-				return pdb_path_in_exe;
-			}
-		}
-		
+		// prefer pdb next to exe
 		{
 			std::filesystem::path pdb_path = exe_path;
 			pdb_path.replace_extension({".pdb"});
@@ -241,6 +168,14 @@ public:
 			}
 		}
 
+		// look for pdb at absolute path if exe contains abolute path
+		if (pdb_path_in_exe.is_absolute()) {
+			if (std::filesystem::exists(pdb_path_in_exe)) {
+				return pdb_path_in_exe;
+			}
+		}
+		
+		// else look for file via MS symbol servers (or cached files)
 		auto cached_pdb_path = try_downloading_pdb_if_not_in_cache();
 		if (!cached_pdb_path.empty()) {
 			return cached_pdb_path;
@@ -248,4 +183,8 @@ public:
 
 		throw std::runtime_error("Cannot locate pdb for: "+ exe_path.u8string());
 	}
+
+	//bool verify_pdb_ () {
+	//
+	//}
 };

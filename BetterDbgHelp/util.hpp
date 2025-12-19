@@ -99,3 +99,72 @@ inline bool load_file (std::string const& filepath, std::vector<char>* out_data)
 	*out_data = std::move(buffer);
 	return true;
 }
+
+// https://www.jeremyong.com/winapi/io/2024/11/03/windows-memory-mapped-file-io/
+class MemoryMappedFile {
+	HANDLE file_mapping_handle = INVALID_HANDLE_VALUE;
+	void* _data = nullptr;
+	
+	friend void swap (MemoryMappedFile& l, MemoryMappedFile& r) {
+		std::swap(l.file_mapping_handle, r.file_mapping_handle);
+		std::swap(l._data, r._data);
+	}
+	MemoryMappedFile& operator= (MemoryMappedFile& r) = delete;
+	MemoryMappedFile (MemoryMappedFile& r) = delete;
+	MemoryMappedFile& operator= (MemoryMappedFile&& r) {	swap(*this, r);	return *this; }
+	MemoryMappedFile (MemoryMappedFile&& r) {				swap(*this, r); }
+
+public:
+	void* data () { return _data; }
+
+	bool open (std::filesystem::path const& filepath) {
+		HANDLE file_handle = CreateFileW(
+			filepath.c_str(),
+			GENERIC_READ,
+			FILE_SHARE_READ,
+			nullptr,
+			OPEN_EXISTING,
+			0,
+			nullptr);
+		if (file_handle != INVALID_HANDLE_VALUE) {
+			file_mapping_handle = CreateFileMappingW(
+				file_handle,
+				nullptr,
+				PAGE_READONLY,
+				// Passing zeroes for the high and low max-size params here will allow the
+				// entire file to be mappable.
+				0,
+				0,
+				nullptr);
+
+			// We can close this now because the file mapping retains an open handle to
+			// the underlying file.
+			CloseHandle(file_handle);
+
+			if (file_mapping_handle != NULL) {
+				_data = MapViewOfFile(
+					file_mapping_handle,
+					FILE_MAP_READ,
+					0, // Offset high
+					0, // Offset low
+					// A zero here indicates we want to map the entire range.
+					0);
+
+				if (_data != NULL) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	MemoryMappedFile () {}
+	~MemoryMappedFile () {
+		if (file_mapping_handle != INVALID_HANDLE_VALUE) {
+			// When we are done, closing the file mapping handle releases the file for use
+			// by other applications.
+			UnmapViewOfFile(_data);
+			CloseHandle(file_mapping_handle);
+		}
+	}
+};

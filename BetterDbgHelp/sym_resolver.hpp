@@ -340,7 +340,7 @@ public:
 			return false;
 		}
 		
-		res->module_path = mod->path.c_str();
+		res->module_path = mod->ansi_path.c_str();
 		res->sym_name = sym->name.data();
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;
@@ -400,7 +400,7 @@ public:
 			return false;
 		}
 		
-		res->module_path = mod->path.c_str();
+		res->module_path = mod->ansi_path.c_str();
 		res->sym_name = sym->name.c_str();
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;

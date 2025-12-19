@@ -6,15 +6,17 @@
 #pragma comment(lib, "Kernel32.lib")
 
 struct LoadedModule {
-	std::string path;
+	std::filesystem::path path;
+	std::string ansi_path;
 
 	uintptr_t base_addr;
 	size_t size;
 
 	std::unique_ptr<PDB_File> pdb;
 
-	LoadedModule (std::string&& path, uintptr_t base_addr, size_t size) {
+	LoadedModule (std::filesystem::path&& path, uintptr_t base_addr, size_t size) {
 		this->path = std::move(path);
+		ansi_path = this->path.u8string();
 		this->base_addr = base_addr;
 		this->size = size;
 	}
@@ -22,7 +24,7 @@ struct LoadedModule {
 		ZoneScoped;
 
 		PDB_Locator locator(path);
-		pdb = PDB_File::try_load_pdb(locator.get_pdb_path().u8string());
+		pdb = PDB_File::try_load_pdb(locator.get_pdb_path());
 	}
 };
 struct ModuleCache {
@@ -49,6 +51,7 @@ struct ModuleCache {
 	const LoadedModule* find_module_for_addr (HANDLE inspectee, uintptr_t addr) {
 		ZoneScoped;
 
+		// Linear search shoule be enough
 		for (auto& m : sorted) {
 			if (addr >= m.base_addr && addr < m.base_addr + m.size) {
 				return &m;
@@ -80,10 +83,11 @@ struct ModuleCache {
 					auto base = (uintptr_t)info.lpBaseOfDll;
 					auto size = (size_t)info.SizeOfImage;
 					if (addr >= base && addr < base + size) {
-						char name[1024];
-						auto nameLength = GetModuleFileNameExA(inspectee, mod, name, sizeof(name));
+						wchar_t name[1024];
+						auto nameLength = GetModuleFileNameExW(inspectee, mod, name, sizeof(name));
 						if (nameLength > 0) {
-							loaded = cache(LoadedModule(std::string(name, nameLength), base, size));
+							auto path = std::wstring_view(name, nameLength);
+							loaded = cache(LoadedModule(std::filesystem::path(path), base, size));
 							break;
 						}
 					}

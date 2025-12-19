@@ -1055,7 +1055,7 @@ class PDB_File {
 	}
 
 public:
-	static std::unique_ptr<PDB_File> try_load_pdb (std::string const& path) {
+	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& path) {
 		try {
 			return std::make_unique<PDB_File>(path);
 		} catch (std::exception&) {
@@ -1063,14 +1063,12 @@ public:
 		}
 		return nullptr;
 	}
-	PDB_File (std::string const& path) {
+	PDB_File (std::filesystem::path const& path) {
 		// TODO: Use memory mapped file as this allows avoiding to load any pages not accessed (pdb pages are same size as ram pages)
 		// do memory mapped files allows the os to evict pages, so can it be used to read files without permanently consuming ram?
-		if (!load_file(path, &data)) {
-			throw std::runtime_error("File not found: "+ path);
+		if (!load_file(path.u8string(), &data)) {
+			throw std::runtime_error("File not found: "+ path.u8string());
 		}
-
-		logf("%s data loaded\n", path.c_str());
 		
 		read_header();
 		read_stream_table();
@@ -1092,7 +1090,7 @@ public:
 		sort_symbols(sym_sorted);
 		sort_symbols(sym_unfiltered);
 
-		logf("PDB read.\n");
+		//logf("PDB read.\n");
 	}
 	
 	struct Module {
