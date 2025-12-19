@@ -16,8 +16,100 @@ struct SourceLocAndFn {
 	uint32_t    lineno = 0;
 };
 
-// PDBs are assumed to be next to exe of the same name for the moment
-// PDBs of microsoft dlls are not gotten yet (which dbghelp.dll does somehow)
+typedef uint32_t sid; // Strbuf index
+struct StrAlloc {
+	std::vector<char> buf;
+
+	StrAlloc () {
+		buf.reserve(1024*8);
+	}
+
+	const char* operator[] (u32 offset) {
+		return buf.data() + offset;
+	}
+	
+	static_assert(sizeof(sid) == sizeof(uint32_t));
+	sid _grow (size_t len) {
+		auto offset = buf.size();
+		buf.resize(offset + len);
+		
+		if (offset > 0xffffffff) {
+			assert(false);
+		}
+		return (sid)offset;
+	}
+	sid push (const char* str, size_t len) {
+		sid offset = _grow(len+1);
+		memcpy(buf.data()+offset, str, len+1);
+		return offset;
+	}
+	sid push (const char* str) {
+		return push(str, strlen(str));
+	}
+
+	sid push_concat (const char* a, const char* b, const char* c) {
+		auto la = strlen(a);
+		auto lb = strlen(b);
+		auto lc = strlen(c);
+		
+		sid offset = _grow(la+lb+lc+1);
+		auto* cur = buf.data() + offset;
+
+		memcpy(cur, a, la); cur += la;
+		memcpy(cur, b, lb); cur += lb;
+		memcpy(cur, c, lc+1);
+
+		return offset;
+	}
+
+	/*
+	u32 vpushf (char const* format, va_list vl) {
+		size_t offset = buf.size();
+		size_t reserve = 3;
+		buf.push_back(reserve);
+	
+		auto ret = vsnlogf(buf.data() + offset, reserve, format, vl);
+		ret = ret >= 0 ? ret : 0;
+		bool was_big_enough = (size_t)ret < (reserve-1);
+		buf.resize(offset + ret + 1);
+		if (!was_big_enough) {
+			// buffer was too small, buffer size was increased
+			// now snlogf has to succeed, so call it again
+			auto ret2 = vsnlogf(buf.data() + offset, ret + 1, format, vl);
+			assert(ret2 <= ret);
+		}
+		if (offset > 0xffffffff) {
+			assert(false);
+		}
+		return (u32)offset;
+	}
+	
+	u32 pushf (char const* format, ...) {
+		va_list vl;
+		va_start(vl, format);
+	
+		auto ptr = vpushf(format, vl);
+	
+		va_end(vl);
+		return ptr;
+	}
+	*/
+};
+
+struct Symbol {
+	uintptr_t base_addr = 0; // relative to module
+	uint32_t size = 0;
+	sid name;
+	
+	PROCSYM32* procsym = nullptr; // needed for scanning INLINESITEs later
+
+	codeview_subsection_header* src_subsec = nullptr;
+	int32_t src_offset = 0; // sometimes lineinfo has different start offset than symbol, sym base_addr = codeview_line.offset + offset
+	
+	s16 module_index = -1;
+
+	bool src_valid () const { return src_subsec != nullptr; }
+};
 
 class PDB_File {
 	MemoryMappedFile file;
@@ -69,7 +161,7 @@ class PDB_File {
 	std::vector<char> section_header_dump_data;
 	std::vector<char> symbol_record_stream_data;
 
-	pdb_information_stream_header* info;
+	//pdb_information_stream_header* info;
 
 	std::unordered_map<std::string_view, u32> named_streams;
 
@@ -78,77 +170,10 @@ class PDB_File {
 
 	optional_debug_header_substream* opt_streams;
 
-	// TODO: profile and possibly use indices into string buffer (or on demand string buffer vs pointer into complete string in pdb?)
-	// Struct, Class and Union names from TPI
-	std::unordered_map<CV_typ_t, std::string> typeid2name;
+	// Struct, Class and Union names from TPI, these are already fully formatted
+	std::unordered_map<CV_typ_t, const char*> typeid2name;
 	// Func and MemberFunc names from IPI (IDs will overlap with typeid2name!)
-	std::unordered_map<CV_ItemId, std::string> IPI_id2name;
-
-	/*
-	struct Strbuf {
-		std::vector<char> buf;
-
-		Strbuf () {
-			buf.reserve(1024*8);
-		}
-
-		const char* operator[] (u32 offset) {
-			return buf.data() + offset;
-		}
-		
-		u32 push (const char* str, size_t len) {
-			auto offset = buf.size();
-			buf.insert(buf.begin()+offset, str, str+len+1);
-
-			if (offset > 0xffffffff) {
-				assert(false);
-			}
-			return (u32)offset;
-		}
-		u32 push (const char* str) {
-			return push(str, strlen(str));
-		}
-
-		u32 push_concat (const char* a, const char* b, const char* c) {
-			auto offs = push(a, strlen(a)-1);
-			push(b, strlen(b)-1);
-			push(c, strlen(c));
-			return offs;
-		}
-
-		//u32 vpushf (char const* format, va_list vl) {
-		//	size_t offset = buf.size();
-		//	size_t reserve = 3;
-		//	buf.push_back(reserve);
-		//
-		//	auto ret = vsnlogf(buf.data() + offset, reserve, format, vl);
-		//	ret = ret >= 0 ? ret : 0;
-		//	bool was_big_enough = (size_t)ret < (reserve-1);
-		//	buf.resize(offset + ret + 1);
-		//	if (!was_big_enough) {
-		//		// buffer was too small, buffer size was increased
-		//		// now snlogf has to succeed, so call it again
-		//		auto ret2 = vsnlogf(buf.data() + offset, ret + 1, format, vl);
-		//		assert(ret2 <= ret);
-		//	}
-		//	if (offset > 0xffffffff) {
-		//		assert(false);
-		//	}
-		//	return (u32)offset;
-		//}
-		//
-		//u32 pushf (char const* format, ...) {
-		//	va_list vl;
-		//	va_start(vl, format);
-		//
-		//	auto ptr = vpushf(format, vl);
-		//
-		//	va_end(vl);
-		//	return ptr;
-		//}
-	};
-	Strbuf strbuf;
-	*/
+	std::unordered_map<CV_ItemId, sid> IPI_id2name;
 
 	//// Final needed data
 	struct Section {
@@ -196,6 +221,8 @@ class PDB_File {
 		u32 cur = 0;
 		u32 amount_of_streams = *(u32*)read_sts(cur);
 		cur += sizeof(u32);
+
+		streams.reserve(amount_of_streams);
 		
 		while (streams.size() < amount_of_streams) {
 			u32 stream_size = *(u32*)read_sts(cur);
@@ -238,7 +265,7 @@ class PDB_File {
 		pdb_info_data = copy_into_consecutive(1);
 		char* ptr = pdb_info_data.data();
 
-		info = (pdb_information_stream_header*)ptr;
+		auto* info = (pdb_information_stream_header*)ptr;
 		ptr += sizeof(pdb_information_stream_header);
 
 		// read named stream hashmap
@@ -274,6 +301,8 @@ class PDB_File {
 
 		// unused
 		ptr += sizeof(u32);
+
+		named_streams.reserve(32);
 		
 		//logf("Named Streams:\n");
 		for(u32 index = 0, entry_index = 0; index < capacity && entry_index < amount_of_entries; index++){
@@ -337,7 +366,6 @@ class PDB_File {
 		//// module_information_substream
 		auto* ptr2 = ptr;
 
-		modules.reserve(64);
 		while (ptr < ptr2+header->byte_size_of_the_module_information_substream) {
 			auto* mi = (pdb_module_information*)ptr;
 			ptr += sizeof(pdb_module_information);
@@ -476,15 +504,15 @@ class PDB_File {
 	// Turns "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@4_KA" into "_OptionsStorage"
 	// like dbghelp does (it does this even without SYMOPT_UNDNAME, ie demangling)
 	// dbghelp seems to only process "?..." not "??..." names
-	std::string trim_mangled_name (const char* name) {
+	sid trim_mangled_name (const char* name) {
 		if (name[0] == '?' && name[1] != '?') {
 			const char* begin = name + 1;
 			const char* end = strchr(begin, '@');
 			if (end) {
-				return std::string(begin, end - begin);
+				return stralloc.push(begin, end - begin);
 			}
 		}
-		return std::string(name);
+		return stralloc.push(name);
 	}
 
 	void read_symbol_record_stream () {
@@ -494,7 +522,7 @@ class PDB_File {
 
 		char* ptr2 = ptr;
 
-		auto push_symbol = [&] (u32 offs, u32 size, u16 seg, const char* name) {
+		auto push_symbol = [this] (u32 offs, u32 size, u16 seg, const char* name) [[msvc::forceinline]] {
 			uintptr_t seg_addr = 0;
 			if (seg > 0) {
 				if (seg > sections_sorted.size()) {
@@ -649,7 +677,7 @@ class PDB_File {
 						Symbol s;
 						s.base_addr = module_raddr;
 						s.size = proc->len;
-						s.name = std::string( (const char*)proc->name );
+						s.name = stralloc.push( (const char*)proc->name );
 						s.procsym = proc;
 						s.module_index = module_index;
 
@@ -708,7 +736,7 @@ class PDB_File {
 						//inl->pEnd // byte offs of INLINESITE_END
 						// inl->inlinee seems to be some kind of id that lets us look up line info, but not sure where that is and if that lineinfo is encoded horribly
 						// no idea what inl->binaryAnnotations is
-						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, strbuf[proc_typeid2nameid[inl->inlinee]]);
+						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, stralloc[proc_typeid2nameid[inl->inlinee]]);
 					} break;
 					//case S_INLINESITE_END: {
 					//	stack.pop_back();
@@ -783,14 +811,12 @@ class PDB_File {
 				assert((ptr - ptr3) == subsec->length);
 
 				// TODO handle mutliple blocks by storing pointer to codeview_subsection_header instead and later walking the blocks
-				if (sym && !sym->src.valid()) {
+				if (sym && !sym->src_valid()) {
 					//assert(module_raddr == sym->base_addr); // lines section contribtion offset need to be procedure symbol offset
 
 					auto offset = (intptr_t)sym->base_addr - (intptr_t)module_raddr;
-					sym->src = Symbol::SrcLines {
-						subsec,
-						(int32_t)offset,
-					};
+					sym->src_subsec = subsec;
+					sym->src_offset = (int32_t)offset;
 				}
 			};
 			auto read_inlinee_line_numbers = [&] (codeview_subsection_header* subsec) {
@@ -893,30 +919,28 @@ class PDB_File {
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
 			
 			assert(id < header->one_past_last_type_index);
+			
+			auto push_symbol = [this, id] (unsigned char* data) -> const char* [[msvc::forceinline]] {
+				ulong size = 0;
+				size_t dcb = CbExtractNumeric(data, &size);
+				auto* name = (const char *)data + dcb;
+
+				assert(typeid2name.find(id) == typeid2name.end());
+				typeid2name.emplace(id, name);
+
+				return name;
+			};
 
 			switch (lf->kind) {
 				case LF_STRUCTURE:
 				case LF_CLASS: {
 					auto* struc = (lfClass*)lf;
-
-					ulong size = 0;
-					size_t dcb = CbExtractNumeric(struc->data, &size);
-					auto* name = (const char *)struc->data + dcb;
-
+					auto* name = push_symbol(struc->data);
 					//logf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
-					assert(typeid2name.find(id) == typeid2name.end());
-					typeid2name.emplace(id, name);
 				} break;
 				case LF_UNION: {
 					auto* struc = (lfUnion*)lf;
-
-					ulong size = 0;
-					size_t dcb = CbExtractNumeric(struc->data, &size);
-					auto* name = (const char *)struc->data + dcb;
-
-					//logf(">> lfClass: [%4x]: %s\n", id, name);
-					assert(typeid2name.find(id) == typeid2name.end());
-					typeid2name.emplace(id, name);
+					auto* name = push_symbol(struc->data);
 				} break;
 				//case LF_PROCEDURE: {
 				//	auto* proc = (lfProc*)lf;
@@ -945,6 +969,7 @@ class PDB_File {
 		// LF_STRING_ID is what lfFuncId.scopeId points to
 		// do a pass first, TODO: LF_STRING_ID internally rely on only pointing to earlier entires, so this likely holds for following lfFuncId as well
 		std::unordered_map<u32, std::string> stringids;
+		stringids.reserve(1024);
 		
 		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
 			auto* lf = (codeview_type_record_header*)ptr;
@@ -1015,15 +1040,15 @@ class PDB_File {
 						auto* scope_name = try_get(stringids, func->scopeId);
 						assert(scope_name);
 						if (scope_name) {
-							auto formatted_strid = *scope_name + "::" + (const char*)func->name;
+							auto formatted_strid = stralloc.push_concat(scope_name->c_str(), "::", (const char*)func->name);
 
 							assert(IPI_id2name.find(id) == IPI_id2name.end());
-							IPI_id2name.emplace(id, std::move(formatted_strid));
+							IPI_id2name.emplace(id, formatted_strid);
 						}
 					}
 					else {
 						assert(IPI_id2name.find(id) == IPI_id2name.end());
-						IPI_id2name.emplace(id, std::string((const char*)func->name));
+						IPI_id2name.emplace(id, stralloc.push((const char*)func->name));
 					}
 
 					//if (strcmp((const char*)func->name, "from_axis_angle")==0) {
@@ -1037,10 +1062,10 @@ class PDB_File {
 					assert(parent_name);
 					if (parent_name) {
 						//logf(">> lfMFuncId: [%4x]=%s::%s\n", id, parent_name->c_str(), (const char*)func->name);
-						auto formatted_strid = *parent_name + "::" + (const char*)func->name;
+						auto formatted_strid = stralloc.push_concat(*parent_name, "::", (const char*)func->name);
 						
 						assert(IPI_id2name.find(id) == IPI_id2name.end());
-						IPI_id2name.emplace(id, std::move(formatted_strid));
+						IPI_id2name.emplace(id, formatted_strid);
 					}
 					
 					//if (strcmp((const char*)func->name, "from_axis_angle")==0) {
@@ -1055,42 +1080,9 @@ class PDB_File {
 	}
 
 public:
-	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& path) {
-		try {
-			return std::make_unique<PDB_File>(path);
-		} catch (std::exception&) {
-			//flogf(stderr, "PDB loading exception: %s\n", ex.what());
-		}
-		return nullptr;
-	}
-	PDB_File (std::filesystem::path const& path) {
-		if (!file.open(path)) {
-			throw std::runtime_error("File not found: "+ path.u8string());
-		}
-		
-		read_header();
-		read_stream_table();
-		read_pdb_info();
-		read_names();
-		read_TPI_stream();
-		read_IPI_stream();
-		read_DBI();
-		
-		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
-		read_section_header_dump();
+	StrAlloc stralloc;
+private:
 
-		read_symbol_record_stream();
-
-		for (s16 module_index=0; module_index<(s16)modules.size(); module_index++) {
-			read_module_symbol_stream(module_index);
-		}
-		
-		sort_symbols(sym_sorted);
-		sort_symbols(sym_unfiltered);
-
-		//logf("PDB read.\n");
-	}
-	
 	struct Module {
 		pdb_module_information* mi;
 		std::string_view name;
@@ -1119,23 +1111,7 @@ public:
 		auto* name = &names[cksm->offset_in_string_table];
 		return name;
 	}
-
-	struct Symbol {
-		uintptr_t base_addr = 0; // relative to module
-		size_t size = 0;
-		std::string name;
-		
-		s16 module_index = -1;
-		PROCSYM32* procsym = nullptr; // needed for scanning INLINESITEs later
-
-		struct SrcLines {
-			codeview_subsection_header* subsec = nullptr;
-			int32_t offset = 0; // sometimes lineinfo has different start offset than symbol, sym base_addr = codeview_line.offset + offset
-
-			bool valid () const { return subsec != nullptr; }
-		};
-		SrcLines src;
-	};
+	
 	std::vector<Symbol> sym_sorted;
 
 	std::vector<Symbol> sym_unfiltered; // to support has_symbol_for_addr
@@ -1159,6 +1135,57 @@ public:
 		//	}
 		//}
 	}
+	
+	void _reserve () {
+		modules.reserve(256);
+		sections_sorted.reserve(32);
+
+		typeid2name.reserve(4096);
+		IPI_id2name.reserve(4096);
+
+		sym_sorted.reserve(4096);
+		sym_unfiltered.reserve(4096);
+	}
+public:
+	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& path) {
+		try {
+			return std::make_unique<PDB_File>(path);
+		} catch (std::exception&) {
+			//flogf(stderr, "PDB loading exception: %s\n", ex.what());
+		}
+		return nullptr;
+	}
+	PDB_File (std::filesystem::path const& path) {
+		if (!file.open(path)) {
+			throw std::runtime_error("File not found: "+ path.u8string());
+		}
+
+		_reserve();
+		
+		read_header();
+		read_stream_table();
+		read_pdb_info();
+		read_names();
+		read_TPI_stream();
+		read_IPI_stream();
+		read_DBI();
+		
+		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
+		read_section_header_dump();
+
+		read_symbol_record_stream();
+
+		for (s16 module_index=0; module_index<(s16)modules.size(); module_index++) {
+			read_module_symbol_stream(module_index);
+		}
+		
+		sort_symbols(sym_sorted);
+		sort_symbols(sym_unfiltered);
+
+		//logf("PDB read.\n");
+	}
+
+
 	Symbol* find_symbol_for_addr (uintptr_t addr) {
 		// TODO: This comment is confusing, also in case of multiple symbols with same offset, which one do we return (last?)
 		// This seems to work currently, but should take another look at this
@@ -1217,7 +1244,7 @@ public:
 		// but ignore ones in the global symbol_record_stream, as they contain mangled version of the symbol without size, but we sometimes want those if there is no real symbol
 		// like __ImageBase
 		for (Symbol* cur=&*it; cur >= sym_sorted.data() && cur->base_addr == sym_addr; --cur) {
-			if (cur->name.compare(name)==0) {
+			if (strcmp(stralloc[cur->name], name)==0) {
 				return cur;
 			}
 		}
@@ -1231,12 +1258,12 @@ public:
 			// past symbol address range, no valid line number
 			return false;
 		}
-		if (!sym || !sym->src.valid()) {
+		if (!sym || !sym->src_valid()) {
 			return false;
 		}
 
 		// handle case where line info is before symbol range but still overlaps
-		proc_raddr += sym->src.offset;
+		proc_raddr += sym->src_offset;
 
 		// codeview_lines seems to be sorted by offset, ie code address relative to start of function
 		// there is only offset, no size, so I assume any addresses between this offset and the next belong to the line as well
@@ -1254,7 +1281,7 @@ public:
 		// SymGetLineFromAddr64(function+5) => Lino:92
 		// SymGetLineFromAddr64(function+7) => Lino:99
 
-		auto* ptr = (char*)sym->src.subsec + sizeof(codeview_subsection_header);
+		auto* ptr = (char*)sym->src_subsec + sizeof(codeview_subsection_header);
 
 		auto* header = (codeview_line_header*)ptr;
 		ptr += sizeof(codeview_line_header);
@@ -1276,7 +1303,7 @@ public:
 			}
 		};
 
-		while (ptr < (char*)header + sym->src.subsec->length) {
+		while (ptr < (char*)header + sym->src_subsec->length) {
 			auto* line_block = (codeview_line_block_header*)ptr;
 			ptr += sizeof(codeview_line_block_header);
 
@@ -1480,7 +1507,7 @@ public:
 						auto* name = try_get(IPI_id2name, inl->inlinee);
 						assert(name);
 						if (name) {
-							out_locs[depth].fnname = name->c_str();
+							out_locs[depth].fnname = stralloc[*name];
 						}
 						else {
 							out_locs[depth].fnname = "[unknown]";

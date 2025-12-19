@@ -341,7 +341,7 @@ public:
 		}
 		
 		res->module_path = mod->ansi_path.c_str();
-		res->sym_name = sym->name.data();
+		res->sym_name = mod->pdb->stralloc[sym->name];
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;
 
@@ -406,7 +406,7 @@ public:
 		}
 		
 		res->module_path = mod->ansi_path.c_str();
-		res->sym_name = sym->name.c_str();
+		res->sym_name = mod->pdb->stralloc[sym->name];
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;
 
