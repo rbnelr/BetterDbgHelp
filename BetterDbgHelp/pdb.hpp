@@ -20,10 +20,10 @@ struct SourceLocAndFn {
 // PDBs of microsoft dlls are not gotten yet (which dbghelp.dll does somehow)
 
 class PDB_File {
-	std::vector<char> data;
+	MemoryMappedFile file;
 	
 	void* get_page (u32 idx) {
-		return (char*)data.data() + idx * header->page_size;
+		return (char*)file.data() + idx * header->page_size;
 	}
 	u32 ceil_div (u32 a, u32 b) {
 		return (a + (b-1)) / b;
@@ -184,7 +184,7 @@ class PDB_File {
 	}
 	
 	void read_header () {
-		header = (msf_header*)data.data();
+		header = (msf_header*)file.data();
 		assert(strncmp((const char*)header->signature, "Microsoft C/C++ MSF 7.00\r\n\032DS\0\0\0", 32) == 0);
 	}
 	void read_stream_table () {
@@ -1064,9 +1064,7 @@ public:
 		return nullptr;
 	}
 	PDB_File (std::filesystem::path const& path) {
-		// TODO: Use memory mapped file as this allows avoiding to load any pages not accessed (pdb pages are same size as ram pages)
-		// do memory mapped files allows the os to evict pages, so can it be used to read files without permanently consuming ram?
-		if (!load_file(path.u8string(), &data)) {
+		if (!file.open(path)) {
 			throw std::runtime_error("File not found: "+ path.u8string());
 		}
 		

@@ -632,7 +632,7 @@ void profiling_fuzz () {
 		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
 		char* exe = sym.get_addr(".exe");
 
-		sym.fuzz_mod_measure(".exe", 50000, 5);
+		sym.fuzz_mod_measure(".exe", 10000, 5);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
@@ -645,7 +645,7 @@ void profiling_run () {
 }
 
 int main(int argc, const char** argv) {
-	//example_addresses();
+	//example_addresses(true, false);
 	//sweep_tests();
 	profiling_run();
 
