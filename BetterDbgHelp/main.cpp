@@ -194,6 +194,11 @@ public:
 		return (char*)loaded_modules.find(filter).addr;
 	}
 
+	void measure_pdb_parse (char* addr) {
+		//dbghelp->measure_addr2sym(addr);
+		resolver->measure_pdb_parse(addr);
+	}
+
 	void show_addr2sym (char* addr) {
 		SymResult res={}, res_dbghelp={};
 
@@ -276,24 +281,26 @@ public:
 	}
 
 	template <typename FUNC>
-	void run_examples_addresses (FUNC run_examples) {
+	void run_examples_addresses (bool show, bool test, int meas_count, FUNC run_examples) {
 		using std::placeholders::_1;
 		std::function<void(char*)> fshow = std::bind(&SymTesting::show_addr2sym, this, _1);
 		std::function<void(char*)> fmeas = std::bind(&SymTesting::measure_addr2sym, this, _1);
 		std::function<void(char*)> ftest = std::bind(&SymTesting::test_addr2sym, this, _1);
 
-		//run_examples(fshow);
-		run_examples(ftest);
+		if (show) run_examples(fshow);
+		if (test) run_examples(ftest);
 
 		mismatch_counts.print();
 
-		for (int i=0; i<1000; i++) {
+		for (int i=0; i<meas_count; i++) {
 			run_examples(fmeas);
 		}
 		dbghelp->print_timings();
 		logf("---\n");
 		resolver->print_timings();
 	}
+
+	// try to exclude pdb parsing from measurement
 	void warmup (char* addr) {
 		SymResult sym = {};
 		dbghelp->addr2sym(addr, &sym);
@@ -323,24 +330,42 @@ public:
 
 		mismatch_counts.print();
 	}
+	
+	void sweep_mod_measure (std::string_view filter) {
+		auto& mod = loaded_modules.find(filter);
+		auto start = (uintptr_t)mod.addr;
+		auto end = (uintptr_t)mod.addr + mod.size;
+
+		logf("Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
+		for (uintptr_t addr = start; addr < end; addr++) {
+			measure_addr2sym((char*)addr);
+		}
+
+		mismatch_counts.print();
+	}
 
 	// seed=-1 => random seed
-	void fuzz_mod (std::string_view filter, int seed=-1, int count=10000) {
+	void fuzz_mod_measure (std::string_view filter, int count=10000, int seed=-1) {
 		auto& mod = loaded_modules.find(filter);
+		auto start = (uintptr_t)mod.addr;
+		auto end = (uintptr_t)mod.addr + mod.size;
 		
 		auto rng = seed < 0 ? init_rng() : init_rng((uint64_t)seed);
-		std::uniform_int_distribution<uint64_t> uniform_rng (std::numeric_limits<uint64_t>::min(), std::numeric_limits<uint64_t>::max());
-
+		std::uniform_int_distribution<uintptr_t> uniform_rng (start, end);
+		
+		logf("Fuzz for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
 		for (int i=0; i<count; i++) {
 			auto addr = uniform_rng(rng);
-			test_addr2sym((char*)addr);
+			measure_addr2sym((char*)addr);
 		}
 	}
 };
 
-void example_addresses () {
+void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
+	ZoneScoped;
 	
 	try {
+		ZoneScopedN("TinyProgram.exe");
 		SymTesting sym("TinyProgram.exe", 0.5f);
 
 		char* exe = sym.get_addr(".exe");
@@ -349,7 +374,7 @@ void example_addresses () {
 		sym.warmup(exe + 0x21F0);
 		sym.warmup(ucrtbase + 0x1B370);
 
-		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
+		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
 			
@@ -397,13 +422,14 @@ void example_addresses () {
 	//Sleep(1000);
 	
 	try {
+		ZoneScopedN("Namespaces.exe");
 		SymTesting sym("Namespaces.exe", 0.5f);
 
 		char* exe = sym.get_addr(".exe");
 		
 		sym.warmup(exe + 0x11AC0);
 
-		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
+		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 
 			at_addr(exe + 0x10D0); // main()
@@ -417,8 +443,8 @@ void example_addresses () {
 		});
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }\
 
-
 	try {
+		ZoneScopedN("city_builder_rel.exe");
 		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
 		
 		char* exe = sym.get_addr(".exe");
@@ -429,7 +455,7 @@ void example_addresses () {
 		sym.warmup(assimp + 0x23990); // assimp, no pdb! (for testing)
 		sym.warmup(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
 
-		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
+		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
 
@@ -459,9 +485,9 @@ void example_addresses () {
 		});
 
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
-	//Sleep(1000);
-
+	
 	try {
+		ZoneScopedN("rust_bevy_test.exe");
 		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
 
 		char* exe = sym.get_addr(".exe");
@@ -470,7 +496,7 @@ void example_addresses () {
 		sym.warmup(exe + 0x3011B80);
 		sym.warmup(ucrtbase + 0x1B370);
 
-		sym.run_examples_addresses([=] (std::function<void(char*)> at_addr) {
+		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
 
@@ -490,12 +516,14 @@ void example_addresses () {
 			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf, weirdly this one works, so it's even the same ucrtbase.dll as the two other executables
 		});
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
-	//Sleep(1000);
 	
 }
 
 void sweep_tests () {
+	ZoneScoped;
+
 	try {
+		ZoneScopedN("TinyProgram.exe");
 		SymTesting sym("TinyProgram.exe", 0.5f);
 		char* exe = sym.get_addr(".exe");
 
@@ -509,6 +537,7 @@ void sweep_tests () {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
 	try {
+		ZoneScopedN("Namespaces.exe");
 		SymTesting sym("Namespaces.exe", 0.5f);
 		char* exe = sym.get_addr(".exe");
 
@@ -518,6 +547,7 @@ void sweep_tests () {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
 	try {
+		ZoneScopedN("notepad.exe");
 		SymTesting sym("C:/Windows/System32/notepad.exe", 0.5f);
 	
 		char* exe = sym.get_addr(".exe");
@@ -526,6 +556,7 @@ void sweep_tests () {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
 	try {
+		ZoneScopedN("city_builder_rel.exe");
 		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
 		char* exe = sym.get_addr(".exe");
 
@@ -533,6 +564,7 @@ void sweep_tests () {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
 	try {
+		ZoneScopedN("rust_bevy_test.exe");
 		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
 		char* exe = sym.get_addr(".exe");
 
@@ -540,9 +572,82 @@ void sweep_tests () {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
-int main(int argc, const char** argv) {
-	example_addresses();
-	//sweep_tests();
+void profiling_pdb_parse (int count) {
+	ZoneScoped;
+
+	try {
+		ZoneScopedN("TinyProgram.exe");
+		SymTesting sym("TinyProgram.exe", 0.5f);
+		for (int i=0; i<count; i++) {
+			sym.measure_pdb_parse(sym.get_addr(".exe"));
+		}
+		for (int i=0; i<count; i++) {
+			sym.measure_pdb_parse(sym.get_addr("ucrtbase.dll"));
+		}
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
+	try {
+		ZoneScopedN("city_builder_rel.exe");
+		SymTesting sym("city_builder_rel.exe");
+		for (int i=0; i<count; i++) {
+			sym.measure_pdb_parse(sym.get_addr(".exe"));
+		}
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
+	try {
+		ZoneScopedN("rust_bevy_test.exe");
+		SymTesting sym("rust_bevy_test.exe");
+		for (int i=0; i<count; i++) {
+			sym.measure_pdb_parse(sym.get_addr(".exe"));
+		}
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+}
+void profiling_fuzz () {
+	ZoneScoped;
+
+	try {
+		ZoneScopedN("TinyProgram.exe");
+		SymTesting sym("TinyProgram.exe", 0.5f);
+		char* exe = sym.get_addr(".exe");
+
+		sym.sweep_mod_measure(".exe");
+		sym.sweep_mod_measure("ucrtbase.dll");
+
+		//sym.show_addr2sym(exe + 0x1130);
+		//sym.show_addr2sym(exe + 0x13c0); // TODO: linoinfo not found by me because lineheader stores address before symbol (and first line offset is symbol)
+		//sym.show_addr2sym(exe + 0x56f0); // _OptionsStorage
+		// not exact start address for some dumb reason, need to lookup not per hashmap but per binary search for each module, could then merge sorted lists per module into global sorted list with one scan
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
+	try {
+		ZoneScopedN("city_builder_rel.exe");
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+		char* exe = sym.get_addr(".exe");
+
+		sym.fuzz_mod_measure(".exe", 50000, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
+	try {
+		ZoneScopedN("rust_bevy_test.exe");
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
+		char* exe = sym.get_addr(".exe");
+
+		sym.fuzz_mod_measure(".exe", 50000, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+}
+
+void profiling_run () {
+	example_addresses(false, false, 4000);
+
+	profiling_pdb_parse(4000);
+
+	profiling_fuzz();
+}
+
+int main(int argc, const char** argv) {
+	//example_addresses();
+	//sweep_tests();
+	profiling_run();
+
 	return 0;
 }

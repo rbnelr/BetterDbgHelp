@@ -373,6 +373,11 @@ public:
 		
 		return mod->pdb->has_symbol_for_addr(mod_raddr, dbghelp_res.sym_name);
 	}
+	
+	void measure_pdb_parse (void* ptr) {
+		auto* mod = mod_cache.find_module_for_addr(inspectee, (uintptr_t)ptr);
+		mod_cache = {}; // clear cache so this can be called repeatedly
+	}
 
 	bool measure_addr2sym (void* ptr, SymResult* res) {
 		auto _tCombinedAddr2sym = kiss::TimerMeasureZone(&tCombinedAddr2sym);
