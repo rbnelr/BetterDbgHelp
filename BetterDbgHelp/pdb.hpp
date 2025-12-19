@@ -966,10 +966,53 @@ class PDB_File {
 		u32 id = header->minimal_type_index;
 		char* type_info = ptr;
 		
-		// LF_STRING_ID is what lfFuncId.scopeId points to
-		// do a pass first, TODO: LF_STRING_ID internally rely on only pointing to earlier entires, so this likely holds for following lfFuncId as well
-		std::unordered_map<u32, std::string> stringids;
-		stringids.reserve(1024);
+		struct IPI_STRING_IDs {
+			// LF_STRING_ID is what lfFuncId.scopeId points to
+			// do a pass first
+			std::unordered_map<u32, codeview_type_record_header*> map;
+
+			void _append (std::string* str, CV_ItemId id) const {
+				auto it = map.find(id);
+				if (it == map.end()) {
+					assert(false);
+					return; // don't append
+				}
+
+				auto* lf = it->second;
+				if (lf->kind == LF_STRING_ID) {
+					auto* si = (lfStringId*)lf;
+					// lfStringId -> lfStringId.name  or
+					// lfStringId (Composite) -> string for lfStringId.id + lfStringId.name
+
+					if (si->id != 0) {
+						_append(str, si->id);
+					}
+
+					str->append((const char*)si->name);
+				}
+				else {
+					assert(lf->kind == LF_SUBSTR_LIST);
+					auto* si = (lfArgList*)lf;
+					
+					// lfArgList -> string for lfArgList.arg[0] + string for lfArgList.arg[1] + ...
+					for (u32 i=0; i<si->count; i++) {
+						_append(str, si->arg[i]);
+					}
+				}
+			}
+
+			std::string resolve (CV_ItemId id) const {
+				std::string str;
+				str.reserve(16);
+
+				_append(&str, id);
+
+				assert(!str.empty());
+				return str;
+			}
+		};
+		IPI_STRING_IDs strids;
+		strids.map.reserve(1024);
 		
 		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
 			auto* lf = (codeview_type_record_header*)ptr;
@@ -977,6 +1020,7 @@ class PDB_File {
 			//assert((sizeof(u16) + lf->length)%4 == 0);
 			assert(id < header->one_past_last_type_index);
 
+			/*
 			// LF_STRING_ID sometimes hold "id", which points to an earlier LF_SUBSTR_LIST, which holds a VLA of other LF_STRING_IDs
 			// in this case LF_STRING_ID seems to essentially represent the concatenated string lfStringId.name + LF_SUBSTR_LIST at lfStringId.id
 			// while LF_SUBSTR_LIST itself holds the concatenation of what each of its IDs point towards
@@ -991,7 +1035,7 @@ class PDB_File {
 
 					auto s = std::string();
 					for (u32 i=0; i<str->count; i++) {
-						s += stringids[str->arg[i]];
+						s += strids.map[str->arg[i]];
 						//logf(">>> [%4x] \"%s\"\n", str->arg[i], stringids[str->arg[i]].c_str());
 					}
 					
@@ -1016,6 +1060,14 @@ class PDB_File {
 
 				} break;
 			}
+			*/
+
+			switch (lf->kind) {
+				case LF_SUBSTR_LIST:
+				case LF_STRING_ID: {
+					strids.map.emplace(id, lf);
+				} break;
+			}
 
 			id++;
 		}
@@ -1037,14 +1089,12 @@ class PDB_File {
 					//logf(">> lfFuncId: [%4x]=%s\n", id, func->name);
 
 					if (func->scopeId != 0) {
-						auto* scope_name = try_get(stringids, func->scopeId);
-						assert(scope_name);
-						if (scope_name) {
-							auto formatted_strid = stralloc.push_concat(scope_name->c_str(), "::", (const char*)func->name);
+						auto scope_name = strids.resolve(func->scopeId);
 
-							assert(IPI_id2name.find(id) == IPI_id2name.end());
-							IPI_id2name.emplace(id, formatted_strid);
-						}
+						auto formatted_strid = stralloc.push_concat(scope_name.c_str(), "::", (const char*)func->name);
+
+						assert(IPI_id2name.find(id) == IPI_id2name.end());
+						IPI_id2name.emplace(id, formatted_strid);
 					}
 					else {
 						assert(IPI_id2name.find(id) == IPI_id2name.end());

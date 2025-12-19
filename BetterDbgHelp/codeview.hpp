@@ -820,6 +820,7 @@ typedef struct lfMFuncId {
 //    char            data[1];         // field list sub lists
 //} lfFieldList;
 typedef struct lfArgList {
+    unsigned short  _len;
     unsigned short  leaf;           // LF_ARGLIST, LF_SUBSTR_LIST
     unsigned long   count;          // number of arguments
     CV_typ_t        arg[1];      // number of arguments

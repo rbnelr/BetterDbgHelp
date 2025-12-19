@@ -645,7 +645,7 @@ void profiling_run () {
 }
 
 int main(int argc, const char** argv) {
-	//example_addresses(true, false);
+	//example_addresses(true, true);
 	//sweep_tests();
 	profiling_run();
 
