@@ -282,7 +282,7 @@ public:
 		std::function<void(char*)> fmeas = std::bind(&SymTesting::measure_addr2sym, this, _1);
 		std::function<void(char*)> ftest = std::bind(&SymTesting::test_addr2sym, this, _1);
 
-		//run_examples(fshow);
+		run_examples(fshow);
 		run_examples(ftest);
 
 		mismatch_counts.print();
@@ -339,6 +339,17 @@ public:
 };
 
 void example_addresses () {
+	
+	try {
+		SymTesting sym("C:/Windows/System32/notepad.exe", 0.5f);
+	
+		char* exe = sym.get_addr(".exe");
+		char* ucrtbase = sym.get_addr("ucrtbase.dll");
+		
+		//sym.warmup(exe + 0x21F0);
+		sym.warmup(ucrtbase + 0x1B370);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
 	try {
 		SymTesting sym("TinyProgram.exe", 0.5f);
 
@@ -531,8 +542,8 @@ void test_entire_modules () {
 }
 
 int main(int argc, const char** argv) {
-	//example_addresses();
-	test_entire_modules();
+	example_addresses();
+	//test_entire_modules();
 	
 	return 0;
 }

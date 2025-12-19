@@ -20,11 +20,9 @@ struct LoadedModule {
 	}
 	void load_pdb () {
 		ZoneScoped;
-		// Techically there might be more correct ways to find the pdb, and also ways that allow getting pdbs from microsoft servers
-		// see above link
-		auto pdb_path = std::filesystem::path(path);
-		pdb_path.replace_extension({".pdb"});
-		pdb = PDB_File::try_load_pdb(pdb_path.string());
+
+		PDB_Locator locator(path);
+		pdb = PDB_File::try_load_pdb(locator.get_pdb_path().u8string());
 	}
 };
 struct ModuleCache {

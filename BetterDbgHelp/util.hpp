@@ -31,13 +31,13 @@ using namespace kiss;
 
 #include <windows.h>
 
-#undef near
-#undef far
-#undef min
-#undef max
-#undef BF_BOTTOM
-#undef BF_TOP
-#undef ERROR
+//#undef near
+//#undef far
+//#undef min
+//#undef max
+//#undef BF_BOTTOM
+//#undef BF_TOP
+//#undef ERROR
 
 #include "tracy/Tracy.hpp"
 

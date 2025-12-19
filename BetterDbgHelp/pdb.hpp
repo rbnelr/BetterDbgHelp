@@ -1,6 +1,7 @@
 #pragma once
 #include "util.hpp"
 #include "codeview.hpp"
+#include "pdb_locator.hpp"
 #include <map>
 
 // https://github.com/PascalBeyer/PDB-Documentation
@@ -72,7 +73,8 @@ class PDB_File {
 
 	std::unordered_map<std::string_view, u32> named_streams;
 
-	const char* names;
+	// contains function names for source line info (both normal and inline stack)
+	const char* names = nullptr;
 
 	optional_debug_header_substream* opt_streams;
 
@@ -298,25 +300,31 @@ class PDB_File {
 		
 		u32 signature = *(u32*)ptr;
 		ptr += sizeof(u32);
-		assert(signature == 0xEFFEEFFE);
+		if (signature == 0xEFFEEFFE) {
 		
-		u32 hash_version = *(u32*)ptr;
-		ptr += sizeof(u32);
+			u32 hash_version = *(u32*)ptr;
+			ptr += sizeof(u32);
 		
-		u32 string_buffer_size = *(u32*)ptr;
-		ptr += sizeof(u32);
+			u32 string_buffer_size = *(u32*)ptr;
+			ptr += sizeof(u32);
 		
-		names = ptr;
-		ptr += string_buffer_size;
+			names = ptr;
+			ptr += string_buffer_size;
 		
-		u32 bucket_count = *(u32*)ptr;
-		ptr += sizeof(u32);
+			u32 bucket_count = *(u32*)ptr;
+			ptr += sizeof(u32);
 
-		u32* buckets = (u32*)ptr;
-		ptr += bucket_count * sizeof(u32);
+			u32* buckets = (u32*)ptr;
+			ptr += bucket_count * sizeof(u32);
 
-		u32* amount_of_strings = (u32*)ptr;
-		ptr += sizeof(u32);
+			u32* amount_of_strings = (u32*)ptr;
+			ptr += sizeof(u32);
+		}
+		else {
+			// signature == 0xFE
+			// this happens with pdbs downloaded from MS symbol servers, possibly because they are stripped
+			// Simply leaving names as null works as we later do not get source line info either
+		}
 	}
 	
 	void read_DBI () {
@@ -750,6 +758,9 @@ class PDB_File {
 				while (ptr < ptr3 + subsec->length) {
 					auto* line_block = (codeview_line_block_header*)ptr;
 					ptr += sizeof(codeview_line_block_header);
+
+					// if we get lineinfo, we also expect /names to exist
+					assert(names != nullptr);
 					
 					//logf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, get_lineinfo_source_filepath(mod, line_block->offset_in_file_checksums));
 					
@@ -1044,15 +1055,15 @@ class PDB_File {
 	}
 
 public:
-	static std::unique_ptr<PDB_File> try_load_pdb (std::string&& path) {
+	static std::unique_ptr<PDB_File> try_load_pdb (std::string const& path) {
 		try {
-			return std::make_unique<PDB_File>(std::move(path));
+			return std::make_unique<PDB_File>(path);
 		} catch (std::exception&) {
 			//flogf(stderr, "PDB loading exception: %s\n", ex.what());
 		}
 		return nullptr;
 	}
-	PDB_File (std::string&& path) {
+	PDB_File (std::string const& path) {
 		// TODO: Use memory mapped file as this allows avoiding to load any pages not accessed (pdb pages are same size as ram pages)
 		// do memory mapped files allows the os to evict pages, so can it be used to read files without permanently consuming ram?
 		if (!load_file(path, &data)) {
@@ -1105,6 +1116,9 @@ public:
 	std::vector<Module> modules;
 
 	const char* get_lineinfo_source_filepath (Module const& mod, CV_off32_t fileId) const {
+		assert(names != nullptr);
+		if (names == nullptr) return nullptr;
+
 		auto* cksm = (codeview_file_checksum*)(mod.file_checksum_ptr + fileId);
 		auto* name = &names[cksm->offset_in_string_table];
 		return name;

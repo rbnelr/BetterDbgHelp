@@ -13,6 +13,7 @@
     <ClInclude Include="pdb.hpp" />
     <ClInclude Include="module_lookup.hpp" />
     <ClInclude Include="logger.hpp" />
+    <ClInclude Include="pdb_locator.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="codeview.hpp" />
