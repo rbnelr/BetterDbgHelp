@@ -16,6 +16,7 @@
 #include <fstream>
 
 #include "timer.hpp"
+#include "logger.hpp"
 using namespace kiss;
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -56,7 +57,7 @@ inline void print_err(const char* operation) {
 		0,
 		nullptr);
 
-	fprintf(stderr, "%s failed: [%lu] {\n%s}\n", operation, err, msgBuf);
+	logf("%s failed: [%lu] {\n%s}\n", operation, err, msgBuf);
 }
 inline std::string print_err_throw(const char* operation) {
 	print_err(operation);

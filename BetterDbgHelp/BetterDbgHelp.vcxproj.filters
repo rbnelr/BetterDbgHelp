@@ -12,6 +12,7 @@
     <ClInclude Include="sym_resolver.hpp" />
     <ClInclude Include="pdb.hpp" />
     <ClInclude Include="module_lookup.hpp" />
+    <ClInclude Include="logger.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="codeview.hpp" />

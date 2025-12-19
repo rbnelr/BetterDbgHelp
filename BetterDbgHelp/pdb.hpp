@@ -119,14 +119,14 @@ class PDB_File {
 		//	size_t reserve = 3;
 		//	buf.push_back(reserve);
 		//
-		//	auto ret = vsnprintf(buf.data() + offset, reserve, format, vl);
+		//	auto ret = vsnlogf(buf.data() + offset, reserve, format, vl);
 		//	ret = ret >= 0 ? ret : 0;
 		//	bool was_big_enough = (size_t)ret < (reserve-1);
 		//	buf.resize(offset + ret + 1);
 		//	if (!was_big_enough) {
 		//		// buffer was too small, buffer size was increased
-		//		// now snprintf has to succeed, so call it again
-		//		auto ret2 = vsnprintf(buf.data() + offset, ret + 1, format, vl);
+		//		// now snlogf has to succeed, so call it again
+		//		auto ret2 = vsnlogf(buf.data() + offset, ret + 1, format, vl);
 		//		assert(ret2 <= ret);
 		//	}
 		//	if (offset > 0xffffffff) {
@@ -215,7 +215,7 @@ class PDB_File {
 		
 		for (u32 si=0; si<streams.size(); si++) {
 			auto& stream = streams[si];
-			//printf("Stream %3d: { ", si);
+			//logf("Stream %3d: { ", si);
 		
 			u32 num_pages = ceil_div(stream.size, header->page_size);
 			for (u32 i=0; i<num_pages; i++) {
@@ -224,10 +224,10 @@ class PDB_File {
 		
 				stream.pages.push_back(page_idx);
 		
-				//printf("%d, ", page_idx);
+				//logf("%d, ", page_idx);
 			}
 		
-			//printf("}\n");
+			//logf("}\n");
 		}
 	}
 
@@ -273,7 +273,7 @@ class PDB_File {
 		// unused
 		ptr += sizeof(u32);
 		
-		//printf("Named Streams:\n");
+		//logf("Named Streams:\n");
 		for(u32 index = 0, entry_index = 0; index < capacity && entry_index < amount_of_entries; index++){
 			u32 word_index = index / (sizeof(u32) * 8);
 			u32 bit_index  = index % (sizeof(u32) * 8);
@@ -282,10 +282,10 @@ class PDB_File {
 				auto& kv = entries[entry_index++];
 
 				//std::string key = std::string(&string_buffer[kv.key]);
-				//printf("> %s: %d\n", key.c_str(), kv.value);
+				//logf("> %s: %d\n", key.c_str(), kv.value);
 				//named_streams[std::move(key)] = kv.value;
 				std::string key = std::string(&string_buffer[kv.key]);
-				//printf("> %s: %d\n", &string_buffer[kv.key], kv.value);
+				//logf("> %s: %d\n", &string_buffer[kv.key], kv.value);
 				named_streams[std::string_view(&string_buffer[kv.key])] = kv.value;
 				continue;
 			}
@@ -344,7 +344,7 @@ class PDB_File {
 
 			ptr = align_up(ptr, 4);
 
-			//printf("> %d %-50s %-50s\n", mi->stream_index_of_module_symbol_stream, mod_name, file_name);
+			//logf("> %d %-50s %-50s\n", mi->stream_index_of_module_symbol_stream, mod_name, file_name);
 
 			Module m;
 			m.mi = mi;
@@ -375,7 +375,7 @@ class PDB_File {
 		// The roundabout way through section contributions does not help afaik
 		for (u32 i=0; i<num_section_contributions; i++) {
 			auto* sc = &section_contributions[i];
-			//printf("> %d %8x %4x %d\n", sc->section_id, sc->offset, sc->size, sc->module_index);
+			//logf("> %d %8x %4x %d\n", sc->section_id, sc->offset, sc->size, sc->module_index);
 			
 			// assert that section contribution list entries are non-zero size, sorted and non-overlapping
 			assert(sc->size > 0);
@@ -457,7 +457,7 @@ class PDB_File {
 			
 			//char name[9] = {};
 			//strncpy_s(name, (const char*)sh->Name, 8); // properly null-terminate
-			//printf("> %7s %8x %8x\n", name, sh->VirtualAddress, sh->Misc.VirtualSize);
+			//logf("> %7s %8x %8x\n", name, sh->VirtualAddress, sh->Misc.VirtualSize);
 		}
 
 		for (size_t i=1; i<sections_sorted.size(); i++) {
@@ -490,18 +490,18 @@ class PDB_File {
 			ptr = align_up(ptr, 4);
 
 			switch (sym->kind) {
-				//case S_PROCREF: case S_DATAREF: case S_LPROCREF: {
-				//	auto* s = (REFSYM2*)sym;
-				//	printf("REFSYM2: %s\n", s->name);
-				//} break;
-				//case S_CONSTANT: case S_MANCONSTANT: { // mostly works, but weirdness with the name? maybe using 1 for zero length array is wrong
-				//	auto* s = (CONSTSYM*)sym;
-				//	printf("CONSTSYM: %s\n", s->name);
-				//} break;
-				//case S_UDT: case S_COBOLUDT: {
-				//	auto* s = (UDTSYM*)sym;
-				//	printf("UDTSYM: %s\n", s->name);
-				//} break;
+				case S_PROCREF: case S_DATAREF: case S_LPROCREF: {
+					auto* s = (REFSYM2*)sym;
+					//logf("REFSYM2: %s\n", s->name);
+				} break;
+				case S_CONSTANT: case S_MANCONSTANT: { // mostly works, but weirdness with the name? maybe using 1 for zero length array is wrong
+					auto* s = (CONSTSYM*)sym;
+					//logf("CONSTSYM: %s\n", s->name);
+				} break;
+				case S_UDT: case S_COBOLUDT: {
+					auto* s = (UDTSYM*)sym;
+					//logf("UDTSYM: %s\n", s->name);
+				} break;
 				case S_LDATA32: case S_GDATA32: case S_LMANDATA: case S_GMANDATA: {
 					auto* s = (DATASYM32*)sym;
 					push_symbol(
@@ -510,7 +510,7 @@ class PDB_File {
 						s->seg,
 						(const char*)s->name
 					);
-					//printf("DATASYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
+					//logf("DATASYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
 				} break;
 				case S_PUB32: {
 					auto* s = (PUBSYM32*)sym;
@@ -520,10 +520,10 @@ class PDB_File {
 						s->seg,
 						(const char*)s->name
 					);
-					//printf("PUBSYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
+					//logf("PUBSYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
 				} break;
 				default: {
-
+					//logf("?: %x\n", sym->kind);
 				}
 			}
 		}
@@ -583,7 +583,7 @@ class PDB_File {
 		
 		assert((ptr - mod.symbol_stream_data.data()) == streams[mi->stream_index_of_module_symbol_stream].size);
 		
-		//printf("> Module %d\n", module_index);
+		//logf("> Module %d\n", module_index);
 		
 		//// Symbol info
 		auto parse_symbol_info = [&] () {
@@ -593,7 +593,7 @@ class PDB_File {
 			ptr += sizeof(u32);
 			assert(signature == 4); // CV_SIGNATURE_C13
 		
-			//printf(">> symbol_information\n");
+			//logf(">> symbol_information\n");
 			
 			//std::vector<INLINESITESYM*> stack;
 			
@@ -604,36 +604,33 @@ class PDB_File {
 				ptr = align_up(ptr, 4);
 
 				//int entry_offs = (int)((char*)sym - sym_info);
-				//printf("> %7d [%4x] %d %s\n", entry_offs, sym->kind, sym->length, SYM_ENUM_e_str(sym->kind));
+				//logf("> %7d [%4x] %d %s\n", entry_offs, sym->kind, sym->length, SYM_ENUM_e_str(sym->kind));
 
 				switch (sym->kind) {
 					case S_GPROC32: case S_LPROC32:
 					case S_GPROC32_ID: case S_LPROC32_ID: {
 						auto* proc = (PROCSYM32*)sym;
-						//printf(">> %s %4d %8x %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, proc->len, proc->name);
+						//logf(">> %s %4d %8x %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, proc->len, proc->name);
 
 						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
+
+						Symbol s;
+						s.base_addr = module_raddr;
+						s.size = proc->len;
+						s.name = (const char*)proc->name;
+						s.procsym = proc;
+						s.module_index = module_index;
 
 						// Functions with identical binary can be merged, in which dbghelp seems to output the symbol of the first entry which is what we will do as well
 						// this lookup, which is used to attach lineinfo to the symbols so we don't have to search the address space twice (like dbghelp does?)
 						// in case of overlapping symbols, only keep first occurance
 						if (find_overlapping_symbol(module_raddr, proc->len) == nullptr) {
-							Symbol s;
-							s.base_addr = module_raddr;
-							s.size = proc->len;
-							s.name = (const char*)proc->name;
-							s.procsym = proc;
-							s.module_index = module_index;
-
 							auto idx = sym_sorted.size();
-							sym_sorted.push_back(std::move(s));
+							sym_sorted.push_back(s);
 
 							sym_map.emplace(module_raddr, idx);
 						}
-
-						//if (strcmp((const char*)proc->name, "nlohmann::json_abi_v3_11_2::basic_json<nlohmann::json_abi_v3_11_2::ordered_map,std::vector,std::basic_string<char,std::char_traits<char>,std::allocator<char> >,bool,__int64,unsigned __int64,double,std::allocator,nlohmann::json_abi_v3_11_2::adl_serializer,std::vector<unsigned char,std::allocator<unsigned char> > >::json_value::json_value") == 0) {
-						//	printf("");
-						//}
+						sym_unfiltered.push_back(s);
 					} break;
 					case S_INLINESITE: {
 						auto* inl = (INLINESITESYM*)sym;
@@ -668,7 +665,7 @@ class PDB_File {
 						//inl->pEnd // byte offs of INLINESITE_END
 						// inl->inlinee seems to be some kind of id that lets us look up line info, but not sure where that is and if that lineinfo is encoded horribly
 						// no idea what inl->binaryAnnotations is
-						//printf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, strbuf[proc_typeid2nameid[inl->inlinee]]);
+						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, strbuf[proc_typeid2nameid[inl->inlinee]]);
 					} break;
 					//case S_INLINESITE_END: {
 					//	stack.pop_back();
@@ -680,7 +677,7 @@ class PDB_File {
 
 		//// C13 line info
 		auto parse_c13 = [&] () {
-			//printf("> c13_line_information\n");
+			//logf("> c13_line_information\n");
 			char* ptr = c13_line_information;
 			
 			// first pass to find FILECHKSMS ptr
@@ -704,7 +701,7 @@ class PDB_File {
 				ptr += sizeof(codeview_line_header);
 				assert(header->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
 				
-				//printf(">> Header %d, %8x %8x\n", header->contribution_section_id, header->contribution_offset, header->contribution_size);
+				//logf(">> Header %d, %8x %8x\n", header->contribution_section_id, header->contribution_offset, header->contribution_size);
 			
 				uintptr_t sec_offs = sections_sorted[header->contribution_section_id-1].base_addr;
 				uintptr_t module_raddr = header->contribution_offset + sec_offs;
@@ -719,13 +716,13 @@ class PDB_File {
 					auto* line_block = (codeview_line_block_header*)ptr;
 					ptr += sizeof(codeview_line_block_header);
 					
-					//printf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, get_lineinfo_source_filepath(mod, line_block->offset_in_file_checksums));
+					//logf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, get_lineinfo_source_filepath(mod, line_block->offset_in_file_checksums));
 					
 					auto* lines = (codeview_line*)ptr;
 					for (u32 i=0; i<line_block->amount_of_lines; i++) {
 						auto& line = lines[i];
 			
-						//printf(">>  Line %d %d\n", line.start_line_number, line.offset);
+						//logf(">>  Line %d %d\n", line.start_line_number, line.offset);
 
 						if (i > 0) assert(line.offset >= lines[i-1].offset); // verify sorted
 					}
@@ -743,24 +740,11 @@ class PDB_File {
 				if (sym && !sym->src.valid()) {
 					//assert(module_raddr == sym->base_addr); // lines section contribtion offset need to be procedure symbol offset
 
-					ptr = ptr3;
-					ptr += sizeof(codeview_line_header);
-					
-					while (ptr < ptr3 + subsec->length) {
-						auto* line_block = (codeview_line_block_header*)ptr;
-						ptr += sizeof(codeview_line_block_header);
-
-						auto offset = (intptr_t)sym->base_addr - (intptr_t)module_raddr;
-						sym->src = Symbol::SrcLines {
-							line_block->amount_of_lines,
-							(int32_t)offset,
-							get_lineinfo_source_filepath(mod, line_block->offset_in_file_checksums),
-							(codeview_line*)ptr,
-						};
-
-						break; // can only handle one codeview_line_block
-						//ptr += line_block->amount_of_lines * sizeof(codeview_line);
-					}
+					auto offset = (intptr_t)sym->base_addr - (intptr_t)module_raddr;
+					sym->src = Symbol::SrcLines {
+						subsec,
+						(int32_t)offset,
+					};
 				}
 			};
 			auto read_inlinee_line_numbers = [&] (codeview_subsection_header* subsec) {
@@ -787,8 +771,8 @@ class PDB_File {
 						//auto* b = get_lineinfo_source_filepath(mod, it->second->fileId);
 						//assert(strcmp(a,b)==0);
 
-						//printf(">>>>>> %s\n", a);
-						//printf(">>>>>> %s\n", b);
+						//logf(">>>>>> %s\n", a);
+						//logf(">>>>>> %s\n", b);
 					}
 				};
 
@@ -797,7 +781,7 @@ class PDB_File {
 						auto* line = (InlineeSourceLine*)ptr;
 						ptr += sizeof(InlineeSourceLine);
 						
-						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
+						//logf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates(line);
 						mod.inlinee_c13.try_emplace(line->inlinee, line);
@@ -807,7 +791,7 @@ class PDB_File {
 						auto* line = (InlineeSourceLineEx*)ptr;
 						ptr += sizeof(InlineeSourceLineEx);
 						
-						//printf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
+						//logf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates((InlineeSourceLine*)line);
 						mod.inlinee_c13.try_emplace(line->inlinee, (InlineeSourceLine*)line);
@@ -824,7 +808,7 @@ class PDB_File {
 				auto* header = (codeview_subsection_header*)ptr;
 				ptr += sizeof(codeview_subsection_header);
 
-				//printf(">> %s\n", DEBUG_S_SUBSECTION_TYPE_e_str(header->type));
+				//logf(">> %s\n", DEBUG_S_SUBSECTION_TYPE_e_str(header->type));
 
 				if ((header->type & DEBUG_S_IGNORE) == 0) {
 					switch (header->type) {
@@ -873,7 +857,7 @@ class PDB_File {
 					size_t dcb = CbExtractNumeric(struc->data, &size);
 					auto* name = (const char *)struc->data + dcb;
 
-					//printf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
+					//logf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
 					assert(typeid2name.find(id) == typeid2name.end());
 					typeid2name.emplace(id, name);
 				} break;
@@ -884,13 +868,13 @@ class PDB_File {
 					size_t dcb = CbExtractNumeric(struc->data, &size);
 					auto* name = (const char *)struc->data + dcb;
 
-					//printf(">> lfClass: [%4x]: %s\n", id, name);
+					//logf(">> lfClass: [%4x]: %s\n", id, name);
 					assert(typeid2name.find(id) == typeid2name.end());
 					typeid2name.emplace(id, name);
 				} break;
 				//case LF_PROCEDURE: {
 				//	auto* proc = (lfProc*)lf;
-				//	printf("Proc: id: [%4x]\n", id);
+				//	logf("Proc: id: [%4x]\n", id);
 				//} break;
 			}
 
@@ -932,12 +916,12 @@ class PDB_File {
 			switch (lf->kind) {
 				case LF_SUBSTR_LIST: {
 					auto* str = (lfArgList*)lf;
-					//printf(">> lfArgList: [%4x]:\n", id);
+					//logf(">> lfArgList: [%4x]:\n", id);
 
 					auto s = std::string();
 					for (u32 i=0; i<str->count; i++) {
 						s += stringids[str->arg[i]];
-						//printf(">>> [%4x] \"%s\"\n", str->arg[i], stringids[str->arg[i]].c_str());
+						//logf(">>> [%4x] \"%s\"\n", str->arg[i], stringids[str->arg[i]].c_str());
 					}
 					
 					stringids.emplace(id, std::move(s));
@@ -945,7 +929,7 @@ class PDB_File {
 				case LF_STRING_ID: {
 					auto* str = (lfStringId*)lf;
 					if (str->id == 0) {
-						//printf(">> lfStringId: [%4x] \"%s\"\n", id, str->name);
+						//logf(">> lfStringId: [%4x] \"%s\"\n", id, str->name);
 						stringids.emplace(id, std::string((const char*)str->name));
 					}
 					else {
@@ -954,7 +938,7 @@ class PDB_File {
 						if (other) {
 							auto s = *other + (const char*)str->name;
 							
-							//printf(">> lfStringId (Composite): [%4x] id=%4x => \"%s\"\n", id, str->id, s.c_str());
+							//logf(">> lfStringId (Composite): [%4x] id=%4x => \"%s\"\n", id, str->id, s.c_str());
 							stringids.emplace(id, std::move(s));
 						}
 					}
@@ -979,7 +963,7 @@ class PDB_File {
 				case LF_FUNC_ID: {
 					// free function
 					auto* func = (lfFuncId*)lf;
-					//printf(">> lfFuncId: [%4x]=%s\n", id, func->name);
+					//logf(">> lfFuncId: [%4x]=%s\n", id, func->name);
 
 					if (func->scopeId != 0) {
 						auto* scope_name = try_get(stringids, func->scopeId);
@@ -997,7 +981,7 @@ class PDB_File {
 					}
 
 					//if (strcmp((const char*)func->name, "from_axis_angle")==0) {
-					//	printf(""); // 24649
+					//	logf(""); // 24649
 					//}
 				} break;
 				case LF_MFUNC_ID: {
@@ -1006,7 +990,7 @@ class PDB_File {
 					auto* parent_name = try_get(typeid2name, func->parentType);
 					assert(parent_name);
 					if (parent_name) {
-						//printf(">> lfMFuncId: [%4x]=%s::%s\n", id, parent_name->c_str(), (const char*)func->name);
+						//logf(">> lfMFuncId: [%4x]=%s::%s\n", id, parent_name->c_str(), (const char*)func->name);
 						auto formatted_strid = *parent_name + "::" + (const char*)func->name;
 						
 						assert(IPI_id2name.find(id) == IPI_id2name.end());
@@ -1014,7 +998,7 @@ class PDB_File {
 					}
 					
 					//if (strcmp((const char*)func->name, "from_axis_angle")==0) {
-					//	printf("");
+					//	logf("");
 					//}
 				} break;
 			}
@@ -1029,7 +1013,7 @@ public:
 		try {
 			return std::make_unique<PDB_File>(std::move(path));
 		} catch (std::exception&) {
-			//fprintf(stderr, "PDB loading exception: %s\n", ex.what());
+			//flogf(stderr, "PDB loading exception: %s\n", ex.what());
 		}
 		return nullptr;
 	}
@@ -1040,7 +1024,7 @@ public:
 			throw std::runtime_error("File not found: "+ path);
 		}
 
-		printf("%s data loaded\n", path.c_str());
+		logf("%s data loaded\n", path.c_str());
 		
 		read_header();
 		read_stream_table();
@@ -1058,10 +1042,11 @@ public:
 		for (s16 module_index=0; module_index<(s16)modules.size(); module_index++) {
 			read_module_symbol_stream(module_index);
 		}
+		
+		sort_symbols(sym_sorted);
+		sort_symbols(sym_unfiltered);
 
-		sort_symbols();
-
-		printf("PDB read.\n");
+		logf("PDB read.\n");
 	}
 	
 	struct Module {
@@ -1099,33 +1084,33 @@ public:
 		PROCSYM32* procsym = nullptr; // needed for scanning INLINESITEs later
 
 		struct SrcLines {
-			uint32_t num_lines = 0;
+			codeview_subsection_header* subsec = nullptr;
 			int32_t offset = 0; // sometimes lineinfo has different start offset than symbol, sym base_addr = codeview_line.offset + offset
-			char const* filename = nullptr;
-			codeview_line* lines = nullptr;
 
-			bool valid () const { return filename != nullptr; }
+			bool valid () const { return subsec != nullptr; }
 		};
 		SrcLines src;
 	};
 	std::vector<Symbol> sym_sorted;
 
-	void sort_symbols () {
+	std::vector<Symbol> sym_unfiltered; // to support has_symbol_for_addr
+
+	void sort_symbols (std::vector<Symbol>& syms) {
 		// sort based on base_addr
 		// use stable sorts as symbol can and will overlap, so try and preserve insertion order
 		// TODO: insertion order may not always actually replicate dbghelp.dll behavior though(?)
-		std::stable_sort(sym_sorted.begin(), sym_sorted.end(), [] (Symbol const& l, Symbol const& r) {
+		std::stable_sort(syms.begin(), syms.end(), [] (Symbol const& l, Symbol const& r) {
 			return std::less<uintptr_t>()(l.base_addr, r.base_addr);
 		});
 
-		// seems like functions like printf will appear both as procedure symbols with size in modules
+		// seems like functions like logf will appear both as procedure symbols with size in modules
 		// and as PUB32 symbols without a size but with mangled names, and thus we will always have overlapping symbols
 		
 		// assert non overlap including size
-		//for (size_t i=1; i<sym_sorted.size(); i++) {
-		//	//assert(sym_sorted[i].base_addr > sym_sorted[i-1].base_addr + sym_sorted[i-1].size);
-		//	if (!(sym_sorted[i].base_addr > sym_sorted[i-1].base_addr + sym_sorted[i-1].size)) {
-		//		printf("!! Overlapping symbols: [%8llx] %s/%s\n", sym_sorted[i].base_addr, sym_sorted[i-1].name, sym_sorted[i].name);
+		//for (size_t i=1; i<syms.size(); i++) {
+		//	//assert(syms[i].base_addr > syms[i-1].base_addr + syms[i-1].size);
+		//	if (!(syms[i].base_addr > syms[i-1].base_addr + syms[i-1].size)) {
+		//		logf("!! Overlapping symbols: [%8llx] %s/%s\n", syms[i].base_addr, syms[i-1].name, syms[i].name);
 		//	}
 		//}
 	}
@@ -1153,7 +1138,8 @@ public:
 		// iterate backwards through any symbols with equal address to find first one
 		// but ignore ones in the global symbol_record_stream, as they contain mangled version of the symbol without size, but we sometimes want those if there is no real symbol
 		// like __ImageBase
-		for (Symbol* cur=(&*it)-1; cur >= sym_sorted.data() && cur->base_addr == sym_addr; --cur) {
+		// use raw ptr instead of iterator as we cannot seek before begin, which is annoying
+		for (auto cur=(&*it)-1; cur >= sym_sorted.data() && cur->base_addr == sym_addr; --cur) {
 			bool cur_from_module = cur->module_index != -1;
 			bool result_from_module = result->module_index != -1;
 			// earlier one always replaces, unless cur is not from module but previously written one was
@@ -1162,7 +1148,40 @@ public:
 			}
 		}
 
-		return result;
+		return &*result;
+	}
+
+	// try diagnosing us returning different symbols from dbghelp by being able to check if overlapping symbol existed but we chose the "wrong" one
+	Symbol* has_symbol_for_addr (uintptr_t addr, const char* name) {
+		// TODO: This comment is confusing, also in case of multiple symbols with same offset, which one do we return (last?)
+		// This seems to work currently, but should take another look at this
+
+		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
+		// so use upper bound instead (returns first item bigger than addr), then use previous
+		auto dymmy_Symbol = Symbol{
+			addr, 0, nullptr
+		};
+		auto it = std::upper_bound(sym_unfiltered.begin(), sym_unfiltered.end(), dymmy_Symbol, [] (Symbol const& l, Symbol const& r) {
+			return l.base_addr < r.base_addr;
+		});
+		if (it <= sym_unfiltered.begin()) {
+			// first symbol after addr is first symbol, search failed
+			return nullptr;
+		}
+		it--;
+		
+		uintptr_t sym_addr = it->base_addr;
+
+		// iterate backwards through any symbols with equal address to find first one
+		// but ignore ones in the global symbol_record_stream, as they contain mangled version of the symbol without size, but we sometimes want those if there is no real symbol
+		// like __ImageBase
+		for (Symbol* cur=&*it; cur >= sym_sorted.data() && cur->base_addr == sym_addr; --cur) {
+			if (strcmp(cur->name, name) == 0) {
+				return cur;
+			}
+		}
+
+		return nullptr;
 	}
 	
 	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
@@ -1171,6 +1190,12 @@ public:
 			// past symbol address range, no valid line number
 			return false;
 		}
+		if (!sym || !sym->src.valid()) {
+			return false;
+		}
+
+		// handle case where line info is before symbol range but still overlaps
+		proc_raddr += sym->src.offset;
 
 		// codeview_lines seems to be sorted by offset, ie code address relative to start of function
 		// there is only offset, no size, so I assume any addresses between this offset and the next belong to the line as well
@@ -1187,14 +1212,17 @@ public:
 		// SymGetLineFromAddr64(function+1) => Lino:92
 		// SymGetLineFromAddr64(function+5) => Lino:92
 		// SymGetLineFromAddr64(function+7) => Lino:99
+
+		auto* ptr = (char*)sym->src.subsec + sizeof(codeview_subsection_header);
+
+		auto* header = (codeview_line_header*)ptr;
+		ptr += sizeof(codeview_line_header);
 		
-		auto find_line = [] (Symbol::SrcLines const& src, intptr_t proc_raddr) -> codeview_line* {
-			auto& lines = src.lines;
-			proc_raddr += src.offset;
+		auto find_line = [] (codeview_line* lines, u32 num_lines, intptr_t proc_raddr) -> codeview_line* {
 			for (u32 i=0;; i++) {
 				// if address past all entries, return previous (highest) one
 				// if address lower than current, return previous one
-				if (i >= src.num_lines || proc_raddr < (intptr_t)lines[i].offset) {
+				if (i >= num_lines || proc_raddr < (intptr_t)lines[i].offset) {
 					if (i > 0) {
 						return &lines[i-1];
 					}
@@ -1207,10 +1235,21 @@ public:
 			}
 		};
 
-		auto* line = find_line(sym->src, proc_raddr);
-		if (line) {
-			*out_src_loc = { sym->src.filename, line->start_line_number };
-			return true;
+		while (ptr < (char*)header + sym->src.subsec->length) {
+			auto* line_block = (codeview_line_block_header*)ptr;
+			ptr += sizeof(codeview_line_block_header);
+
+			auto* lines = (codeview_line*)ptr;
+			auto* line = find_line(lines, line_block->amount_of_lines, proc_raddr);
+			if (line) {
+				*out_src_loc = {
+					get_lineinfo_source_filepath(modules[sym->module_index], line_block->offset_in_file_checksums),
+					line->start_line_number
+				};
+				return true;
+			}
+
+			ptr += line_block->amount_of_lines * sizeof(codeview_line);
 		}
 
 		return false;

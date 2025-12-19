@@ -79,7 +79,7 @@ class SymTesting {
 			assert(de.dwProcessId == pi.dwProcessId);
 
 			if (de.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT) {
-				//printf("Exited\n");
+				//logf("Exited\n");
 				// Not sure if actually exited completely or stuck just before exiting
 				break; // don't call ContinueDebugEvent, effectively suspended
 			}
@@ -116,13 +116,13 @@ class SymTesting {
 					handle_loaded_image(hFile, addr);
 				} break;
 				case CREATE_THREAD_DEBUG_EVENT: {
-					//printf("CREATE_THREAD_DEBUG_EVENT:\n");
+					//logf("CREATE_THREAD_DEBUG_EVENT:\n");
 				} break;
 				case EXIT_THREAD_DEBUG_EVENT: {
-					//printf("EXIT_THREAD_DEBUG_EVENT:\n");
+					//logf("EXIT_THREAD_DEBUG_EVENT:\n");
 				} break;
 				default: {
-					//printf("Other event [%d]\n", de.dwDebugEventCode);
+					//logf("Other event [%d]\n", de.dwDebugEventCode);
 				} break;
 			}
 
@@ -170,11 +170,12 @@ class SymTesting {
 		return init_rng((uint32_t)seed);
 	}
 public:
-	bool tests_failed = false;
+	//bool tests_failed = false;
+	MismatchCounts mismatch_counts;
 
 	SymTesting (std::string const& exe_filepath, float max_run_time = 2.0f) {
-		printf("\n-------------------------------------\n\n");
-		printf("Starting %s\n", exe_filepath.c_str());
+		logf("\n-------------------------------------\n\n");
+		logf("Starting %s\n", exe_filepath.c_str());
 		start_debugging_child_process(exe_filepath, max_run_time);
 		dbghelp = std::make_unique<Debughelp>(pi.hProcess);
 		resolver = std::make_unique<SymResolver>(pi.hProcess);
@@ -184,7 +185,7 @@ public:
 		dbghelp = nullptr;
 		resolver = nullptr;
 
-		printf("Killing process\n");
+		logf("Killing process\n");
 		finish_debugging_and_kill_child_process();
 
 	}
@@ -197,11 +198,11 @@ public:
 		SymResult res={}, res_dbghelp={};
 
 		dbghelp->addr2sym(addr, &res_dbghelp);
-		printf("dbghelp.dll: [%llx] ", (uintptr_t)addr);
+		logf("dbghelp.dll: [%llx] ", (uintptr_t)addr);
 		res_dbghelp.print();
 
 		resolver->addr2sym(addr, &res);
-		printf("SymResolver: [%llx] ", (uintptr_t)addr);
+		logf("SymResolver: [%llx] ", (uintptr_t)addr);
 		res.print();
 	}
 	void measure_addr2sym (char* addr) {
@@ -214,10 +215,10 @@ public:
 		auto err_dbghelp = dbghelp->addr2sym(addr, &res_dbghelp);
 		auto err         = resolver->addr2sym(addr, &res);
 		
-		if (res != res_dbghelp) {
-			printf("!!! [%llx] (%s) Result Mismatch:\n", (uintptr_t)addr, res_dbghelp.sym_name);
+		if (!res.equal(res_dbghelp, { &mismatch_counts, resolver.get(), addr })) {
+			logf("!!! [%llx] (%s) Result Mismatch:\n", (uintptr_t)addr, res_dbghelp.sym_name);
 			res.print_diff(res_dbghelp);
-			tests_failed = true;
+			//tests_failed = true;
 		}
 	}
 	
@@ -233,16 +234,16 @@ public:
 		dbghelp->addr2sym((void*)addr, &res_dbghelp);
 		resolver->addr2sym((void*)addr, &res);
 		
-		if (res != prev_res || res_dbghelp != prev_res_dbghelp) {
+		if (!res.equal(prev_res) || !res_dbghelp.equal(prev_res_dbghelp)) {
 			if (show) {
-				printf("SymResolver: [%llx] ", addr);
+				logf("SymResolver: [%llx] ", addr);
 				res.print();
 			}
 			
-			if (res != res_dbghelp) {
-				printf("!!! [%llx] (%s) Result Mismatch:\n", addr, res_dbghelp.sym_name);
+			if (!res.equal(res_dbghelp, { &mismatch_counts, resolver.get(), (void*)addr })) {
+				logf("!!! [%llx] (%s) Result Mismatch:\n", addr, res_dbghelp.sym_name);
 				res.print_diff(res_dbghelp);
-				tests_failed = true;
+				//tests_failed = true;
 			}
 
 			prev_res = res;
@@ -255,7 +256,7 @@ public:
 		resolver->addr2sym((void*)addr, &res);
 		
 		if (!res.equal_no_inline(prev_res)) {
-			printf("[%llx] ", addr - (uintptr_t)mod.addr);
+			logf("[%llx] ", addr - (uintptr_t)mod.addr);
 			res.print_no_inline();
 
 			prev_res = res;
@@ -267,7 +268,7 @@ public:
 		resolver->addr2sym((void*)addr, &res);
 		
 		if (!res.equal_sym(prev_res)) {
-			printf("[%llx] ", addr - (uintptr_t)mod.addr);
+			logf("[%llx] ", addr - (uintptr_t)mod.addr);
 			res.print_sym();
 
 			prev_res = res;
@@ -284,11 +285,13 @@ public:
 		//run_examples(fshow);
 		run_examples(ftest);
 
+		mismatch_counts.print();
+
 		for (int i=0; i<1000; i++) {
 			run_examples(fmeas);
 		}
 		dbghelp->print_timings();
-		printf("---\n");
+		logf("---\n");
 		resolver->print_timings();
 	}
 	void warmup (char* addr) {
@@ -306,18 +309,21 @@ public:
 		int before = 0x100;
 		int after = 0x100;
 
-		printf("Sweep for module %s: [%llx-%llx] (-%x +%x)\n", mod.path.c_str(), start, end, before, after);
+		logf("Sweep for module %s: [%llx-%llx] (-%x +%x)\n", mod.path.c_str(), start, end, before, after);
 		for (uintptr_t addr = start - before; addr < end + after; addr++) {
 			//show_and_test_distinct_addr2sym(addr);
 			test_distinct_addr2sym(addr);
 		}
 	#else
-		printf("Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
+		logf("Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
 		for (uintptr_t addr = start; addr < end; addr++) {
 			show_distinct_sym(mod, addr);
 		}
 	#endif
+
+		mismatch_counts.print();
 	}
+
 	// seed=-1 => random seed
 	void fuzz_mod (std::string_view filter, int seed=-1, int count=10000) {
 		auto& mod = loaded_modules.find(filter);
@@ -386,7 +392,7 @@ void example_addresses () {
 
 			at_addr(ucrtbase + 0x1B370); // __stdio_common_vfprintf
 		});
-	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	//Sleep(1000);
 	
 	try {
@@ -408,7 +414,7 @@ void example_addresses () {
 			at_addr(exe + 0x10B0); // space::nested::StructC::StructD::memberCD()
 			at_addr(exe + 0x10C0); // space::nested::StructC::StructD::smemberCD()
 		});
-	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }\
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }\
 
 
 	try {
@@ -451,7 +457,7 @@ void example_addresses () {
 			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
 		});
 
-	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	//Sleep(1000);
 
 	try {
@@ -482,7 +488,7 @@ void example_addresses () {
 			at_addr(ucrtbase + 0x69FB30); // ucrtbase.dll!sinf(), returns wrong symbol for some reason, I even double checked everything, am I missing something?
 			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf, weirdly this one works, so it's even the same ucrtbase.dll as the two other executables
 		});
-	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	//Sleep(1000);
 	
 }
@@ -495,9 +501,10 @@ void test_entire_modules () {
 		sym.sweep_mod(".exe");
 
 		//sym.show_addr2sym(exe + 0x1130);
-		sym.show_addr2sym(exe + 0x13c0); // TODO: linoinfo not found by me because lineheader stores address before symbol (and first line offset is symbol)
+		//sym.show_addr2sym(exe + 0x13c0); // TODO: linoinfo not found by me because lineheader stores address before symbol (and first line offset is symbol)
+		//sym.show_addr2sym(exe + 0x56f0); // _OptionsStorage
 		// not exact start address for some dumb reason, need to lookup not per hashmap but per binary search for each module, could then merge sorted lists per module into global sorted list with one scan
-	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
 	try {
 		SymTesting sym("Namespaces.exe", 0.5f);
@@ -506,19 +513,26 @@ void test_entire_modules () {
 		sym.sweep_mod(".exe");
 
 		sym.show_addr2sym(exe + 0x1090);
-	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
 	try {
 		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
 		char* exe = sym.get_addr(".exe");
 
 		sym.sweep_mod(".exe");
-	} catch (std::exception& err) { fprintf(stderr, "!! Exception: %s\n", err.what()); }
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+
+	try {
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
+		char* exe = sym.get_addr(".exe");
+
+		sym.sweep_mod(".exe");
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
 int main(int argc, const char** argv) {
-	example_addresses();
-	//test_entire_modules();
+	//example_addresses();
+	test_entire_modules();
 	
 	return 0;
 }

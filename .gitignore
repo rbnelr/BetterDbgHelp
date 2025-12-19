@@ -5,6 +5,7 @@
 
 tracy/*
 *.zip
+*.txt
 
 # User-specific files
 *.rsuser
