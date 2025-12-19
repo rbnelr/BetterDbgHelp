@@ -386,7 +386,7 @@ class PDB_File {
 			}
 		}
 		ptr += sizeof(pdb_section_contribution) * num_section_contributions;
-		assert((ptr - ptr2) == header->byte_size_of_the_section_contribution_substream); // Why is this not correct?
+		assert((ptr - ptr2) == header->byte_size_of_the_section_contribution_substream);
 		
 		//// section_map_substream
 		//ptr2 = ptr;
@@ -465,6 +465,20 @@ class PDB_File {
 		}
 	}
 	
+	// Turns "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@4_KA" into "_OptionsStorage"
+	// like dbghelp does (it does this even without SYMOPT_UNDNAME, ie demangling)
+	// dbghelp seems to only process "?..." not "??..." names
+	std::string trim_mangled_name (const char* name) {
+		if (name[0] == '?' && name[1] != '?') {
+			const char* begin = name + 1;
+			const char* end = strchr(begin, '@');
+			if (end) {
+				return std::string(begin, end - begin);
+			}
+		}
+		return std::string(name);
+	}
+
 	void read_symbol_record_stream () {
 		auto* dbi = (dbi_stream_header*)DBI_data.data();
 		symbol_record_stream_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
@@ -480,7 +494,7 @@ class PDB_File {
 				}
 				seg_addr = sections_sorted[seg-1].base_addr;
 			}
-			sym_sorted.push_back(Symbol{ offs + seg_addr, size, name });
+			sym_sorted.push_back(Symbol{ offs + seg_addr, size, trim_mangled_name(name) });
 		};
 		
 		while (ptr < ptr2 + symbol_record_stream_data.size()) {
@@ -546,14 +560,24 @@ class PDB_File {
 			// symbol to left, lower or equal base address
 			Symbol* lower = it != sym_map.begin() ? &sym_sorted[(--it)->second] : nullptr;
 
+			// check boundries correctly while also counting zero-length symbols as touching
+			// TODO: this seems really wrong, probably should just get rid of this test and instead just sort all symbols like before
+			// problem of lineinfo being detached from symbols which this is trying to solve could be solved instead by just doing a second lookup like debughelp
+			// the optimization to avoid the 2nd lookup can simply be an optional pointer inside symbol pointing to the corresponding lineinfo if the ranges are not ambiguous, which should be the common case
+			auto us_end = addr + (size==0 ? 0 : size-1);
+
 			// return lower address symbol if range overlaps
-			if (lower && addr + size >= lower->base_addr && addr < lower->base_addr + lower->size) {
-				return lower;
+			if (lower) {
+				auto lower_end = lower->base_addr + (lower->size==0 ? 0 : lower->size-1);
+				if (us_end >= lower->base_addr && addr <= lower_end)
+					return lower;
 			}
 			// else test higher address symbol to handle weird cases of lineinfo having base address before symbol
 			// (__security_check_cookie : src\vctools\crt\vcstartup\src\gs\amd64\amdsecgs.asm)
-			if (upper && addr + size >= upper->base_addr && addr < upper->base_addr + upper->size) {
-				return upper;
+			if (upper) {
+				auto upper_end = upper->base_addr + (upper->size==0 ? 0 : upper->size-1);
+				if (us_end >= upper->base_addr && addr <= upper_end)
+					return upper;
 			}
 			
 			return nullptr;
@@ -617,20 +641,31 @@ class PDB_File {
 						Symbol s;
 						s.base_addr = module_raddr;
 						s.size = proc->len;
-						s.name = (const char*)proc->name;
+						s.name = std::string( (const char*)proc->name );
 						s.procsym = proc;
 						s.module_index = module_index;
+
+						sym_unfiltered.push_back(s);
 
 						// Functions with identical binary can be merged, in which dbghelp seems to output the symbol of the first entry which is what we will do as well
 						// this lookup, which is used to attach lineinfo to the symbols so we don't have to search the address space twice (like dbghelp does?)
 						// in case of overlapping symbols, only keep first occurance
-						if (find_overlapping_symbol(module_raddr, proc->len) == nullptr) {
+						auto* existing = find_overlapping_symbol(module_raddr, proc->len);
+						if (existing == nullptr) {
 							auto idx = sym_sorted.size();
-							sym_sorted.push_back(s);
+							sym_sorted.push_back(std::move(s));
 
 							sym_map.emplace(module_raddr, idx);
 						}
-						sym_unfiltered.push_back(s);
+						//else {
+						//	// experimental, use last occurance
+						//
+						//	auto it = sym_map.find(module_raddr);
+						//	assert(it != sym_map.end());
+						//	if (it != sym_map.end()) {
+						//		sym_sorted[it->second] = std::move(s);
+						//	}
+						//}
 					} break;
 					case S_INLINESITE: {
 						auto* inl = (INLINESITESYM*)sym;
@@ -1076,9 +1111,9 @@ public:
 	}
 
 	struct Symbol {
-		uintptr_t base_addr; // relative to module
-		size_t size;
-		char const* name;
+		uintptr_t base_addr = 0; // relative to module
+		size_t size = 0;
+		std::string name;
 		
 		s16 module_index = -1;
 		PROCSYM32* procsym = nullptr; // needed for scanning INLINESITEs later
@@ -1120,9 +1155,7 @@ public:
 
 		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
 		// so use upper bound instead (returns first item bigger than addr), then use previous
-		auto dymmy_Symbol = Symbol{
-			addr, 0, nullptr
-		};
+		auto dymmy_Symbol = Symbol{ addr };
 		auto it = std::upper_bound(sym_sorted.begin(), sym_sorted.end(), dymmy_Symbol, [] (Symbol const& l, Symbol const& r) {
 			return l.base_addr < r.base_addr;
 		});
@@ -1158,9 +1191,7 @@ public:
 
 		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
 		// so use upper bound instead (returns first item bigger than addr), then use previous
-		auto dymmy_Symbol = Symbol{
-			addr, 0, nullptr
-		};
+		auto dymmy_Symbol = Symbol{ addr };
 		auto it = std::upper_bound(sym_unfiltered.begin(), sym_unfiltered.end(), dymmy_Symbol, [] (Symbol const& l, Symbol const& r) {
 			return l.base_addr < r.base_addr;
 		});
@@ -1176,7 +1207,7 @@ public:
 		// but ignore ones in the global symbol_record_stream, as they contain mangled version of the symbol without size, but we sometimes want those if there is no real symbol
 		// like __ImageBase
 		for (Symbol* cur=&*it; cur >= sym_sorted.data() && cur->base_addr == sym_addr; --cur) {
-			if (strcmp(cur->name, name) == 0) {
+			if (cur->name.compare(name)==0) {
 				return cur;
 			}
 		}

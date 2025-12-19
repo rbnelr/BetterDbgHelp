@@ -341,7 +341,7 @@ public:
 		}
 		
 		res->module_path = mod->path.c_str();
-		res->sym_name = sym->name;
+		res->sym_name = sym->name.data();
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;
 
@@ -401,7 +401,7 @@ public:
 		}
 		
 		res->module_path = mod->path.c_str();
-		res->sym_name = sym->name;
+		res->sym_name = sym->name.c_str();
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;
 
@@ -434,6 +434,7 @@ public:
 
 void MismatchCounts::symbol_mismatch_or_mangled (SymResult const& res, SymResult const& dbghelp_res, MismatchCounts::Data const& d) {
 	if (res.sym_name[0] == '?') {
+		// Should be obsolete now as I am processing these names
 		auto* end = strchr(res.sym_name+1, '@');
 		if (end) {
 			std::string_view a = dbghelp_res.sym_name;
