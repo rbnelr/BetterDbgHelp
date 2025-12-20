@@ -187,8 +187,21 @@ public:
 
 		throw std::runtime_error("Cannot locate pdb for: "+ exe_path.string());
 	}
+	
+	struct PDB_guid_and_age {
+		GUID    guidSig;
+		DWORD   age;
+	};
+	PDB_guid_and_age get_rsds () {
+		return { rsds->guidSig, rsds->age };
+	}
 
-	//bool verify_pdb_ () {
-	//
-	//}
+	// compare GUID and age from exe and pdb, this helps detect when the wrong pdb is used by accident
+	// TODO: I interpretet GUID to be created on exe creation, then modifications to the exe (edit and conitinue?) increase the age
+	// I thought the pdb would be modified at the same time, so guid and age have to match
+	// but asking for ucrtbase.dll with age 1 gives us a pdb with matching guid but the pdb has age 3
+	// does this mean exe and pdb can be modified seperately and the age does not have to match?
+	static bool verify_pdb (PDB_guid_and_age const& exe, pdb_information_stream_header const* pdb) {
+		return memcmp(&exe.guidSig, &pdb->guid, sizeof(GUID)) == 0; /* && exe.age == pdb->age;*/
+	}
 };

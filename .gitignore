@@ -7,6 +7,7 @@ tracy/*
 traces/*
 *.zip
 *.txt
+backup/*
 
 # User-specific files
 *.rsuser

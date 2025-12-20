@@ -284,13 +284,17 @@ class PDB_File {
 		}
 	}
 
-	void read_pdb_info () {
+	void read_pdb_info (PDB_Locator::PDB_guid_and_age const& rsds) {
 		
 		pdb_info_data = copy_into_consecutive(1);
 		char* ptr = pdb_info_data.data();
 
 		auto* info = (pdb_information_stream_header*)ptr;
 		ptr += sizeof(pdb_information_stream_header);
+
+		if (!PDB_Locator::verify_pdb(rsds, info))
+			throw std::runtime_error("PDB loaded but GUID or age mismatch for "+ path.string()
+				+"\nThis likely means the pdb is from a different program or an older build, symbols will likely be wrong!");
 
 		// read named stream hashmap
 		u32 string_buffer_size = *(u32*)ptr;
@@ -1227,13 +1231,15 @@ public:
 	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& exe_path) {
 		try {
 			PDB_Locator locator(exe_path);
-			return std::make_unique<PDB_File>(locator.get_pdb_path());
-		} catch (std::exception&) {
-			//flogf(stderr, "PDB loading exception: %s\n", ex.what());
+			auto path = locator.get_pdb_path();
+			auto rsds = locator.get_rsds();
+			return std::make_unique<PDB_File>(std::move(path), rsds);
+		} catch (std::exception& ex) {
+			logf("!!! PDB loading exception: %s\n", ex.what());
 		}
 		return nullptr;
 	}
-	PDB_File (std::filesystem::path&& path): path{std::move(path)} {
+	PDB_File (std::filesystem::path&& path, PDB_Locator::PDB_guid_and_age const& rsds): path{std::move(path)} {
 		ZoneScopedN("parse_pdb");
 
 		if (!file.open(this->path)) {
@@ -1244,7 +1250,7 @@ public:
 		
 		read_header();
 		read_stream_table();
-		read_pdb_info();
+		read_pdb_info(rsds);
 		read_names();
 		read_TPI_stream();
 		read_IPI_stream();
@@ -1569,7 +1575,10 @@ public:
 
 		int depth = 0;
 		int max_depth = 0;
-		
+
+		// Directly parse data from module symbol stream, this causes us to have to skip unrelated data
+		// TODO: optimize by building dedicated data structure, but consider memory use, might be worth it to at least mark functions without inlinesites as they also contain data we need to skip?
+		// Actually, max inline depth would be really helpful at the very least
 		char* ptr = (char*)sym->procsym;
 		for (;;) {
 			auto entry = (codeview_symbol_header*)ptr;
@@ -1583,8 +1592,16 @@ public:
 					
 					// TODO: could also optimize by preprocessing min/max ranges for each inlinesite and sorting them, which can then be binary searched per level
 					// probably should build a tree structure for this
-						
+					
+					// WARNING: out_locs are not fully zeroed as an optimization!
+					// This ensures we clear it the first time we see it, but also keep it valid across future in INLINESITEs of the same depth
+					if (depth+1 > max_depth) {
+						out_locs[depth] = {};
+					}
+
+					// Optimizion: for every address there is only one inline stack, so (in theory) two of the same level can't both match, so we can skip future ones
 					bool already_resolved = out_locs[depth].filepath != nullptr;
+
 					if (  depth < num_locs && !already_resolved &&
 						  find_srcloc_in_encoded(inl, proc_raddr, &encoded_loc) ) {
 						// fnname (ie. symbol), can only be found if source location is found, as there can be multiple INLINESITEs for one depth
@@ -1600,7 +1617,7 @@ public:
 						}
 						out_locs[depth].filepath = encoded_loc.filepath;
 						out_locs[depth].lineno = encoded_loc.lineno;
-							
+						
 						max_depth = std::max(max_depth, depth+1);
 					}
 					else {
@@ -1608,6 +1625,8 @@ public:
 						auto* end_entry = mod.sym_info + inl->pEnd; // corresponding S_INLINESITE_END
 						assert(((codeview_symbol_header*)end_entry)->kind == S_INLINESITE_END);
 						assert(end_entry >= ptr);
+						// set ptr direcly to S_INLINESITE_END entry, note that we increment and immediately decrement depth
+						// a more optimized implementation would avoid this
 						ptr = end_entry;
 					}
 

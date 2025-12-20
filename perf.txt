@@ -1,3 +1,12 @@
+
+Note:
+since I always run dbghelp first, then my code, then dbhhelp again
+dbghelp could pollute the cache and cause us to run slower than in real world examples
+then again in real world examples tracy runs symbol resolution somewhat intermixed with actual game code, so maybe it's fair?
+anyway, I want to optimize for random access in large executables anyway,
+so not hiding cache misses may actually be preferable to our small data structures running "too fast" due to being cached
+
+
 PDB addr2sym entirely unoptimized (linear searches!)
 
 I think this was SymFromAddr+SymGetLineFromAddr64 for dbghelp
@@ -13,6 +22,21 @@ TinyProgram.exe:       14.871us -> 0.107us  139x faster
 city_builder_rel.exe:  23.807us -> 0.178us  134x faster
 rust_bevy_test.exe:    88.705us -> 94.105us 457x faster
 
+========== optimizing pass 1 ==================
+just my code (no cache pollution from dbghelp this time):
+find_symbol_for_addr for city builder:
+
+example addresses: 0.047 us
+sweep:             0.035 us // 0.74x
+fuzzing:           0.158 us // 3.36x
+Theory:
+
+example addresses can benefit from caching between each other and when repeated
+sweep can benefit from caching even more since neighbouring addresses have almost identical binary search
+fuzzing cannot benefit from caching, but symbol data can be biased in address, thus making some search steps very likely, or entire symbol table can fit in certain cache levels
+
+real world profiler usage may not fit with any of these, as real world is not a sweep, but also not completely uniform random
+it's likely clustered around hotspot inner loops and thus somewhere between example and fuzzing
 
 ========== load_pdb optimization ==============
 use memory mapped file instead of copying entire into ram (still copying another time due to pdb paging)

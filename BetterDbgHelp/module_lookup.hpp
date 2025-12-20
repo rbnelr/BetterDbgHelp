@@ -48,7 +48,7 @@ struct ModuleCache {
 	const LoadedModule* find_module_for_addr (HANDLE inspectee, uintptr_t addr) {
 		ZoneScoped;
 
-		// Linear search shoule be enough
+		// Linear search shoule be fast enough for the moment
 		for (auto& m : sorted) {
 			if (addr >= m.base_addr && addr < m.base_addr + m.size) {
 				return &m;
@@ -70,8 +70,13 @@ struct ModuleCache {
 				print_err_throw("EnumProcessModules");
 			}
 
-			// only return, and cache, the module that addr was in (as opposed to simply aching anything GetModuleInformation returns)
-			// this causes more EnumProcessModules calls, but could help might make find_module_for_addr faster in the case where modules are never queried
+			// only return, and cache, the module that addr was in (as opposed to simply caching anything GetModuleInformation returns)
+			// this causes more EnumProcessModules calls, but might make find_module_for_addr faster in the case where modules are never queried (tracy probably does not hit many of the dll ever or only rarely)
+			// NOTE: I kinda forgot that if an adress outside of a module is queried, we can't cache anything and thus we end up doing EnumProcessModules over and over, which may be slow
+			// but I'm not sure there's anything I can do about this, the idea is that at the time of the query, new dlls could have been loaded
+			// EnumProcessModules is probably reasonably fast and a profiler practically never hits cases like that (unless code is injected and executed lol)
+			// this could still be relevant in some contexts, like debuggers?, but again, not sure how to fix
+			// TODO: it may be possible to be notified of dlls when they get loaded and thus handle it more efficiently, but this it's not worth it for now
 			for (int i=0; i<needed/sizeof(HMODULE); i++) {
 				auto& mod = modules[i];
 

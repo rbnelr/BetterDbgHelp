@@ -40,6 +40,8 @@ struct MismatchCounts {
 struct SymResult {
 	// TODO: dbghelp.dll requires us to pass in a string buffer, and I want to avoid heap alloc for the moment
 	static inline constexpr unsigned STRBUF_SIZE = 4096;
+	static inline constexpr unsigned MAX_INLINES = 64;
+
 	char str_buf[STRBUF_SIZE];
 
 	union {
@@ -53,11 +55,15 @@ struct SymResult {
 			uint32_t    src_lineno;
 		
 			int num_inlines;
-			SourceLocAndFn inlines[64];
+			SourceLocAndFn inlines[MAX_INLINES];
 		};
 	};
 
 	SymResult () {
+		clear();
+	}
+	// call this from symbol resolver as it is faster to only clear relevant fields rather than sym={}, at that copies entire str_buf!
+	void clear () {
 		module_path = nullptr;
 		sym_name = nullptr;
 		
@@ -66,9 +72,12 @@ struct SymResult {
 		
 		num_inlines = 0;
 
-		memset(inlines, 0, sizeof(inlines));
-
+		// I had a bug with inlinesites not getting properly cleared(?)
+		// but this memset takes time, so let's just get this right instead
+		//#ifndef NDEBUG
 		//memset((char*)this + STRBUF_SIZE, 0, sizeof(SymResult)-STRBUF_SIZE);
+		//memset(inlines, 0, sizeof(inlines));
+		//#endif
 	}
 
 	bool valid () const {
@@ -287,12 +296,17 @@ struct SymResult {
 				logf("> dbghelp:dll: (No source info)\n");
 			}
 		}
+		
 		for (int i=0; i<std::max(num_inlines, r.num_inlines); i++) {
-			if (   !my_strcmp(inlines[i].fnname, r.inlines[i].fnname)
-				|| !my_strcmp(inlines[i].filepath, r.inlines[i].filepath)
-				||  inlines[i].lineno != r.inlines[i].lineno) {
-				logf(" |inl%d SymResolver: %-15s %15s:%d\n", i, inlines[i].fnname, inlines[i].filepath, inlines[i].lineno);
-				logf(" |inl%d dbghelp:dll: %-15s %15s:%d\n", i, r.inlines[i].fnname, r.inlines[i].filepath, r.inlines[i].lineno);
+			// inlines past num_inlines no longer cleared as an optimization, need to compare correctly!
+			auto l = i < num_inlines ? inlines[i] : SourceLocAndFn{};
+			auto dh = i < r.num_inlines ? r.inlines[i] : SourceLocAndFn{};
+
+			if (   !my_strcmp(l.fnname, dh.fnname)
+				|| !my_strcmp(l.filepath, dh.filepath)
+				||  l.lineno != dh.lineno) {
+				logf(" |inl%d SymResolver: %-15s %15s:%d\n", i, l.fnname, l.filepath, l.lineno);
+				logf(" |inl%d dbghelp:dll: %-15s %15s:%d\n", i, dh.fnname, dh.filepath, dh.lineno);
 			}
 		}
 	}
@@ -312,13 +326,13 @@ public:
 	SymResolver (HANDLE inspectee): inspectee{inspectee} {}
 	
 	void measure_addr2sym (char* ptr) {
-		SymResult res = {};
+		SymResult res;
 		measure_addr2sym(ptr, &res);
 	}
 	
 	bool addr2sym (void* ptr, SymResult* res) {
+		res->clear();
 		uintptr_t addr = (uintptr_t)ptr;
-		*res = {};
 
 		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
 		if (!mod) {
@@ -350,7 +364,7 @@ public:
 		}
 
 		{
-			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, 64, &res->num_inlines);
+			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES, &res->num_inlines);
 		}
 
 		return res->valid();
@@ -372,17 +386,20 @@ public:
 		return mod->pdb->has_symbol_for_addr(mod_raddr, dbghelp_res.sym_name);
 	}
 	
+	__declspec(noinline)
 	void measure_pdb_parse (void* ptr) {
 		auto* mod = mod_cache.find_module_for_addr(inspectee, (uintptr_t)ptr);
 		mod_cache.clear(); // clear cache so this can be called repeatedly
 	}
 
-	bool measure_addr2sym (void* ptr, SymResult* res) {
+	// Hopefully noinline will ensure the compiler never optimized away unused SymResult, thus invalidating measurement!
+	// if observed will need to fix this at the callsite
+	__declspec(noinline) bool measure_addr2sym (void* ptr, SymResult* res) {
 		auto _tCombinedAddr2sym = kiss::TimerMeasureZone::started(&tCombinedAddr2sym);
 		ZoneScoped;
-
+		
+		res->clear();
 		uintptr_t addr = (uintptr_t)ptr;
-		*res = {};
 
 		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
 		if (!mod) {
@@ -422,7 +439,7 @@ public:
 
 		{
 			TimerMeasZone(ttrace_inlinesites);
-			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, 64, &res->num_inlines);
+			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES, &res->num_inlines);
 		}
 
 		return res->valid();

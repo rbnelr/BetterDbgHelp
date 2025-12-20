@@ -72,7 +72,7 @@ public:
 	}
 	
 	void measure_addr2sym (char* addr) {
-		ZoneScoped;
+		ZoneScopedC(0xAC563E);
 
 		constexpr size_t MaxNameSize = 8192;
 		char buf[sizeof(SYMBOL_INFO) + MaxNameSize] = {};
@@ -104,7 +104,7 @@ public:
 		}
 		
 		{
-			ZoneScopedN("inlining");
+			ZoneScopedNC("inlining", 0xAC563E);
 		
 			BOOL doInline = FALSE;
 			DWORD ctx = 0;
@@ -144,7 +144,7 @@ public:
 	}
 
 	bool addr2sym (void* addr, SymResult* res) {
-		*res = {};
+		res->clear();
 
 		size_t strbuf_cur = 0;
 		auto copy_to_strbuf = [&] (const char* str, size_t len) -> const char* {

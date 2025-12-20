@@ -8,6 +8,8 @@
 #include "dbghelp.hpp"
 #include "sym_resolver.hpp"
 
+bool run_dbghelp = true;
+
 class SymTesting {
 	STARTUPINFOA si{};
 	PROCESS_INFORMATION pi{};
@@ -42,6 +44,8 @@ class SymTesting {
 	std::unique_ptr<SymResolver> resolver;
 	
 	void start_debugging_child_process (std::string const& exe_filepath, float max_run_time) {
+		ZoneScopedC(0xff0000);
+
 		// Start exe as child process with DEBUG_ONLY_THIS_PROCESS
 		// let it run until it exits on its own or until max run time is reached
 		// meanwhile react to module load events to record their names and addresses
@@ -130,6 +134,8 @@ class SymTesting {
 		}
 	}
 	void finish_debugging_and_kill_child_process () {
+		ZoneScopedC(0xff0000);
+
 		// Tell the process to die
 		TerminateProcess(pi.hProcess, 0);
 		
@@ -176,7 +182,8 @@ public:
 	SymTesting (std::string const& exe_filepath, float max_run_time = 2.0f) {
 		logf("\n---------- Starting %s -----------\n", exe_filepath.c_str());
 		start_debugging_child_process(exe_filepath, max_run_time);
-		dbghelp = std::make_unique<Debughelp>(pi.hProcess);
+		if (run_dbghelp)
+			dbghelp = std::make_unique<Debughelp>(pi.hProcess);
 		resolver = std::make_unique<SymResolver>(pi.hProcess);
 	}
 
@@ -196,21 +203,25 @@ public:
 	void show_addr2sym (char* addr) {
 		SymResult res={}, res_dbghelp={};
 
-		dbghelp->addr2sym(addr, &res_dbghelp);
-		logf("dbghelp.dll: [%llx] ", (uintptr_t)addr);
-		res_dbghelp.print();
+		if (dbghelp) {
+			dbghelp->addr2sym(addr, &res_dbghelp);
+			logf("dbghelp.dll: [%llx] ", (uintptr_t)addr);
+			res_dbghelp.print(); // TODO: calcualte and print speedup percent after both timings, probably should move all measurements to central class for that, then pass ptr to that to both classes
+		}
 
 		resolver->addr2sym(addr, &res);
 		logf("SymResolver: [%llx] ", (uintptr_t)addr);
 		res.print();
 	}
 	void measure_addr2sym (char* addr) {
-		dbghelp->measure_addr2sym(addr);
+		if (dbghelp)
+			dbghelp->measure_addr2sym(addr);
 		resolver->measure_addr2sym(addr);
 	}
 	void test_addr2sym (char* addr) {
-		SymResult res={}, res_dbghelp={};
+		assert(dbghelp); // need dbghelp to be able to compare
 
+		SymResult res={}, res_dbghelp={};
 		auto err_dbghelp = dbghelp->addr2sym(addr, &res_dbghelp);
 		auto err         = resolver->addr2sym(addr, &res);
 		
@@ -297,8 +308,10 @@ public:
 			for (int i=0; i<meas_iterations; i++) {
 				run_examples(fmeas);
 			}
-			dbghelp->print_timings();
-			logf("---\n");
+			if (dbghelp) {
+				dbghelp->print_timings();
+				logf("---\n");
+			}
 			resolver->print_timings();
 		}
 	}
@@ -306,7 +319,8 @@ public:
 	// try to exclude pdb parsing from measurement
 	void warmup (char* addr) {
 		SymResult sym = {};
-		dbghelp->addr2sym(addr, &sym);
+		if (dbghelp)
+			dbghelp->addr2sym(addr, &sym);
 		resolver->addr2sym(addr, &sym);
 	}
 
@@ -315,7 +329,7 @@ public:
 		auto start = (uintptr_t)mod.addr;
 		auto end = (uintptr_t)mod.addr + mod.size;
 
-	#if 1
+	#if 0
 		int before = 0x100;
 		int after = 0x100;
 
@@ -344,8 +358,10 @@ public:
 			measure_addr2sym((char*)addr);
 		}
 
-		dbghelp->print_timings();
-		logf("---\n");
+		if (dbghelp) {
+			dbghelp->print_timings();
+			logf("---\n");
+		}
 		resolver->print_timings();
 	}
 
@@ -363,9 +379,11 @@ public:
 			auto addr = uniform_rng(rng);
 			measure_addr2sym((char*)addr);
 		}
-
-		dbghelp->print_timings();
-		logf("---\n");
+		
+		if (dbghelp) {
+			dbghelp->print_timings();
+			logf("---\n");
+		}
 		resolver->print_timings();
 	}
 
@@ -395,7 +413,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 
 	try {
 		ZoneScopedN("TinyProgram.exe");
-		SymTesting sym("TinyProgram.exe", 0.5f);
+		SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
@@ -454,7 +472,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 	
 	try {
 		ZoneScopedN("Namespaces.exe");
-		SymTesting sym("Namespaces.exe", 0.5f);
+		SymTesting sym("Namespaces/Namespaces.exe", 0.5f);
 
 		char* exe = sym.get_addr(".exe");
 		sym.print_pdb_stats(".exe");
@@ -483,7 +501,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		char* assimp = sym.get_addr("assimp-vc143-mt.dll");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
 		sym.print_pdb_stats(".exe");
-		sym.print_pdb_stats("assimp.dll");
+		sym.print_pdb_stats("assimp-vc143-mt.dll");
 		
 		sym.warmup(exe + 0x21FA0);
 		sym.warmup(assimp + 0x23990); // assimp, no pdb! (for testing)
@@ -561,7 +579,7 @@ void sweep_tests () {
 
 	try {
 		ZoneScopedN("TinyProgram.exe");
-		SymTesting sym("TinyProgram.exe", 0.5f);
+		SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
 		char* exe = sym.get_addr(".exe");
 
 		sym.sweep_mod(".exe");
@@ -575,7 +593,7 @@ void sweep_tests () {
 
 	try {
 		ZoneScopedN("Namespaces.exe");
-		SymTesting sym("Namespaces.exe", 0.5f);
+		SymTesting sym("Namespaces/Namespaces.exe", 0.5f);
 		char* exe = sym.get_addr(".exe");
 
 		sym.sweep_mod(".exe");
@@ -609,39 +627,46 @@ void sweep_tests () {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
-void profiling_fuzz () {
+void profiling_sweep (int mult=1) {
+	ZoneScoped;
+
+	logf("================ Sweeping Addresses ================\n");
+
+	try {
+		ZoneScopedN("TinyProgram.exe");
+		SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
+		for (int i=0; i<mult; i++) sym.sweep_mod_measure(".exe");
+		for (int i=0; i<mult; i++) sym.sweep_mod_measure("ucrtbase.dll");
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
+	try {
+		ZoneScopedN("city_builder_rel.exe");
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+		// This is too slow to run more than once
+		sym.sweep_mod_measure(".exe");
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+}
+void profiling_fuzz (int mult=1) {
 	ZoneScoped;
 
 	logf("================ Fuzzing Addresses ================\n");
 
 	try {
 		ZoneScopedN("TinyProgram.exe");
-		SymTesting sym("TinyProgram.exe", 0.5f);
-		char* exe = sym.get_addr(".exe");
-
-		sym.sweep_mod_measure(".exe");
-		sym.sweep_mod_measure("ucrtbase.dll");
-
-		//sym.show_addr2sym(exe + 0x1130);
-		//sym.show_addr2sym(exe + 0x13c0); // TODO: linoinfo not found by me because lineheader stores address before symbol (and first line offset is symbol)
-		//sym.show_addr2sym(exe + 0x56f0); // _OptionsStorage
-		// not exact start address for some dumb reason, need to lookup not per hashmap but per binary search for each module, could then merge sorted lists per module into global sorted list with one scan
+		SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
+		sym.fuzz_mod_measure(".exe", 20000*mult);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
 	try {
 		ZoneScopedN("city_builder_rel.exe");
 		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
-		char* exe = sym.get_addr(".exe");
-
-		sym.fuzz_mod_measure(".exe", 20000, 5);
+		sym.fuzz_mod_measure(".exe", 20000*mult, 5);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
 	try {
 		ZoneScopedN("rust_bevy_test.exe");
 		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
-		char* exe = sym.get_addr(".exe");
-
-		sym.fuzz_mod_measure(".exe", 5000, 5);
+		sym.fuzz_mod_measure(".exe", 4000*mult, 5);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
@@ -652,7 +677,7 @@ void profiling_pdb_parse (int iterations) {
 
 	try {
 		ZoneScopedN("TinyProgram.exe");
-		SymTesting sym("TinyProgram.exe", 0.5f);
+		SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
 		sym.measure_pdb_parse(".exe", iterations);
 		sym.measure_pdb_parse("ucrtbase.dll", iterations);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
@@ -670,18 +695,28 @@ void profiling_pdb_parse (int iterations) {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
+// Run a bunch of passes of symbol resolution to produce interesting timing results
+// either with dbghelp for comparison or without to optimize my code by inspecting via tracy
+// examples, sweeps, and fuzzing likely all have different performance characteristics,
+// so just try to find a good balance that is not to quick to get bad sampling results in tracy, nor too long to have to sit around waiting
+// that's why I play with the iteration counts so much
 void profiling_run () {
-	example_addresses(false, false, 4000);
+	run_dbghelp = false;
+	int mult = run_dbghelp ? 1 : 10;
 
-	profiling_pdb_parse(1000);
+	example_addresses(false, false, 4000 * mult);
 
-	profiling_fuzz();
+	//profiling_pdb_parse(1000);
+
+	profiling_sweep(mult);
+	profiling_fuzz(run_dbghelp ? 1 : 30); // this is fast enough without dbghelp to run more often
 }
 
 int main(int argc, const char** argv) {
-	//example_addresses(true, true);
+	example_addresses(true, false);
 	//sweep_tests();
-	profiling_run();
+	//profiling_run();
+	//example_addresses(true, true, 5000);
 
 	return 0;
 }
