@@ -39,15 +39,15 @@ class PDB_Locator {
 
 	void open_image_and_find_rsds (std::filesystem::path const& filepath) {
 		if (!file.open(filepath.c_str()))
-			throw std::runtime_error("File not found: "+ filepath.u8string());
+			throw std::runtime_error("File not found: "+ filepath.string());
 
 		dos_header = (IMAGE_DOS_HEADER*)file.data();
 		if (dos_header->e_magic != 0x5A4D) // MZ
-			throw std::runtime_error("Error parsing image: "+ filepath.u8string());
+			throw std::runtime_error("Error parsing image: "+ filepath.string());
 		
 		nt_header = (IMAGE_NT_HEADERS*)((char*)file.data() + dos_header->e_lfanew);
 		if (nt_header->Signature != 0x00004550) // PE\0\0
-			throw std::runtime_error("Error parsing image: "+ filepath.u8string());
+			throw std::runtime_error("Error parsing image: "+ filepath.string());
 		
 		section_headers = (IMAGE_SECTION_HEADER*)((char*)file.data() + dos_header->e_lfanew + sizeof(IMAGE_NT_HEADERS));
 
@@ -60,7 +60,7 @@ class PDB_Locator {
 			if (d.Type == IMAGE_DEBUG_TYPE_CODEVIEW) {
 				rsds = (RSDSI*)((char*)file.data() + d.PointerToRawData);
 				if (rsds->dwSig != 0x53445352) // "RSDS"
-					throw std::runtime_error("Error parsing image: "+ filepath.u8string());
+					throw std::runtime_error("Error parsing image: "+ filepath.string());
 
 				return;
 			}
@@ -151,6 +151,8 @@ class PDB_Locator {
 
 public:
 	PDB_Locator (std::filesystem::path const& filepath): exe_path{filepath} {
+		ZoneScoped;
+
 		open_image_and_find_rsds(exe_path);
 		parse_rsds();
 
@@ -158,6 +160,8 @@ public:
 	}
 
 	std::filesystem::path get_pdb_path () {
+		ZoneScoped;
+
 		// prefer pdb next to exe
 		{
 			std::filesystem::path pdb_path = exe_path;
@@ -181,7 +185,7 @@ public:
 			return cached_pdb_path;
 		}
 
-		throw std::runtime_error("Cannot locate pdb for: "+ exe_path.u8string());
+		throw std::runtime_error("Cannot locate pdb for: "+ exe_path.string());
 	}
 
 	//bool verify_pdb_ () {

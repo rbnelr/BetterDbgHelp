@@ -38,6 +38,14 @@ struct StrAlloc {
 		}
 		return (sid)offset;
 	}
+	sid get_offset () {
+		auto offset = buf.size();
+		if (offset > 0xffffffff) {
+			assert(false);
+		}
+		return (sid)offset;
+	}
+
 	sid push (const char* str, size_t len) {
 		sid offset = _grow(len+1);
 		memcpy(buf.data()+offset, str, len+1);
@@ -58,6 +66,18 @@ struct StrAlloc {
 		memcpy(cur, a, la); cur += la;
 		memcpy(cur, b, lb); cur += lb;
 		memcpy(cur, c, lc+1);
+
+		return offset;
+	}
+	sid push_concat_scope_no_terminate (const char* scope) {
+		auto len = strlen(scope);
+		
+		sid offset = _grow(len + 2);
+		auto* cur = buf.data() + offset;
+
+		memcpy(cur, scope, len); cur += len;
+		*cur++ = ':';
+		*cur++ = ':';
 
 		return offset;
 	}
@@ -171,9 +191,9 @@ class PDB_File {
 	optional_debug_header_substream* opt_streams;
 
 	// Struct, Class and Union names from TPI, these are already fully formatted
-	std::unordered_map<CV_typ_t, const char*> typeid2name;
+	ankerl::unordered_dense::map<CV_typ_t, const char*> typeid2name;
 	// Func and MemberFunc names from IPI (IDs will overlap with typeid2name!)
-	std::unordered_map<CV_ItemId, sid> IPI_id2name;
+	ankerl::unordered_dense::map<CV_ItemId, sid> IPI_id2name;
 
 	//// Final needed data
 	struct Section {
@@ -969,9 +989,9 @@ class PDB_File {
 		struct IPI_STRING_IDs {
 			// LF_STRING_ID is what lfFuncId.scopeId points to
 			// do a pass first
-			std::unordered_map<u32, codeview_type_record_header*> map;
+			ankerl::unordered_dense::map<u32, codeview_type_record_header*> map;
 
-			void _append (std::string* str, CV_ItemId id) const {
+			void recurse_append_scope (StrAlloc* stralloc, CV_ItemId id) const {
 				auto it = map.find(id);
 				if (it == map.end()) {
 					assert(false);
@@ -985,10 +1005,10 @@ class PDB_File {
 					// lfStringId (Composite) -> string for lfStringId.id + lfStringId.name
 
 					if (si->id != 0) {
-						_append(str, si->id);
+						recurse_append_scope(stralloc, si->id);
 					}
 
-					str->append((const char*)si->name);
+					stralloc->push_concat_scope_no_terminate((const char*)si->name);
 				}
 				else {
 					assert(lf->kind == LF_SUBSTR_LIST);
@@ -996,23 +1016,21 @@ class PDB_File {
 					
 					// lfArgList -> string for lfArgList.arg[0] + string for lfArgList.arg[1] + ...
 					for (u32 i=0; i<si->count; i++) {
-						_append(str, si->arg[i]);
+						recurse_append_scope(stralloc, si->arg[i]);
 					}
 				}
 			}
 
-			std::string resolve (CV_ItemId id) const {
-				std::string str;
-				str.reserve(16);
+			sid push_scope_prefix (StrAlloc* stralloc, CV_ItemId id) const {
+				auto offset = stralloc->get_offset();
 
-				_append(&str, id);
+				recurse_append_scope(stralloc, id);
 
-				assert(!str.empty());
-				return str;
+				return offset;
 			}
 		};
 		IPI_STRING_IDs strids;
-		strids.map.reserve(1024);
+		strids.map.reserve(32);
 		
 		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
 			auto* lf = (codeview_type_record_header*)ptr;
@@ -1089,9 +1107,8 @@ class PDB_File {
 					//logf(">> lfFuncId: [%4x]=%s\n", id, func->name);
 
 					if (func->scopeId != 0) {
-						auto scope_name = strids.resolve(func->scopeId);
-
-						auto formatted_strid = stralloc.push_concat(scope_name.c_str(), "::", (const char*)func->name);
+						auto formatted_strid = strids.push_scope_prefix(&stralloc, func->scopeId); // pushes "nested::scope::"
+						stralloc.push((const char*)func->name); // pushes final name with null terminator
 
 						assert(IPI_id2name.find(id) == IPI_id2name.end());
 						IPI_id2name.emplace(id, formatted_strid);
@@ -1148,7 +1165,7 @@ private:
 		// but actually, sometimes the filepath differs (same header, paths, compiled on different machines?)
 		// so functions compiled from different copies of a header can get the same id
 		char* file_checksum_ptr = nullptr;
-		std::unordered_map<CV_ItemId, InlineeSourceLine*> inlinee_c13;
+		ankerl::unordered_dense::map<CV_ItemId, InlineeSourceLine*> inlinee_c13; // TODO: make single hashmap with module id + item id as key to avoid too scattered allocations as optimization, or maybe map or sorted vec could actually be faster?
 
 	};
 	std::vector<Module> modules;
@@ -1187,27 +1204,30 @@ private:
 	}
 	
 	void _reserve () {
-		modules.reserve(256);
+		modules.reserve(128);
 		sections_sorted.reserve(32);
 
-		typeid2name.reserve(4096);
-		IPI_id2name.reserve(4096);
+		typeid2name.reserve(128);
+		IPI_id2name.reserve(128);
 
-		sym_sorted.reserve(4096);
-		sym_unfiltered.reserve(4096);
+		sym_sorted.reserve(1024);
+		sym_unfiltered.reserve(1024);
 	}
 public:
-	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& path) {
+	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& exe_path) {
 		try {
-			return std::make_unique<PDB_File>(path);
+			PDB_Locator locator(exe_path);
+			return std::make_unique<PDB_File>(locator.get_pdb_path());
 		} catch (std::exception&) {
 			//flogf(stderr, "PDB loading exception: %s\n", ex.what());
 		}
 		return nullptr;
 	}
 	PDB_File (std::filesystem::path const& path) {
+		ZoneScopedN("parse_pdb");
+
 		if (!file.open(path)) {
-			throw std::runtime_error("File not found: "+ path.u8string());
+			throw std::runtime_error("File not found: "+ path.string());
 		}
 
 		_reserve();

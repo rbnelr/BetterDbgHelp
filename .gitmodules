@@ -2,3 +2,7 @@
 	path = tracy
 	url = https://github.com/wolfpld/tracy.git
 	branch = master
+[submodule "ankerl"]
+	path = ankerl
+	url = https://github.com/martinus/unordered_dense
+	branch = main

@@ -14,8 +14,19 @@
     <ClInclude Include="module_lookup.hpp" />
     <ClInclude Include="logger.hpp" />
     <ClInclude Include="pdb_locator.hpp" />
+    <ClInclude Include="..\ankerl\include\ankerl\stl.h">
+      <Filter>ankerl</Filter>
+    </ClInclude>
+    <ClInclude Include="..\ankerl\include\ankerl\unordered_dense.h">
+      <Filter>ankerl</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="codeview.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="ankerl">
+      <UniqueIdentifier>{cdcd442a-56bf-4d0f-aa94-1c9f1ee79785}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
 </Project>

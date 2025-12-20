@@ -48,7 +48,7 @@ class SymTesting {
 		// then leave process suspended so we can simulate symbol resolving
 
 		std::filesystem::path path = exe_filepath;
-		std::string working_dir = path.has_parent_path() ? path.parent_path().u8string() : ".";
+		std::string working_dir = path.has_parent_path() ? path.parent_path().string() : ".";
 
 		if (!CreateProcessA(exe_filepath.c_str(), NULL, NULL, NULL, FALSE,
 				DEBUG_ONLY_THIS_PROCESS | CREATE_NEW_CONSOLE,
@@ -588,7 +588,7 @@ void profiling_pdb_parse (int count) {
 	
 	try {
 		ZoneScopedN("city_builder_rel.exe");
-		SymTesting sym("city_builder_rel.exe");
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
 		for (int i=0; i<count; i++) {
 			sym.measure_pdb_parse(sym.get_addr(".exe"));
 		}
@@ -596,7 +596,7 @@ void profiling_pdb_parse (int count) {
 	
 	try {
 		ZoneScopedN("rust_bevy_test.exe");
-		SymTesting sym("rust_bevy_test.exe");
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
 		for (int i=0; i<count; i++) {
 			sym.measure_pdb_parse(sym.get_addr(".exe"));
 		}
@@ -639,7 +639,7 @@ void profiling_fuzz () {
 void profiling_run () {
 	example_addresses(false, false, 4000);
 
-	profiling_pdb_parse(4000);
+	profiling_pdb_parse(1000);
 
 	profiling_fuzz();
 }

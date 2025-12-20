@@ -43,7 +43,7 @@ public:
 			}
 
 			std::filesystem::path exe_path = std::string_view(exe_name, size);
-			search_path = exe_path.has_parent_path() ? exe_path.parent_path().u8string() : ".";
+			search_path = exe_path.has_parent_path() ? exe_path.parent_path().string() : ".";
 		}
 
 		DWORD opts = 0;

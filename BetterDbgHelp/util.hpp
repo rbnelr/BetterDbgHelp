@@ -8,12 +8,16 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include <unordered_map>
+//#include <unordered_map>
 #include <memory>
 #include <algorithm>
 #include <stdexcept>
 #include <filesystem>
 #include <fstream>
+
+#include "ankerl/unordered_dense.h"
+
+#include "tracy/Tracy.hpp"
 
 #include "timer.hpp"
 #include "logger.hpp"
@@ -38,8 +42,6 @@ using namespace kiss;
 //#undef BF_BOTTOM
 //#undef BF_TOP
 //#undef ERROR
-
-#include "tracy/Tracy.hpp"
 
 inline void print_err(const char* operation) {
 	auto err = GetLastError();
@@ -70,6 +72,14 @@ inline bool ends_with(std::string_view str, std::string_view suffix) {
 
 template <typename K, typename V, typename K2>
 inline V* try_get (std::unordered_map<K, V>& map, K2 const& key) {
+	auto it = map.find(key);
+	if (it == map.end())
+		return nullptr;
+	return &it->second;
+}
+
+template <typename K, typename V, typename K2>
+inline V* try_get (ankerl::unordered_dense::map<K, V>& map, K2 const& key) {
 	auto it = map.find(key);
 	if (it == map.end())
 		return nullptr;

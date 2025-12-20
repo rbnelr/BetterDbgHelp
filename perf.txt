@@ -9,3 +9,20 @@ PDB addr2sym with binary searches and linear line search (mostly unoptimized, ju
 TinyProgram.exe:       14.871us -> 0.107us  139x faster
 city_builder_rel.exe:  23.807us -> 0.178us  134x faster
 rust_bevy_test.exe:    88.705us -> 94.105us 457x faster
+
+
+load_pdb optimization:
+use memory mapped file instead of copying entire into ram (still copying another time due to pdb paging)
+ -> -20%
+
+reserve vector and unordered_map
+ -> -10%
+ 
+string buffer to avoid std::string
+ -> -25% (only for symbols)
+ -> -33% (symbols + IPI optimization)
+ 
+switch to ankerl hashmap
+ -> mean -3% but 2 clumps, maybe one pdb is faster, fast case spike is -30% 
+ 
+ 

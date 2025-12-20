@@ -16,15 +16,12 @@ struct LoadedModule {
 
 	LoadedModule (std::filesystem::path&& path, uintptr_t base_addr, size_t size) {
 		this->path = std::move(path);
-		ansi_path = this->path.u8string();
+		ansi_path = this->path.string();
 		this->base_addr = base_addr;
 		this->size = size;
 	}
 	void load_pdb () {
-		ZoneScoped;
-
-		PDB_Locator locator(path);
-		pdb = PDB_File::try_load_pdb(locator.get_pdb_path());
+		pdb = PDB_File::try_load_pdb(path);
 	}
 };
 struct ModuleCache {
