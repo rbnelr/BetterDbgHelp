@@ -174,8 +174,7 @@ public:
 	MismatchCounts mismatch_counts;
 
 	SymTesting (std::string const& exe_filepath, float max_run_time = 2.0f) {
-		logf("\n-------------------------------------\n\n");
-		logf("Starting %s\n", exe_filepath.c_str());
+		logf("\n---------- Starting %s -----------\n", exe_filepath.c_str());
 		start_debugging_child_process(exe_filepath, max_run_time);
 		dbghelp = std::make_unique<Debughelp>(pi.hProcess);
 		resolver = std::make_unique<SymResolver>(pi.hProcess);
@@ -192,11 +191,6 @@ public:
 
 	char* get_addr (std::string_view filter) {
 		return (char*)loaded_modules.find(filter).addr;
-	}
-
-	void measure_pdb_parse (char* addr) {
-		//dbghelp->measure_addr2sym(addr);
-		resolver->measure_pdb_parse(addr);
 	}
 
 	void show_addr2sym (char* addr) {
@@ -281,23 +275,32 @@ public:
 	}
 
 	template <typename FUNC>
-	void run_examples_addresses (bool show, bool test, int meas_count, FUNC run_examples) {
+	void run_examples_addresses (bool show, bool test, int meas_iterations, FUNC run_examples) {
 		using std::placeholders::_1;
 		std::function<void(char*)> fshow = std::bind(&SymTesting::show_addr2sym, this, _1);
 		std::function<void(char*)> fmeas = std::bind(&SymTesting::measure_addr2sym, this, _1);
 		std::function<void(char*)> ftest = std::bind(&SymTesting::test_addr2sym, this, _1);
 
-		if (show) run_examples(fshow);
-		if (test) run_examples(ftest);
-
-		mismatch_counts.print();
-
-		for (int i=0; i<meas_count; i++) {
-			run_examples(fmeas);
+		if (show) {
+			logf("@ Show Addr2Sym\n");
+			run_examples(fshow);
 		}
-		dbghelp->print_timings();
-		logf("---\n");
-		resolver->print_timings();
+		if (test) {
+			logf("@ Test Addr2Sym\n");
+			run_examples(ftest);
+
+			mismatch_counts.print();
+		}
+		
+		if (meas_iterations > 0) {
+			logf("@ Timing %d Iterations\n", meas_iterations);
+			for (int i=0; i<meas_iterations; i++) {
+				run_examples(fmeas);
+			}
+			dbghelp->print_timings();
+			logf("---\n");
+			resolver->print_timings();
+		}
 	}
 
 	// try to exclude pdb parsing from measurement
@@ -316,13 +319,13 @@ public:
 		int before = 0x100;
 		int after = 0x100;
 
-		logf("Sweep for module %s: [%llx-%llx] (-%x +%x)\n", mod.path.c_str(), start, end, before, after);
+		logf("@ Sweep for module %s: [%llx-%llx] (-%x +%x)\n", mod.path.c_str(), start, end, before, after);
 		for (uintptr_t addr = start - before; addr < end + after; addr++) {
 			//show_and_test_distinct_addr2sym(addr);
 			test_distinct_addr2sym(addr);
 		}
 	#else
-		logf("Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
+		logf("@ Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
 		for (uintptr_t addr = start; addr < end; addr++) {
 			show_distinct_sym(mod, addr);
 		}
@@ -336,12 +339,14 @@ public:
 		auto start = (uintptr_t)mod.addr;
 		auto end = (uintptr_t)mod.addr + mod.size;
 
-		logf("Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
+		logf("@ Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
 		for (uintptr_t addr = start; addr < end; addr++) {
 			measure_addr2sym((char*)addr);
 		}
 
-		mismatch_counts.print();
+		dbghelp->print_timings();
+		logf("---\n");
+		resolver->print_timings();
 	}
 
 	// seed=-1 => random seed
@@ -353,23 +358,49 @@ public:
 		auto rng = seed < 0 ? init_rng() : init_rng((uint64_t)seed);
 		std::uniform_int_distribution<uintptr_t> uniform_rng (start, end);
 		
-		logf("Fuzz for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
+		logf("@ Fuzz for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
 		for (int i=0; i<count; i++) {
 			auto addr = uniform_rng(rng);
 			measure_addr2sym((char*)addr);
 		}
+
+		dbghelp->print_timings();
+		logf("---\n");
+		resolver->print_timings();
+	}
+
+	void measure_pdb_parse (std::string_view filter, int iterations) {
+		auto addr = get_addr(filter);
+		auto& mod = loaded_modules.find(filter);
+
+		logf("@ Measure PDB parse for module %s\n", mod.path.c_str());
+
+		for (int i=0; i<iterations; i++) {
+			//dbghelp->measure_addr2sym(addr);
+			resolver->measure_pdb_parse(addr);
+		}
+		resolver->print_timings();
+	}
+
+	void print_pdb_stats (std::string_view filter) {
+		auto addr = get_addr(filter);
+		resolver->print_pdb_stats(addr);
 	}
 };
 
 void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 	ZoneScoped;
 	
+	logf("================ Example Addresses ================\n");
+
 	try {
 		ZoneScopedN("TinyProgram.exe");
 		SymTesting sym("TinyProgram.exe", 0.5f);
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
+		sym.print_pdb_stats(".exe");
+		sym.print_pdb_stats("ucrtbase.dll");
 		
 		sym.warmup(exe + 0x21F0);
 		sym.warmup(ucrtbase + 0x1B370);
@@ -426,6 +457,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		SymTesting sym("Namespaces.exe", 0.5f);
 
 		char* exe = sym.get_addr(".exe");
+		sym.print_pdb_stats(".exe");
 		
 		sym.warmup(exe + 0x11AC0);
 
@@ -450,6 +482,8 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		char* exe = sym.get_addr(".exe");
 		char* assimp = sym.get_addr("assimp-vc143-mt.dll");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
+		sym.print_pdb_stats(".exe");
+		sym.print_pdb_stats("assimp.dll");
 		
 		sym.warmup(exe + 0x21FA0);
 		sym.warmup(assimp + 0x23990); // assimp, no pdb! (for testing)
@@ -492,6 +526,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
+		sym.print_pdb_stats(".exe");
 		
 		sym.warmup(exe + 0x3011B80);
 		sym.warmup(ucrtbase + 0x1B370);
@@ -521,6 +556,8 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 
 void sweep_tests () {
 	ZoneScoped;
+	
+	logf("================= Sweep Addresses =================\n");
 
 	try {
 		ZoneScopedN("TinyProgram.exe");
@@ -572,38 +609,10 @@ void sweep_tests () {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
-void profiling_pdb_parse (int count) {
-	ZoneScoped;
-
-	try {
-		ZoneScopedN("TinyProgram.exe");
-		SymTesting sym("TinyProgram.exe", 0.5f);
-		for (int i=0; i<count; i++) {
-			sym.measure_pdb_parse(sym.get_addr(".exe"));
-		}
-		for (int i=0; i<count; i++) {
-			sym.measure_pdb_parse(sym.get_addr("ucrtbase.dll"));
-		}
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
-	
-	try {
-		ZoneScopedN("city_builder_rel.exe");
-		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
-		for (int i=0; i<count; i++) {
-			sym.measure_pdb_parse(sym.get_addr(".exe"));
-		}
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
-	
-	try {
-		ZoneScopedN("rust_bevy_test.exe");
-		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
-		for (int i=0; i<count; i++) {
-			sym.measure_pdb_parse(sym.get_addr(".exe"));
-		}
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
-}
 void profiling_fuzz () {
 	ZoneScoped;
+
+	logf("================ Fuzzing Addresses ================\n");
 
 	try {
 		ZoneScopedN("TinyProgram.exe");
@@ -624,7 +633,7 @@ void profiling_fuzz () {
 		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
 		char* exe = sym.get_addr(".exe");
 
-		sym.fuzz_mod_measure(".exe", 50000, 5);
+		sym.fuzz_mod_measure(".exe", 20000, 5);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
 	try {
@@ -632,7 +641,32 @@ void profiling_fuzz () {
 		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
 		char* exe = sym.get_addr(".exe");
 
-		sym.fuzz_mod_measure(".exe", 10000, 5);
+		sym.fuzz_mod_measure(".exe", 5000, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+}
+
+void profiling_pdb_parse (int iterations) {
+	ZoneScoped;
+
+	logf("=============== PDB parsing Profiling =============\n");
+
+	try {
+		ZoneScopedN("TinyProgram.exe");
+		SymTesting sym("TinyProgram.exe", 0.5f);
+		sym.measure_pdb_parse(".exe", iterations);
+		sym.measure_pdb_parse("ucrtbase.dll", iterations);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
+	try {
+		ZoneScopedN("city_builder_rel.exe");
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+		sym.measure_pdb_parse(".exe", iterations/2);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
+	try {
+		ZoneScopedN("rust_bevy_test.exe");
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
+		sym.measure_pdb_parse(".exe", iterations/5);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 

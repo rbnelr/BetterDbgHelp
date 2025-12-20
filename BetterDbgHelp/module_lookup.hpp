@@ -97,4 +97,8 @@ struct ModuleCache {
 		}
 		return loaded;
 	}
+
+	void clear () {
+		sorted.clear();
+	}
 };

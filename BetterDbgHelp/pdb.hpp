@@ -4,6 +4,8 @@
 #include "pdb_locator.hpp"
 #include <map>
 
+#define TRACK_ALL_SYMBOLS 0
+
 // https://github.com/PascalBeyer/PDB-Documentation
 
 struct SourceLoc {
@@ -132,6 +134,8 @@ struct Symbol {
 };
 
 class PDB_File {
+	std::filesystem::path path;
+
 	MemoryMappedFile file;
 	
 	void* get_page (u32 idx) {
@@ -701,7 +705,9 @@ class PDB_File {
 						s.procsym = proc;
 						s.module_index = module_index;
 
+					#if TRACK_ALL_SYMBOLS
 						sym_unfiltered.push_back(s);
+					#endif
 
 						// Functions with identical binary can be merged, in which dbghelp seems to output the symbol of the first entry which is what we will do as well
 						// this lookup, which is used to attach lineinfo to the symbols so we don't have to search the address space twice (like dbghelp does?)
@@ -1180,8 +1186,10 @@ private:
 	}
 	
 	std::vector<Symbol> sym_sorted;
-
+	
+#if TRACK_ALL_SYMBOLS
 	std::vector<Symbol> sym_unfiltered; // to support has_symbol_for_addr
+#endif
 
 	void sort_symbols (std::vector<Symbol>& syms) {
 		// sort based on base_addr
@@ -1211,7 +1219,9 @@ private:
 		IPI_id2name.reserve(128);
 
 		sym_sorted.reserve(1024);
+	#if TRACK_ALL_SYMBOLS
 		sym_unfiltered.reserve(1024);
+	#endif
 	}
 public:
 	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& exe_path) {
@@ -1223,10 +1233,10 @@ public:
 		}
 		return nullptr;
 	}
-	PDB_File (std::filesystem::path const& path) {
+	PDB_File (std::filesystem::path&& path): path{std::move(path)} {
 		ZoneScopedN("parse_pdb");
 
-		if (!file.open(path)) {
+		if (!file.open(this->path)) {
 			throw std::runtime_error("File not found: "+ path.string());
 		}
 
@@ -1250,7 +1260,9 @@ public:
 		}
 		
 		sort_symbols(sym_sorted);
+	#if TRACK_ALL_SYMBOLS
 		sort_symbols(sym_unfiltered);
+	#endif
 
 		//logf("PDB read.\n");
 	}
@@ -1293,6 +1305,7 @@ public:
 
 	// try diagnosing us returning different symbols from dbghelp by being able to check if overlapping symbol existed but we chose the "wrong" one
 	Symbol* has_symbol_for_addr (uintptr_t addr, const char* name) {
+	#if TRACK_ALL_SYMBOLS
 		// TODO: This comment is confusing, also in case of multiple symbols with same offset, which one do we return (last?)
 		// This seems to work currently, but should take another look at this
 
@@ -1318,8 +1331,11 @@ public:
 				return cur;
 			}
 		}
-
+		
 		return nullptr;
+	#else
+		return nullptr;
+	#endif
 	}
 	
 	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
@@ -1610,4 +1626,8 @@ public:
 		}
 	}
 	
+	void print_stats_for_lookup () {
+		logf("@ PDB %s:\n", path.string().c_str());
+		logf("#sym_sorted: %d log2: %f size: %.1f kB\n", (int)sym_sorted.size(), log2f((float)sym_sorted.size()), sizeof(sym_sorted[0])*sym_sorted.size()/1000.0f);
+	}
 };

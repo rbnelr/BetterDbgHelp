@@ -1,5 +1,8 @@
 PDB addr2sym entirely unoptimized (linear searches!)
 
+I think this was SymFromAddr+SymGetLineFromAddr64 for dbghelp
+and my code did the same as I simply did not have inline info yet
+(dbghelp -> my code)
 TinyProgram.exe:       15.319us -> 0.219us  65x faster
 city_builder_rel.exe:  24.697us -> 2.603us  9.5x faster
 rust_bevy_test.exe:    90.204us -> 94.105us 0.96x slower
@@ -11,7 +14,7 @@ city_builder_rel.exe:  23.807us -> 0.178us  134x faster
 rust_bevy_test.exe:    88.705us -> 94.105us 457x faster
 
 
-load_pdb optimization:
+========== load_pdb optimization ==============
 use memory mapped file instead of copying entire into ram (still copying another time due to pdb paging)
  -> -20%
 
@@ -25,4 +28,11 @@ string buffer to avoid std::string
 switch to ankerl hashmap
  -> mean -3% but 2 clumps, maybe one pdb is faster, fast case spike is -30% 
  
+----- may have fucked up profiling due to wrong paths skipping runs
+
+compared to non-optimized (just memory mapped file)
+switch to ankerl hashmap step:
+ -> mean -33%  median +2% (why?)
+ -> big pdbs are still really slow to load, but all clumpings in histogram look significantly faster
+    fastest one goes from 634 to 360us
  

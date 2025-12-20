@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <limits>
 #include <algorithm>
+#include <assert.h>
 
 namespace kiss {
 	uint64_t get_timestamp ();
@@ -67,32 +68,31 @@ namespace kiss {
 		Timer t;
 		
 		float elapsed = 0;
-		float excluded = 0;
-		bool ended = false;
+		bool running = false;
 
-		TimerMeasureZone (TimerMeasurement* meas, bool start=true): meas{meas} {
-			if (start) this->start();
+		// create but don't start yet
+		__forceinline TimerMeasureZone (TimerMeasurement* meas): meas{meas} {}
+		// dtor stops timer if running and pushes measurement to TimerMeasurement (which counts as one instance)
+		__forceinline ~TimerMeasureZone () {
+			if (running) stop();
+			meas->push(elapsed);
 		}
-		~TimerMeasureZone () {
-			end();
+		
+		static __forceinline TimerMeasureZone started (TimerMeasurement* meas) {
+			TimerMeasureZone zone(meas);
+			zone.start();
+			return zone;
 		}
 
-		void start () {
+		void __forceinline start () {
+			assert(!running);
 			t = Timer::start();
+			running = true;
 		}
-		void end () {
-			if (!ended) {
-				elapsed = t.elapsed_sec();
-				if (meas) meas->push(elapsed - excluded);
-			}
-			ended = true;
-		}
-		// only works on still running zones
-		void exclude (TimerMeasureZone& other) {
-			excluded += other.elapsed;
-		}
-		void exclude (float sec) {
-			excluded += sec;
+		void __forceinline stop () {
+			assert(running);
+			elapsed += t.elapsed_sec();
+			running = false;
 		}
 	};
 }
@@ -103,4 +103,4 @@ namespace kiss {
 #define TimerZoneCount(name, count) auto __##name = kiss::TimerPrintZone(STRINGIFY(name), count)
 #define TimerZoneInc(name) __##name.divisor++
 
-#define TimerMeasZone(zone) auto __TimerMeasZone_##__COUNTER__ = kiss::TimerMeasureZone(&zone)
+#define TimerMeasZone(zone) auto __TimerMeasZone_##__COUNTER__ = kiss::TimerMeasureZone::started(&zone)

@@ -303,10 +303,8 @@ class SymResolver {
 
 	ModuleCache mod_cache;
 	
-	// warmup time not meaningful as it includes pdb loading
-	// only warmup to avoid including pdb loading in later measurement
-	//TimerMeasurement twarmup = TimerMeasurement("warmup");
-	TimerMeasurement taddr2sym = TimerMeasurement("addr2sym");
+	TimerMeasurement tfind_symbol_for_addr = TimerMeasurement("find_symbol_for_addr");
+	TimerMeasurement tfind_source_loc_for_addr= TimerMeasurement("find_source_loc_for_addr");
 	TimerMeasurement ttrace_inlinesites = TimerMeasurement("trace_inlinesites");
 	TimerMeasurement tCombinedAddr2sym = TimerMeasurement("CombinedAddr2sym");
 
@@ -376,12 +374,11 @@ public:
 	
 	void measure_pdb_parse (void* ptr) {
 		auto* mod = mod_cache.find_module_for_addr(inspectee, (uintptr_t)ptr);
-		mod_cache = {}; // clear cache so this can be called repeatedly
+		mod_cache.clear(); // clear cache so this can be called repeatedly
 	}
 
 	bool measure_addr2sym (void* ptr, SymResult* res) {
-		auto _tCombinedAddr2sym = kiss::TimerMeasureZone(&tCombinedAddr2sym);
-		auto _taddr2sym = kiss::TimerMeasureZone(&taddr2sym);
+		auto _tCombinedAddr2sym = kiss::TimerMeasureZone::started(&tCombinedAddr2sym);
 		ZoneScoped;
 
 		uintptr_t addr = (uintptr_t)ptr;
@@ -399,10 +396,14 @@ public:
 
 		uintptr_t mod_raddr = addr - mod->base_addr;
 		
-		auto sym = mod->pdb->find_symbol_for_addr(mod_raddr);
-		if (!sym) {
-			res->err = "Symbol not found";
-			return false;
+		Symbol* sym;
+		{
+			TimerMeasZone(tfind_symbol_for_addr);
+			sym = mod->pdb->find_symbol_for_addr(mod_raddr);
+			if (!sym) {
+				res->err = "Symbol not found";
+				return false;
+			}
 		}
 		
 		res->module_path = mod->ansi_path.c_str();
@@ -411,27 +412,32 @@ public:
 		res->src_lineno = 0;
 
 		SourceLoc src_loc = {};
-		if (mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
-			res->src_filepath = src_loc.filepath;
-			res->src_lineno = src_loc.lineno;
+		{
+			TimerMeasZone(tfind_source_loc_for_addr);
+			if (mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
+				res->src_filepath = src_loc.filepath;
+				res->src_lineno = src_loc.lineno;
+			}
 		}
 
 		{
-			auto _ttrace_inlinesites = kiss::TimerMeasureZone(&ttrace_inlinesites);
-
+			TimerMeasZone(ttrace_inlinesites);
 			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, 64, &res->num_inlines);
-			
-			_ttrace_inlinesites.end();
-			_taddr2sym.exclude(_ttrace_inlinesites);
 		}
 
 		return res->valid();
+	}
+	
+	void print_pdb_stats (void* ptr) {
+		auto* mod = mod_cache.find_module_for_addr(inspectee, (uintptr_t)ptr);
+		if (mod->pdb) mod->pdb->print_stats_for_lookup();
 	}
 
 	void print_timings () {
 		mod_cache.ttry_get_and_cache_module.print();
 		mod_cache.tload_pdb.print();
-		taddr2sym.print();
+		tfind_symbol_for_addr.print();
+		tfind_source_loc_for_addr.print();
 		ttrace_inlinesites.print();
 		tCombinedAddr2sym.print();
 	}
