@@ -702,20 +702,20 @@ void profiling_pdb_parse (int iterations) {
 // that's why I play with the iteration counts so much
 void profiling_run () {
 	run_dbghelp = false;
-	int mult = run_dbghelp ? 1 : 10;
+	int mult = run_dbghelp ? 1 : 20;
 
 	example_addresses(false, false, 4000 * mult);
 
-	//profiling_pdb_parse(1000);
-
 	profiling_sweep(mult);
-	profiling_fuzz(run_dbghelp ? 1 : 30); // this is fast enough without dbghelp to run more often
+	profiling_fuzz(run_dbghelp ? 1 : 60); // this is fast enough without dbghelp to run more often
+
+	//profiling_pdb_parse(1000);
 }
 
 int main(int argc, const char** argv) {
-	example_addresses(true, false);
+	//example_addresses(true, false);
 	//sweep_tests();
-	//profiling_run();
+	profiling_run();
 	//example_addresses(true, true, 5000);
 
 	return 0;

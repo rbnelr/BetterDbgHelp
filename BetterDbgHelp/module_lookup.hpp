@@ -59,7 +59,7 @@ struct ModuleCache {
 	}
 
 	const LoadedModule* try_get_and_cache_module (HANDLE inspectee, uintptr_t addr) {
-		ZoneScoped;
+		ZoneScopedC(0xffff00);
 
 		LoadedModule* loaded = nullptr;
 		{

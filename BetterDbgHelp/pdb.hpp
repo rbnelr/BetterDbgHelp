@@ -1415,6 +1415,12 @@ public:
 		return false;
 	}
 	
+	inline static int total_sym;
+	inline static int total_sym_inlinesite_exec;
+	inline static int total_sym_inlinesite_matches;
+	inline static int total_sym_no_inlinesite;
+	inline static int total_sym_no_inlinesite_wasted_iter;
+
 	void trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs, int* out_num_locs) {
 		*out_num_locs = 0;
 
@@ -1426,6 +1432,8 @@ public:
 
 		auto find_srcloc_in_encoded = [this, &mod] (INLINESITESYM* inl, uintptr_t proc_raddr, SourceLoc* out_loc) -> bool {
 			ZoneScopedN("INLINESITE");
+
+			total_sym_inlinesite_exec++;
 
 			auto it = mod.inlinee_c13.find(inl->inlinee);
 			if (it == mod.inlinee_c13.end()) {
@@ -1575,6 +1583,10 @@ public:
 
 		int depth = 0;
 		int max_depth = 0;
+		
+		total_sym++;
+		int _iter_count = 0;
+		int _visited_inlinesites = 0;
 
 		// Directly parse data from module symbol stream, this causes us to have to skip unrelated data
 		// TODO: optimize by building dedicated data structure, but consider memory use, might be worth it to at least mark functions without inlinesites as they also contain data we need to skip?
@@ -1585,6 +1597,8 @@ public:
 			ptr += sizeof(u16) + entry->length; // length field of codeview_symbol_header not contained in length (but kind is)
 			ptr = align_up(ptr, 4);
 
+			_iter_count++;
+
 			switch (entry->kind) {
 				case S_INLINESITE: {
 					auto* inl = (INLINESITESYM*)entry;
@@ -1593,6 +1607,8 @@ public:
 					// TODO: could also optimize by preprocessing min/max ranges for each inlinesite and sorting them, which can then be binary searched per level
 					// probably should build a tree structure for this
 					
+					_visited_inlinesites++;
+
 					// WARNING: out_locs are not fully zeroed as an optimization!
 					// This ensures we clear it the first time we see it, but also keep it valid across future in INLINESITEs of the same depth
 					if (depth+1 > max_depth) {
@@ -1619,6 +1635,8 @@ public:
 						out_locs[depth].lineno = encoded_loc.lineno;
 						
 						max_depth = std::max(max_depth, depth+1);
+
+						total_sym_inlinesite_matches++;
 					}
 					else {
 						// if INLINESITE does not match addr, nested INLINESITEs cannot match either, so skip all of them
@@ -1639,10 +1657,18 @@ public:
 				case S_END: {
 					assert(depth == 0);
 					*out_num_locs = max_depth;
+
+					if (_visited_inlinesites == 0) {
+						total_sym_no_inlinesite++;
+						total_sym_no_inlinesite_wasted_iter += _iter_count;
+					}
+
 					return;
 				} break;
 			}
 		}
+
+
 	}
 	
 	void print_stats_for_lookup () {
