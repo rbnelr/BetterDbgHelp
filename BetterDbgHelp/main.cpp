@@ -341,7 +341,7 @@ public:
 	#else
 		logf("@ Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
 		for (uintptr_t addr = start; addr < end; addr++) {
-			show_distinct_sym(mod, addr);
+			test_distinct_addr2sym(addr);
 		}
 	#endif
 

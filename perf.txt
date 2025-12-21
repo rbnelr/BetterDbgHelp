@@ -41,6 +41,14 @@ it's likely clustered around hotspot inner loops and thus somewhere between exam
 @precompute inline depth for symbols to skip trace_inlinesites_for_addr
 mean -15% median -33%
 
+@eliminate vector in _decode_and_scan_inlinee_lineinfo by reacting to prev_line being fully written (also earlies out)
+_decode_and_scan_inlinee_lineinfo: mean -60% median -88% -> 2.5 faster!
+trace_inlinesites_for_addr: -48%
+addr2sym: mean -30% median exactly -0% (???)
+^ wait I get it
+if >51% of cases do not call trace_inlinesites_for_addr, and are thus faster, the median does sample did already not include trace_inlinesites_for_addr!, so it does not change
+but those <49% being faster still contribute to -30% less time on average!
+
 ========== load_pdb optimization ==============
 use memory mapped file instead of copying entire into ram (still copying another time due to pdb paging)
  -> -20%
