@@ -715,7 +715,20 @@ void profiling_run () {
 int main(int argc, const char** argv) {
 	//example_addresses(true, false);
 	//sweep_tests();
-	profiling_run();
+	//profiling_run();
+	
+	try {
+		ZoneScopedN("city_builder_rel.exe");
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+		sym.print_pdb_stats(".exe");
+		sym.fuzz_mod_measure(".exe", 60000, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	try {
+		ZoneScopedN("rust_bevy_test.exe");
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
+		sym.print_pdb_stats(".exe");
+		sym.fuzz_mod_measure(".exe", 6000, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
 	return 0;
 }

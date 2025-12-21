@@ -49,6 +49,16 @@ addr2sym: mean -30% median exactly -0% (???)
 if >51% of cases do not call trace_inlinesites_for_addr, and are thus faster, the median does sample did already not include trace_inlinesites_for_addr!, so it does not change
 but those <49% being faster still contribute to -30% less time on average!
 
+>>>>>>> fucked up, turns out things were being optimized away because result was not used even without addr2sym being inlined
+> switched to shoving result into a volatile, but it did not get slower after, I think
+
+@16bit compressed simd block based acceleration of symbol map (only bottom level, top level is now a 64bit binary search)
+mean -37% (if letting dbghelp trash the cache)
+almost no difference in normal profiling run, seemingly because it is well cached, and simd two level scheme mainly helps with cache hits?
+-> could still come up with a full simd scheme (16 bit for bottom blocks, 64 bit for top blocks)
+-> top levels always checking exactly 1-2 cache lines linearly, meaning we subdivide addresses by 8 or 16 each step, and each step does unrolled simd ops,
+should minimize ops and maximize cache hits, which I would assume speeds up even the well cached cases?
+
 ========== load_pdb optimization ==============
 use memory mapped file instead of copying entire into ram (still copying another time due to pdb paging)
  -> -20%

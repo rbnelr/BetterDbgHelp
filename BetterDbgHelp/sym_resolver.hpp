@@ -310,6 +310,22 @@ struct SymResult {
 			}
 		}
 	}
+	
+	static inline volatile int _vol_idx{};
+	static inline volatile int _vol_sink{};
+	void dont_optimize_away () {
+		if (module_path) _vol_sink = (int)module_path[_vol_idx];
+		if (sym_name) _vol_sink = (int)sym_name[_vol_idx];
+		if (src_filepath) _vol_sink = (int)src_filepath[_vol_idx];
+		_vol_sink = num_inlines;
+
+		if (_vol_idx < num_inlines) {
+			auto i = inlines[_vol_idx];
+			if (i.fnname) _vol_sink = i.fnname[_vol_idx];
+			if (i.filepath) _vol_sink = i.filepath[_vol_idx];
+			if (i.lineno) _vol_sink = i.lineno;
+		}
+	}
 };
 
 class SymResolver {
@@ -328,6 +344,7 @@ public:
 	void measure_addr2sym (char* ptr) {
 		SymResult res;
 		measure_addr2sym(ptr, &res);
+		res.dont_optimize_away();
 	}
 	
 	bool addr2sym (void* ptr, SymResult* res) {

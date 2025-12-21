@@ -210,6 +210,7 @@
     <ClInclude Include="module_lookup.hpp" />
     <ClInclude Include="pdb.hpp" />
     <ClInclude Include="pdb_locator.hpp" />
+    <ClInclude Include="address_index.hpp" />
     <ClInclude Include="sym_resolver.hpp" />
     <ClInclude Include="timer.hpp" />
     <ClInclude Include="util.hpp" />

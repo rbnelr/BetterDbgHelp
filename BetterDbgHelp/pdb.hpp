@@ -2,6 +2,7 @@
 #include "util.hpp"
 #include "codeview.hpp"
 #include "pdb_locator.hpp"
+#include "address_index.hpp"
 #include <map>
 
 #define TRACK_ALL_SYMBOLS 0
@@ -132,6 +133,13 @@ struct Symbol {
 	uint8_t inline_depth = 0;
 
 	bool src_valid () const { return src_subsec != nullptr; }
+
+	__forceinline uintptr_t get_addr () const {
+		return base_addr;
+	}
+	static __forceinline Symbol dummy (uintptr_t base_addr) { // needed for std::upper_bound
+		return Symbol { base_addr };
+	}
 };
 
 class PDB_File {
@@ -559,7 +567,7 @@ class PDB_File {
 				}
 				seg_addr = sections_sorted[seg-1].base_addr;
 			}
-			sym_sorted.push_back(Symbol{ offs + seg_addr, size, trim_mangled_name(name) });
+			symbols.push_unsorted(Symbol{ offs + seg_addr, size, trim_mangled_name(name) });
 		};
 		
 		while (ptr < ptr2 + symbol_record_stream_data.size()) {
@@ -621,9 +629,9 @@ class PDB_File {
 			auto it = sym_map.upper_bound(addr);
 			
 			// symbol to right, higher base address
-			Symbol* upper = it != sym_map.end() ? &sym_sorted[it->second] : nullptr;
+			Symbol* upper = it != sym_map.end() ? &symbols[it->second] : nullptr;
 			// symbol to left, lower or equal base address
-			Symbol* lower = it != sym_map.begin() ? &sym_sorted[(--it)->second] : nullptr;
+			Symbol* lower = it != sym_map.begin() ? &symbols[(--it)->second] : nullptr;
 
 			// check boundries correctly while also counting zero-length symbols as touching
 			// TODO: this seems really wrong, probably should just get rid of this test and instead just sort all symbols like before
@@ -722,8 +730,8 @@ class PDB_File {
 						// in case of overlapping symbols, only keep first occurance
 						auto* existing = find_overlapping_symbol(module_raddr, proc->len);
 						if (existing == nullptr) {
-							int idx = (int)sym_sorted.size();
-							sym_sorted.push_back(std::move(s));
+							int idx = (int)symbols.size();
+							symbols.push_unsorted(std::move(s));
 
 							sym_map.emplace(module_raddr, idx);
 							cur_symbol = idx;
@@ -783,7 +791,7 @@ class PDB_File {
 						if (cur_symbol >= 0) {
 							assert(inline_depth == 0 && max_inline_depth >= 0);
 							if (max_inline_depth > 0) {
-								sym_sorted[cur_symbol].inline_depth = (uint8_t)std::min(max_inline_depth, 255);
+								symbols[cur_symbol].inline_depth = (uint8_t)std::min(max_inline_depth, 255);
 							}
 						}
 						max_inline_depth = 0;
@@ -1207,12 +1215,13 @@ private:
 		return name;
 	}
 	
-	std::vector<Symbol> sym_sorted;
+	AddressIndex<Symbol> symbols;
 	
 #if TRACK_ALL_SYMBOLS
 	std::vector<Symbol> sym_unfiltered; // to support has_symbol_for_addr
 #endif
 
+	/*
 	void sort_symbols (std::vector<Symbol>& syms) {
 		// sort based on base_addr
 		// use stable sorts as symbol can and will overlap, so try and preserve insertion order
@@ -1232,6 +1241,7 @@ private:
 		//	}
 		//}
 	}
+	*/
 	
 	void _reserve () {
 		modules.reserve(128);
@@ -1240,7 +1250,7 @@ private:
 		typeid2name.reserve(128);
 		IPI_id2name.reserve(128);
 
-		sym_sorted.reserve(1024);
+		symbols.reserve(1024);
 	#if TRACK_ALL_SYMBOLS
 		sym_unfiltered.reserve(1024);
 	#endif
@@ -1283,7 +1293,7 @@ public:
 			read_module_symbol_stream(module_index);
 		}
 		
-		sort_symbols(sym_sorted);
+		symbols.sort_and_build_index();
 	#if TRACK_ALL_SYMBOLS
 		sort_symbols(sym_unfiltered);
 	#endif
@@ -1293,16 +1303,15 @@ public:
 
 
 	Symbol* find_symbol_for_addr (uintptr_t addr) {
+		ZoneScoped;
+		
 		// TODO: This comment is confusing, also in case of multiple symbols with same offset, which one do we return (last?)
 		// This seems to work currently, but should take another look at this
 
 		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
 		// so use upper bound instead (returns first item bigger than addr), then use previous
-		auto dymmy_Symbol = Symbol{ addr };
-		auto it = std::upper_bound(sym_sorted.begin(), sym_sorted.end(), dymmy_Symbol, [] (Symbol const& l, Symbol const& r) {
-			return l.base_addr < r.base_addr;
-		});
-		if (it <= sym_sorted.begin()) {
+		auto it = symbols.upper_bound(addr);
+		if (it <= symbols.begin()) {
 			// first symbol after addr is first symbol, search failed
 			return nullptr;
 		}
@@ -1315,7 +1324,7 @@ public:
 		// but ignore ones in the global symbol_record_stream, as they contain mangled version of the symbol without size, but we sometimes want those if there is no real symbol
 		// like __ImageBase
 		// use raw ptr instead of iterator as we cannot seek before begin, which is annoying
-		for (auto cur=(&*it)-1; cur >= sym_sorted.data() && cur->base_addr == sym_addr; --cur) {
+		for (auto cur=(&*it)-1; cur >= &*symbols.begin() && cur->base_addr == sym_addr; --cur) {
 			bool cur_from_module = cur->module_index != -1;
 			bool result_from_module = result->module_index != -1;
 			// earlier one always replaces, unless cur is not from module but previously written one was
@@ -1448,13 +1457,11 @@ public:
 			return false;
 		}
 		auto* c13_line = it->second;
-			
+		
 		// While BinaryAnnotationOpcode enum was released, the exact definition or code was apparently to released(?)
 		// Only possible thanks to these implementations:
 		// https://github.com/EpicGamesExt/raddebugger/blob/08642d2745da516387fa0f43639b7a8776a154b0/src/codeview/codeview_parse.c#L277
 		// https://github.com/getsentry/pdb/blob/65c5b6d5c38c5f84225bfb3bc5365ea4097c8adf/src/modi/c13.rs#L1135
-
-
 		PCompressedAnnotation cur = (PCompressedAnnotation)inl->binaryAnnotations;
 		PCompressedAnnotation end = (PCompressedAnnotation)((char*)inl + sizeof(u16) + inl->reclen); // length field of codeview_symbol_header not contained in length
 		
@@ -1816,6 +1823,6 @@ public:
 	
 	void print_stats_for_lookup () {
 		logf("@ PDB %s:\n", path.string().c_str());
-		logf("#sym_sorted: %d log2: %f size: %.1f kB\n", (int)sym_sorted.size(), log2f((float)sym_sorted.size()), sizeof(sym_sorted[0])*sym_sorted.size()/1000.0f);
+		symbols.print_stats("Symbols");
 	}
 };

@@ -20,6 +20,7 @@
     <ClInclude Include="..\ankerl\include\ankerl\unordered_dense.h">
       <Filter>ankerl</Filter>
     </ClInclude>
+    <ClInclude Include="address_index.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="codeview.hpp" />
