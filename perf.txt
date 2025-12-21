@@ -38,6 +38,9 @@ fuzzing cannot benefit from caching, but symbol data can be biased in address, t
 real world profiler usage may not fit with any of these, as real world is not a sweep, but also not completely uniform random
 it's likely clustered around hotspot inner loops and thus somewhere between example and fuzzing
 
+@precompute inline depth for symbols to skip trace_inlinesites_for_addr
+mean -15% median -33%
+
 ========== load_pdb optimization ==============
 use memory mapped file instead of copying entire into ram (still copying another time due to pdb paging)
  -> -20%

@@ -9,6 +9,9 @@ traces/*
 *.txt
 backup/*
 
+BetterDbgHelp.exe
+BetterDbgHelp.pdb
+
 # User-specific files
 *.rsuser
 *.suo

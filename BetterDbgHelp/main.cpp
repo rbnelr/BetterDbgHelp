@@ -716,7 +716,6 @@ int main(int argc, const char** argv) {
 	//example_addresses(true, false);
 	//sweep_tests();
 	profiling_run();
-	//example_addresses(true, true, 5000);
 
 	return 0;
 }

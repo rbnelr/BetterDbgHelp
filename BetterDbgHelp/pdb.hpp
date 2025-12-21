@@ -129,6 +129,7 @@ struct Symbol {
 	int32_t src_offset = 0; // sometimes lineinfo has different start offset than symbol, sym base_addr = codeview_line.offset + offset
 	
 	s16 module_index = -1;
+	uint8_t inline_depth = 0;
 
 	bool src_valid () const { return src_subsec != nullptr; }
 };
@@ -611,7 +612,7 @@ class PDB_File {
 		auto& mod = modules[module_index];
 		auto* mi = mod.mi;
 		
-		std::map<uintptr_t, size_t> sym_map;
+		std::map<uintptr_t, int> sym_map;
 
 		auto find_overlapping_symbol = [&] (uintptr_t addr, size_t size) -> Symbol* {
 			if (sym_map.empty()) return nullptr;
@@ -684,6 +685,9 @@ class PDB_File {
 			//logf(">> symbol_information\n");
 			
 			//std::vector<INLINESITESYM*> stack;
+			int cur_symbol = -1;
+			int inline_depth = 0;
+			int max_inline_depth = 0;
 			
 			while (ptr < sym_info + mi->byte_size_of_symbol_information) {
 				auto sym = (codeview_symbol_header*)ptr;
@@ -718,10 +722,11 @@ class PDB_File {
 						// in case of overlapping symbols, only keep first occurance
 						auto* existing = find_overlapping_symbol(module_raddr, proc->len);
 						if (existing == nullptr) {
-							auto idx = sym_sorted.size();
+							int idx = (int)sym_sorted.size();
 							sym_sorted.push_back(std::move(s));
 
 							sym_map.emplace(module_raddr, idx);
+							cur_symbol = idx;
 						}
 						//else {
 						//	// experimental, use last occurance
@@ -735,6 +740,8 @@ class PDB_File {
 					} break;
 					case S_INLINESITE: {
 						auto* inl = (INLINESITESYM*)sym;
+						inline_depth++;
+						max_inline_depth = std::max(max_inline_depth, inline_depth);
 
 						// There is a weird test case I found where both dbghelp and my code return wrong results in a different way
 						// In my case one function name in the inlinee stack is wrong, yet the source line is correct
@@ -768,9 +775,20 @@ class PDB_File {
 						// no idea what inl->binaryAnnotations is
 						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, stralloc[proc_typeid2nameid[inl->inlinee]]);
 					} break;
-					//case S_INLINESITE_END: {
-					//	stack.pop_back();
-					//} break;
+					case S_INLINESITE_END: {
+						assert(inline_depth > 0);
+						inline_depth--;
+					} break;
+					case S_END: {
+						if (cur_symbol >= 0) {
+							assert(inline_depth == 0 && max_inline_depth >= 0);
+							if (max_inline_depth > 0) {
+								sym_sorted[cur_symbol].inline_depth = (uint8_t)std::min(max_inline_depth, 255);
+							}
+						}
+						max_inline_depth = 0;
+						cur_symbol = -1;
+					} break;
 				}
 			}
 			assert((ptr - sym_info) == mi->byte_size_of_symbol_information);
@@ -1415,14 +1433,169 @@ public:
 		return false;
 	}
 	
-	inline static int total_sym;
-	inline static int total_sym_inlinesite_exec;
-	inline static int total_sym_inlinesite_matches;
-	inline static int total_sym_no_inlinesite;
-	inline static int total_sym_no_inlinesite_wasted_iter;
+	//inline static int total_sym;
+	//inline static int total_sym_inlinesite_exec;
+	//inline static int total_sym_inlinesite_matches;
+	//inline static int total_sym_no_inlinesite;
+	//inline static int total_sym_no_inlinesite_wasted_iter;
 
+	bool _decode_and_scan_inlinee_lineinfo (Module const& mod, INLINESITESYM* inl, uintptr_t proc_raddr, SourceLoc* out_loc) {
+		ZoneScopedN("INLINESITE");
+
+		//total_sym_inlinesite_exec++;
+
+		// This lookup seems to be kinda slow, cache misses?
+		// Try out optimizing by putting it in a single (mod_id, inlinee) -> C13 ptr hashmap?
+		// In theory that may move related (by module) data further from each other, but maybe it's the module vector lookup not the actual hashmap?
+		// Alternatively, if I just build my own inlinee tree structure, I can simply embed the start line+filenumber info into that, which is barely less space efficient
+		// +4bytes lineno, -4bytes inlinee id, +4bytes filename id
+		// probably need to merge filenames into a global filename table, which would allow avoiding module ids alltogether
+		auto it = mod.inlinee_c13.find(inl->inlinee);
+		if (it == mod.inlinee_c13.end()) {
+			assert(false);
+			return false;
+		}
+		auto* c13_line = it->second;
+			
+		// While BinaryAnnotationOpcode enum was released, the exact definition or code was apparently to released(?)
+		// Only possible thanks to these implementations:
+		// https://github.com/EpicGamesExt/raddebugger/blob/08642d2745da516387fa0f43639b7a8776a154b0/src/codeview/codeview_parse.c#L277
+		// https://github.com/getsentry/pdb/blob/65c5b6d5c38c5f84225bfb3bc5365ea4097c8adf/src/modi/c13.rs#L1135
+
+		PCompressedAnnotation cur = (PCompressedAnnotation)inl->binaryAnnotations;
+		PCompressedAnnotation end = (PCompressedAnnotation)((char*)inl + sizeof(u16) + inl->reclen); // length field of codeview_symbol_header not contained in length
+			
+		u32 file_id = c13_line->fileId;
+		u32 code_offset_base = 0;
+		u32 code_offset = 0;
+		u32 code_length = 0; // 0 = null
+		u32 lineno = c13_line->sourceLineNum;
+		u32 num_lines = 1;
+		u32 kind = 1; // 0 == Expression, 1 == Statement
+
+		u32 prev_code_offset = -1;
+
+		struct Line {
+			u32 code_offset;
+			u32 code_length;
+			u32 lineno;
+			u32 num_lines; // could mean one code range can be associated with a range of line numbers(?)
+			u32 file_id;
+			u32 kind;
+		};
+		std::vector<Line> lines;
+		lines.reserve(64);
+
+		while (cur < end) {
+			auto opcode = (BinaryAnnotationOpcode)CVUncompressData(cur);
+			if (opcode == BA_OP_Invalid)
+				continue;
+
+			Line* prev = lines.empty() ? nullptr : &lines.back();
+
+			auto param1 = CVUncompressData(cur);
+			switch (opcode) {
+				case BA_OP_CodeOffset: {
+					code_offset = param1;
+				} break;
+				case BA_OP_ChangeCodeOffsetBase: {
+					assert(false);
+					// Is this never used?
+					code_offset_base = param1;
+				} break;
+				case BA_OP_ChangeCodeOffset: {
+					code_offset += param1;
+				} break;
+				case BA_OP_ChangeCodeLength: {
+					if (prev) {
+						if (prev->code_length == 0 && prev->kind == kind) {
+							prev->code_length = param1;
+						}
+					}
+					code_offset += param1;
+				} break;
+				case BA_OP_ChangeFile: {
+					// supposedly there are bugs with file changes inside functions, but presumably functions are almost always inside one file, so this should be rare anyway
+					// TODO: these file_ids likely are local to the module that contained this INLINESITESYM with CompressedAnnotation,
+					// while my current lookup for inlinee id and InlineeSourceLine can come from different modules as that data seems to be duplicated
+					file_id = param1;
+				} break;
+				case BA_OP_ChangeLineOffset: {
+					lineno += DecodeSignedInt32(param1);
+				} break;
+				case BA_OP_ChangeLineEndDelta: {
+					num_lines = param1;
+				} break;
+				case BA_OP_ChangeRangeKind: {
+					assert(param1 == 0 || param1 == 1);
+					kind = param1;
+				} break;
+				case BA_OP_ChangeCodeOffsetAndLineOffset: {
+					// param : ((sourceDelta << 4) | CodeDelta)
+					u32 CodeDelta = param1 & 0b1111;
+					s32 sourceDelta = DecodeSignedInt32(param1 >> 4); // signed int encoded weirdly because CVUncompressData chops off upper bits
+
+					code_offset += CodeDelta;
+					lineno += sourceDelta;
+				} break;
+				case BA_OP_ChangeCodeLengthAndCodeOffset: {
+					auto param2 = CVUncompressData(cur);
+					code_length = param1;
+					code_offset += param2;
+				} break;
+
+				case BA_OP_ChangeColumnStart:
+				case BA_OP_ChangeColumnEndDelta:
+				case BA_OP_ChangeColumnEnd: {
+					// ignore column info
+				} break;
+
+				default: {
+					assert(false);
+				}
+			}
+					
+			switch (opcode) {
+				case BA_OP_ChangeCodeOffset:
+				case BA_OP_ChangeCodeOffsetAndLineOffset:
+				case BA_OP_ChangeCodeLengthAndCodeOffset: {
+					// code_length is either explicitly given with BA_OP_ChangeCodeLengthAndCodeOffset
+					// or written after push_line with BA_OP_ChangeCodeLength
+					// or implicitly computed from last and current offset
+
+					u32 offset = code_offset + code_offset_base;
+					if (prev) {
+						if (prev->code_length == 0 && prev->kind == kind) {
+							prev->code_length = offset - prev->code_offset;
+						}
+					}
+
+					lines.push_back({
+						offset,
+						code_length,
+						lineno,
+						num_lines,
+						file_id,
+						kind,
+					});
+
+					code_length = 0;
+				} break;
+			}
+		}
+
+		for (auto& l : lines) {
+			if (proc_raddr >= l.code_offset && proc_raddr < l.code_offset + l.code_length) {
+				out_loc->filepath = get_lineinfo_source_filepath(mod, l.file_id);
+				out_loc->lineno = l.lineno;
+				return true;
+			}
+		}
+		return false;
+	}
 	void trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs, int* out_num_locs) {
 		*out_num_locs = 0;
+		assert(sym->inline_depth > 0); // only call when actually needed!
 
 		ZoneScoped;
 		if (sym->procsym == nullptr)
@@ -1430,163 +1603,14 @@ public:
 		assert(sym->module_index >= 0);
 		auto& mod = modules[sym->module_index];
 
-		auto find_srcloc_in_encoded = [this, &mod] (INLINESITESYM* inl, uintptr_t proc_raddr, SourceLoc* out_loc) -> bool {
-			ZoneScopedN("INLINESITE");
-
-			total_sym_inlinesite_exec++;
-
-			auto it = mod.inlinee_c13.find(inl->inlinee);
-			if (it == mod.inlinee_c13.end()) {
-				assert(false);
-				return false;
-			}
-			auto* c13_line = it->second;
-			
-			// While BinaryAnnotationOpcode enum was released, the exact definition or code was apparently to released(?)
-			// Only possible thanks to these implementations:
-			// https://github.com/EpicGamesExt/raddebugger/blob/08642d2745da516387fa0f43639b7a8776a154b0/src/codeview/codeview_parse.c#L277
-			// https://github.com/getsentry/pdb/blob/65c5b6d5c38c5f84225bfb3bc5365ea4097c8adf/src/modi/c13.rs#L1135
-
-			PCompressedAnnotation cur = (PCompressedAnnotation)inl->binaryAnnotations;
-			PCompressedAnnotation end = (PCompressedAnnotation)((char*)inl + sizeof(u16) + inl->reclen); // length field of codeview_symbol_header not contained in length
-			
-			u32 file_id = c13_line->fileId;
-			u32 code_offset_base = 0;
-			u32 code_offset = 0;
-			u32 code_length = 0; // 0 = null
-			u32 lineno = c13_line->sourceLineNum;
-			u32 num_lines = 1;
-			u32 kind = 1; // 0 == Expression, 1 == Statement
-
-			u32 prev_code_offset = -1;
-
-			struct Line {
-				u32 code_offset;
-				u32 code_length;
-				u32 lineno;
-				u32 num_lines; // could mean one code range can be associated with a range of line numbers(?)
-				u32 file_id;
-				u32 kind;
-			};
-			std::vector<Line> lines;
-			lines.reserve(64);
-
-			while (cur < end) {
-				auto opcode = (BinaryAnnotationOpcode)CVUncompressData(cur);
-				if (opcode == BA_OP_Invalid)
-					continue;
-
-				Line* prev = lines.empty() ? nullptr : &lines.back();
-
-				auto param1 = CVUncompressData(cur);
-				switch (opcode) {
-					case BA_OP_CodeOffset: {
-						code_offset = param1;
-					} break;
-					case BA_OP_ChangeCodeOffsetBase: {
-						assert(false);
-						// Is this never used?
-						code_offset_base = param1;
-					} break;
-					case BA_OP_ChangeCodeOffset: {
-						code_offset += param1;
-					} break;
-					case BA_OP_ChangeCodeLength: {
-						if (prev) {
-							if (prev->code_length == 0 && prev->kind == kind) {
-								prev->code_length = param1;
-							}
-						}
-						code_offset += param1;
-					} break;
-					case BA_OP_ChangeFile: {
-						// supposedly there are bugs with file changes inside functions, but presumably functions are almost always inside one file, so this should be rare anyway
-						// TODO: these file_ids likely are local to the module that contained this INLINESITESYM with CompressedAnnotation,
-						// while my current lookup for inlinee id and InlineeSourceLine can come from different modules as that data seems to be duplicated
-						file_id = param1;
-					} break;
-					case BA_OP_ChangeLineOffset: {
-						lineno += DecodeSignedInt32(param1);
-					} break;
-					case BA_OP_ChangeLineEndDelta: {
-						num_lines = param1;
-					} break;
-					case BA_OP_ChangeRangeKind: {
-						assert(param1 == 0 || param1 == 1);
-						kind = param1;
-					} break;
-					case BA_OP_ChangeCodeOffsetAndLineOffset: {
-						// param : ((sourceDelta << 4) | CodeDelta)
-						u32 CodeDelta = param1 & 0b1111;
-						s32 sourceDelta = DecodeSignedInt32(param1 >> 4); // signed int encoded weirdly because CVUncompressData chops off upper bits
-
-						code_offset += CodeDelta;
-						lineno += sourceDelta;
-					} break;
-					case BA_OP_ChangeCodeLengthAndCodeOffset: {
-						auto param2 = CVUncompressData(cur);
-						code_length = param1;
-						code_offset += param2;
-					} break;
-
-					case BA_OP_ChangeColumnStart:
-					case BA_OP_ChangeColumnEndDelta:
-					case BA_OP_ChangeColumnEnd: {
-						// ignore column info
-					} break;
-
-					default: {
-						assert(false);
-					}
-				}
-					
-				switch (opcode) {
-					case BA_OP_ChangeCodeOffset:
-					case BA_OP_ChangeCodeOffsetAndLineOffset:
-					case BA_OP_ChangeCodeLengthAndCodeOffset: {
-						// code_length is either explicitly given with BA_OP_ChangeCodeLengthAndCodeOffset
-						// or written after push_line with BA_OP_ChangeCodeLength
-						// or implicitly computed from last and current offset
-
-						u32 offset = code_offset + code_offset_base;
-						if (prev) {
-							if (prev->code_length == 0 && prev->kind == kind) {
-								prev->code_length = offset - prev->code_offset;
-							}
-						}
-
-						lines.push_back({
-							offset,
-							code_length,
-							lineno,
-							num_lines,
-							file_id,
-							kind,
-						});
-
-						code_length = 0;
-					} break;
-				}
-			}
-
-			for (auto& l : lines) {
-				if (proc_raddr >= l.code_offset && proc_raddr < l.code_offset + l.code_length) {
-					out_loc->filepath = get_lineinfo_source_filepath(mod, l.file_id);
-					out_loc->lineno = l.lineno;
-					return true;
-				}
-			}
-			return false;
-		};
-
 		uintptr_t proc_raddr = addr - sym->base_addr;
 
 		int depth = 0;
 		int max_depth = 0;
 		
-		total_sym++;
-		int _iter_count = 0;
-		int _visited_inlinesites = 0;
+		//total_sym++;
+		//int _iter_count = 0;
+		//int _visited_inlinesites = 0;
 
 		// Directly parse data from module symbol stream, this causes us to have to skip unrelated data
 		// TODO: optimize by building dedicated data structure, but consider memory use, might be worth it to at least mark functions without inlinesites as they also contain data we need to skip?
@@ -1597,7 +1621,7 @@ public:
 			ptr += sizeof(u16) + entry->length; // length field of codeview_symbol_header not contained in length (but kind is)
 			ptr = align_up(ptr, 4);
 
-			_iter_count++;
+			//_iter_count++;
 
 			switch (entry->kind) {
 				case S_INLINESITE: {
@@ -1607,49 +1631,54 @@ public:
 					// TODO: could also optimize by preprocessing min/max ranges for each inlinesite and sorting them, which can then be binary searched per level
 					// probably should build a tree structure for this
 					
-					_visited_inlinesites++;
+					//_visited_inlinesites++;
 
-					// WARNING: out_locs are not fully zeroed as an optimization!
-					// This ensures we clear it the first time we see it, but also keep it valid across future in INLINESITEs of the same depth
-					if (depth+1 > max_depth) {
-						out_locs[depth] = {};
-					}
+					if (depth < num_locs) {
+						bool already_resolved = false;
 
-					// Optimizion: for every address there is only one inline stack, so (in theory) two of the same level can't both match, so we can skip future ones
-					bool already_resolved = out_locs[depth].filepath != nullptr;
-
-					if (  depth < num_locs && !already_resolved &&
-						  find_srcloc_in_encoded(inl, proc_raddr, &encoded_loc) ) {
-						// fnname (ie. symbol), can only be found if source location is found, as there can be multiple INLINESITEs for one depth
-						// and it does not store which address range it actually covers, this can only be found by iterating encoded lineinfo
-
-						auto* name = try_get(IPI_id2name, inl->inlinee);
-						assert(name);
-						if (name) {
-							out_locs[depth].fnname = stralloc[*name];
+						// WARNING: as an optimization, the out_locs array is zeroed at the start!
+						// This ensures we clear it the first time we see it, but also keep it valid across future INLINESITEs of the same depth
+						if (depth+1 > max_depth) {
+							out_locs[depth] = {};
 						}
 						else {
-							out_locs[depth].fnname = "[unknown]";
+							// Optimizion: for every address there is only one inline stack, so (in theory) two of the same level can't both match, so we can skip future ones
+							already_resolved = out_locs[depth].filepath != nullptr;
 						}
-						out_locs[depth].filepath = encoded_loc.filepath;
-						out_locs[depth].lineno = encoded_loc.lineno;
-						
-						max_depth = std::max(max_depth, depth+1);
 
-						total_sym_inlinesite_matches++;
-					}
-					else {
-						// if INLINESITE does not match addr, nested INLINESITEs cannot match either, so skip all of them
-						auto* end_entry = mod.sym_info + inl->pEnd; // corresponding S_INLINESITE_END
-						assert(((codeview_symbol_header*)end_entry)->kind == S_INLINESITE_END);
-						assert(end_entry >= ptr);
-						// set ptr direcly to S_INLINESITE_END entry, note that we increment and immediately decrement depth
-						// a more optimized implementation would avoid this
-						ptr = end_entry;
+						if (!already_resolved && _decode_and_scan_inlinee_lineinfo(mod, inl, proc_raddr, &encoded_loc)) {
+							auto* name = try_get(IPI_id2name, inl->inlinee);
+							assert(name);
+							if (name) {
+								out_locs[depth].fnname = stralloc[*name];
+							}
+							else {
+								out_locs[depth].fnname = "[unknown]";
+							}
+							out_locs[depth].filepath = encoded_loc.filepath;
+							out_locs[depth].lineno = encoded_loc.lineno;
+					
+							depth++;
+							max_depth = std::max(max_depth, depth);
+							break; // don't skip child INLINESITEs
+						}
 					}
 
-					depth++;
+					// if INLINESITE does not match addr, nested INLINESITEs cannot match either, so skip all of them
+					auto* end_entry = mod.sym_info + inl->pEnd; // corresponding S_INLINESITE_END
+					assert(((codeview_symbol_header*)end_entry)->kind == S_INLINESITE_END);
+					assert(end_entry >= ptr);
+					// set ptr direcly to S_INLINESITE_END entry, note that we increment and immediately decrement depth
+					// a more optimized implementation would avoid this
+					ptr = end_entry;
+
+					// completely skip S_INLINESITE_END, which means we don't need to increment depth
+					entry = (codeview_symbol_header*)ptr;
+					ptr += sizeof(u16) + entry->length;
+					ptr = align_up(ptr, 4);
+
 				} break;
+
 				case S_INLINESITE_END: {
 					assert(depth > 0);
 					depth--;
@@ -1657,12 +1686,6 @@ public:
 				case S_END: {
 					assert(depth == 0);
 					*out_num_locs = max_depth;
-
-					if (_visited_inlinesites == 0) {
-						total_sym_no_inlinesite++;
-						total_sym_no_inlinesite_wasted_iter += _iter_count;
-					}
-
 					return;
 				} break;
 			}

@@ -362,8 +362,8 @@ public:
 			res->src_filepath = src_loc.filepath;
 			res->src_lineno = src_loc.lineno;
 		}
-
-		{
+		
+		if (sym->inline_depth > 0) {
 			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES, &res->num_inlines);
 		}
 
@@ -437,7 +437,7 @@ public:
 			}
 		}
 
-		{
+		if (sym->inline_depth > 0) {
 			TimerMeasZone(ttrace_inlinesites);
 			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES, &res->num_inlines);
 		}
