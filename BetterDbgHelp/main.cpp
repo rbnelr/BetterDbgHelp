@@ -9,6 +9,8 @@
 #include "sym_resolver.hpp"
 
 bool run_dbghelp = true;
+bool clear_cpu_cache = false;
+void _clear_cpu_cache ();
 
 class SymTesting {
 	STARTUPINFOA si{};
@@ -376,6 +378,10 @@ public:
 		
 		logf("@ Fuzz for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
 		for (int i=0; i<count; i++) {
+			//if (clear_cpu_cache && i % 10 == 0)
+			if (clear_cpu_cache)
+				_clear_cpu_cache();
+
 			auto addr = uniform_rng(rng);
 			measure_addr2sym((char*)addr);
 		}
@@ -651,11 +657,11 @@ void profiling_fuzz (int mult=1) {
 
 	logf("================ Fuzzing Addresses ================\n");
 
-	try {
-		ZoneScopedN("TinyProgram.exe");
-		SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
-		sym.fuzz_mod_measure(".exe", 20000*mult);
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	//try {
+	//	ZoneScopedN("TinyProgram.exe");
+	//	SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
+	//	sym.fuzz_mod_measure(".exe", 20000*mult);
+	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
 	try {
 		ZoneScopedN("city_builder_rel.exe");
@@ -712,23 +718,80 @@ void profiling_run () {
 	//profiling_pdb_parse(1000);
 }
 
+//
+void profiling_run_cachemiss () {
+	int count = 10000;
+	run_dbghelp = false;
+	
+	clear_cpu_cache = false;
+
+	try {
+		ZoneScopedN("city_builder (cached)");
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+		sym.print_pdb_stats(".exe");
+		sym.fuzz_mod_measure(".exe", count, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
+	try {
+		ZoneScopedN("bevy (cached)");
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
+		sym.print_pdb_stats(".exe");
+		sym.fuzz_mod_measure(".exe", count, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+
+	clear_cpu_cache = true;
+
+	try {
+		ZoneScopedN("city_builder");
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+		sym.fuzz_mod_measure(".exe", count, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
+	try {
+		ZoneScopedN("bevy");
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
+		sym.fuzz_mod_measure(".exe", count, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+}
+
 int main(int argc, const char** argv) {
 	//example_addresses(true, false);
 	//sweep_tests();
-	//profiling_run();
+	profiling_run_cachemiss();
 	
-	try {
-		ZoneScopedN("city_builder_rel.exe");
-		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
-		sym.print_pdb_stats(".exe");
-		sym.fuzz_mod_measure(".exe", 60000, 5);
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
-	try {
-		ZoneScopedN("rust_bevy_test.exe");
-		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
-		sym.print_pdb_stats(".exe");
-		sym.fuzz_mod_measure(".exe", 6000, 5);
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	//try {
+	//	ZoneScopedN("city_builder_rel.exe");
+	//	SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+	//	sym.print_pdb_stats(".exe");
+	//	sym.fuzz_mod_measure(".exe", 60000, 5);
+	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	//try {
+	//	ZoneScopedN("rust_bevy_test.exe");
+	//	SymTesting sym("RustBevyExample/rust_bevy_test.exe");
+	//	sym.print_pdb_stats(".exe");
+	//	sym.fuzz_mod_measure(".exe", 6000, 5);
+	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
 	return 0;
+}
+
+
+
+// L3 sized buffer 12MB
+const size_t L3_size = 12 * 1024 * 1024; 
+std::vector<char> g_trash_buffer(L3_size);
+
+// Function to wipe the cache
+void _clear_cpu_cache () {
+	ZoneScopedC(0xff0000);
+
+	volatile char* sink = g_trash_buffer.data();
+	
+	for (size_t i = 0; i < L3_size; i += 64) {
+		// i += 64 because a cache line is typically 64 bytes.
+		// Touching one byte loads the whole line.
+		sink[i] = (char)i;
+	}
+	
+	std::atomic_thread_fence(std::memory_order_seq_cst);
 }

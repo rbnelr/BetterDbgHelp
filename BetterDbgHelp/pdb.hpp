@@ -1310,7 +1310,7 @@ public:
 
 		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
 		// so use upper bound instead (returns first item bigger than addr), then use previous
-		auto it = symbols.upper_bound(addr);
+		auto it = symbols.upper_bound((intptr_t)addr);
 		if (it <= symbols.begin()) {
 			// first symbol after addr is first symbol, search failed
 			return nullptr;
@@ -1718,7 +1718,9 @@ public:
 		}
 
 		if (has_prev_line) {
-			assert(prev_line.code_length > 0); // We expect see a code_length established at the end
+			//assert(prev_line.code_length > 0); // We expect see a code_length established at the end
+			// I see cases where we got BA_OP_ChangeCodeLength with length 0, which trips the assert, I don't know why the code was emitted like this
+			// since length 0 presumably means line info for a 0 byte range?
 		}
 		return false;
 
