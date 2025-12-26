@@ -263,7 +263,12 @@ struct SymResult {
 			return true;
 		return strcmp(l, r) == 0;
 	}
-	void print_diff (SymResult const& r) const {
+	void print_diff (uintptr_t addr, SymResult const& r) const {
+		if (r.valid())
+			logf("!!! [%llx] (%s) Result Mismatch:\n", addr, r.sym_name);
+		else
+			logf("!!! [%llx] (SymResolver: %s) Result Mismatch:\n", addr, sym_name);
+
 		if (valid() != r.valid()) {
 			if (!  valid()) logf("> SymResolver: %s\n", err);
 			if (!r.valid()) logf("> dbghelp:dll: %s\n", r.err);
@@ -356,23 +361,31 @@ public:
 			res->err = "Module not found";
 			return false;
 		}
+
+		uintptr_t mod_raddr = addr - mod->base_addr;
+		res->module_path = mod->ansi_path.c_str();
+
 		if (!mod->pdb) {
-			res->err = "Module pdb not found";
+			auto* exports = mod->load_export_table();
+
+			if (exports) {
+				auto* mangled_name = exports->query(mod_raddr);
+				if (mangled_name) {
+					res->sym_name = mangled_name;
+					return true;
+				}
+			}
+			res->err = "Module pdb not found and not found in export table";
 			return false;
 		}
 
-		uintptr_t mod_raddr = addr - mod->base_addr;
-		
 		auto sym = mod->pdb->find_symbol_for_addr(mod_raddr);
 		if (!sym) {
 			res->err = "Symbol not found";
 			return false;
 		}
 		
-		res->module_path = mod->ansi_path.c_str();
 		res->sym_name = mod->pdb->stralloc[sym->name];
-		res->src_filepath = nullptr;
-		res->src_lineno = 0;
 
 		SourceLoc src_loc = {};
 		if (mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
@@ -423,12 +436,23 @@ public:
 			res->err = "Module not found";
 			return false;
 		}
-		if (!mod->pdb) {
-			res->err = "Module pdb not found";
-			return false;
-		}
 
 		uintptr_t mod_raddr = addr - mod->base_addr;
+		res->module_path = mod->ansi_path.c_str();
+
+		if (!mod->pdb) {
+			auto* exports = mod->load_export_table();
+
+			if (exports) {
+				auto* mangled_name = exports->query(mod_raddr);
+				if (mangled_name) {
+					res->sym_name = mangled_name;
+					return true;
+				}
+			}
+			res->err = "Module pdb not found and not found in export table";
+			return false;
+		}
 		
 		Symbol* sym;
 		{
@@ -440,7 +464,6 @@ public:
 			}
 		}
 		
-		res->module_path = mod->ansi_path.c_str();
 		res->sym_name = mod->pdb->stralloc[sym->name];
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;

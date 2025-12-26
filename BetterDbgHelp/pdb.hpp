@@ -5,7 +5,7 @@
 #include "address_index.hpp"
 #include <map>
 
-#define TRACK_ALL_SYMBOLS 0
+#define TRACK_ALL_SYMBOLS 1
 
 // https://github.com/PascalBeyer/PDB-Documentation
 
@@ -19,110 +19,10 @@ struct SourceLocAndFn {
 	uint32_t    lineno = 0;
 };
 
-typedef uint32_t sid; // Strbuf index
-struct StrAlloc {
-	std::vector<char> buf;
-
-	StrAlloc () {
-		buf.reserve(1024*8);
-	}
-
-	const char* operator[] (u32 offset) {
-		return buf.data() + offset;
-	}
-	
-	static_assert(sizeof(sid) == sizeof(uint32_t));
-	sid _grow (size_t len) {
-		auto offset = buf.size();
-		buf.resize(offset + len);
-		
-		if (offset > 0xffffffff) {
-			assert(false);
-		}
-		return (sid)offset;
-	}
-	sid get_offset () {
-		auto offset = buf.size();
-		if (offset > 0xffffffff) {
-			assert(false);
-		}
-		return (sid)offset;
-	}
-
-	sid push (const char* str, size_t len) {
-		sid offset = _grow(len+1);
-		memcpy(buf.data()+offset, str, len+1);
-		return offset;
-	}
-	sid push (const char* str) {
-		return push(str, strlen(str));
-	}
-
-	sid push_concat (const char* a, const char* b, const char* c) {
-		auto la = strlen(a);
-		auto lb = strlen(b);
-		auto lc = strlen(c);
-		
-		sid offset = _grow(la+lb+lc+1);
-		auto* cur = buf.data() + offset;
-
-		memcpy(cur, a, la); cur += la;
-		memcpy(cur, b, lb); cur += lb;
-		memcpy(cur, c, lc+1);
-
-		return offset;
-	}
-	sid push_concat_scope_no_terminate (const char* scope) {
-		auto len = strlen(scope);
-		
-		sid offset = _grow(len + 2);
-		auto* cur = buf.data() + offset;
-
-		memcpy(cur, scope, len); cur += len;
-		*cur++ = ':';
-		*cur++ = ':';
-
-		return offset;
-	}
-
-	/*
-	u32 vpushf (char const* format, va_list vl) {
-		size_t offset = buf.size();
-		size_t reserve = 3;
-		buf.push_back(reserve);
-	
-		auto ret = vsnlogf(buf.data() + offset, reserve, format, vl);
-		ret = ret >= 0 ? ret : 0;
-		bool was_big_enough = (size_t)ret < (reserve-1);
-		buf.resize(offset + ret + 1);
-		if (!was_big_enough) {
-			// buffer was too small, buffer size was increased
-			// now snlogf has to succeed, so call it again
-			auto ret2 = vsnlogf(buf.data() + offset, ret + 1, format, vl);
-			assert(ret2 <= ret);
-		}
-		if (offset > 0xffffffff) {
-			assert(false);
-		}
-		return (u32)offset;
-	}
-	
-	u32 pushf (char const* format, ...) {
-		va_list vl;
-		va_start(vl, format);
-	
-		auto ptr = vpushf(format, vl);
-	
-		va_end(vl);
-		return ptr;
-	}
-	*/
-};
-
 struct Symbol {
 	uintptr_t base_addr = 0; // relative to module
 	uint32_t size = 0;
-	sid name;
+	StrAlloc::sid name;
 	
 	PROCSYM32* procsym = nullptr; // needed for scanning INLINESITEs later
 
@@ -206,7 +106,7 @@ class PDB_File {
 	// Struct, Class and Union names from TPI, these are already fully formatted
 	ankerl::unordered_dense::map<CV_typ_t, const char*> typeid2name;
 	// Func and MemberFunc names from IPI (IDs will overlap with typeid2name!)
-	ankerl::unordered_dense::map<CV_ItemId, sid> IPI_id2name;
+	ankerl::unordered_dense::map<CV_ItemId, StrAlloc::sid> IPI_id2name;
 
 	//// Final needed data
 	struct Section {
@@ -541,33 +441,61 @@ class PDB_File {
 	// Turns "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@4_KA" into "_OptionsStorage"
 	// like dbghelp does (it does this even without SYMOPT_UNDNAME, ie demangling)
 	// dbghelp seems to only process "?..." not "??..." names
-	sid trim_mangled_name (const char* name) {
+	// This is inconsistent however, it does not seem to happen for import symbol names
+	// (whenever pdbs are missing dbghelp looks for the name in the import of the dll instead)
+	StrAlloc::sid trim_mangled_name (const char* name) {
 		if (name[0] == '?' && name[1] != '?') {
-			const char* begin = name + 1;
+			const char* begin = name+1;
 			const char* end = strchr(begin, '@');
-			if (end) {
+			if (end && begin != end) {
 				return stralloc.push(begin, end - begin);
 			}
 		}
 		return stralloc.push(name);
 	}
-
+	
+	[[msvc::forceinline]] bool resolve_rva (u32 offs, u16 seg, uintptr_t* out_addr) {
+		if (seg > 0) {
+			// Sometimes global symbols have section ids to invalid sections, no idea why this happens
+			// ex: __guard_fids_table, __guard_flags, __guard_iat_table, __guard_longjmp_table, __enclave_config, __guard_eh_cont_table
+			if (seg > sections_sorted.size()) {
+				return false;
+			}
+			auto seg_addr = sections_sorted[seg-1].base_addr;
+			*out_addr = (uintptr_t)offs + (uintptr_t)seg_addr;
+			assert(*out_addr < seg_addr + sections_sorted[seg-1].size);
+		}
+		else {
+			// Special __ImageBase symbol has seg==0, so offs already is rva
+			// I have not observed any other cases
+			assert(offs == 0);
+			*out_addr = (uintptr_t)offs;
+		}
+		return true;
+	}
 	void read_symbol_record_stream () {
 		auto* dbi = (dbi_stream_header*)DBI_data.data();
 		symbol_record_stream_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
 		char* ptr = symbol_record_stream_data.data();
 
 		char* ptr2 = ptr;
+		
+		auto push_symbol = [this] (u32 offs, u32 size, u16 seg, const char* name, const char* _sym_type) [[msvc::forceinline]] {
+			//if (strstr(name, "__scrt_ucrt_dll_is_in_use")) {
+			//	printf("");
+			//}
 
-		auto push_symbol = [this] (u32 offs, u32 size, u16 seg, const char* name) [[msvc::forceinline]] {
-			uintptr_t seg_addr = 0;
-			if (seg > 0) {
-				if (seg > sections_sorted.size()) {
-					return; // No idea why this happens
-				}
-				seg_addr = sections_sorted[seg-1].base_addr;
-			}
-			symbols.push_unsorted(Symbol{ offs + seg_addr, size, trim_mangled_name(name) });
+			uintptr_t addr;
+			if (!resolve_rva(offs, seg, &addr))
+				return;
+
+			auto trimmed_name = trim_mangled_name(name);
+			symbols.push_unsorted(Symbol{ addr, size, trimmed_name });
+		#if TRACK_ALL_SYMBOLS
+			sym_unfiltered.push_unsorted(Symbol{ addr, size, trimmed_name });
+		#endif
+
+			//logf("%s: %4d|%8x => %4llx, %s\n", _sym_type, seg, offs, addr, stralloc[trimmed_name]);
 		};
 		
 		while (ptr < ptr2 + symbol_record_stream_data.size()) {
@@ -595,9 +523,9 @@ class PDB_File {
 						s->off,
 						0, // TODO: these symbols don't have a size, possibly becasue the size is implicit based on the data type?,
 						s->seg,
-						(const char*)s->name
+						(const char*)s->name,
+						"DATASYM32"
 					);
-					//logf("DATASYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
 				} break;
 				case S_PUB32: {
 					auto* s = (PUBSYM32*)sym;
@@ -605,9 +533,9 @@ class PDB_File {
 						s->off,
 						0,
 						s->seg,
-						(const char*)s->name
+						(const char*)s->name,
+						"PUBSYM32"
 					);
-					//logf("PUBSYM32: seg:%d offs:%4x %s\n", s->seg, s->off, s->name);
 				} break;
 				default: {
 					//logf("?: %x\n", sym->kind);
@@ -710,9 +638,12 @@ class PDB_File {
 					case S_GPROC32: case S_LPROC32:
 					case S_GPROC32_ID: case S_LPROC32_ID: {
 						auto* proc = (PROCSYM32*)sym;
-						//logf(">> %s %4d %8x %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, proc->len, proc->name);
-
 						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
+						
+						//if (strcmp((const char*)proc->name, "ext_ms_win_hyperv_hvemulation_l1_1_0_WHvEmulatorCreateEmulator")==0) {
+						//	printf("");
+						//}
+						//logf(">> %s %4d|%8x => %4llx, %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, module_raddr, proc->len, proc->name);
 
 						Symbol s;
 						s.base_addr = module_raddr;
@@ -722,7 +653,7 @@ class PDB_File {
 						s.module_index = module_index;
 
 					#if TRACK_ALL_SYMBOLS
-						sym_unfiltered.push_back(s);
+						sym_unfiltered.push_unsorted(Symbol(s));
 					#endif
 
 						// Functions with identical binary can be merged, in which dbghelp seems to output the symbol of the first entry which is what we will do as well
@@ -1057,7 +988,7 @@ class PDB_File {
 				}
 			}
 
-			sid push_scope_prefix (StrAlloc* stralloc, CV_ItemId id) const {
+			StrAlloc::sid push_scope_prefix (StrAlloc* stralloc, CV_ItemId id) const {
 				auto offset = stralloc->get_offset();
 
 				recurse_append_scope(stralloc, id);
@@ -1218,7 +1149,13 @@ private:
 	AddressIndex<Symbol> symbols;
 	
 #if TRACK_ALL_SYMBOLS
-	std::vector<Symbol> sym_unfiltered; // to support has_symbol_for_addr
+	AddressIndex<Symbol> sym_unfiltered; // to support has_symbol_for_addr
+
+	void print_all_symbols () {
+		for (auto& s : sym_unfiltered) {
+			logf(">> %4llx %4x mod=%d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
+		}
+	}
 #endif
 
 	/*
@@ -1294,8 +1231,11 @@ public:
 		}
 		
 		symbols.sort_and_build_index();
+
 	#if TRACK_ALL_SYMBOLS
-		sort_symbols(sym_unfiltered);
+		sym_unfiltered.sort_and_build_index();
+
+		//print_all_symbols();
 	#endif
 
 		//logf("PDB read.\n");
@@ -1355,11 +1295,15 @@ public:
 		it--;
 		
 		uintptr_t sym_addr = it->base_addr;
-
+		
+		//auto* actual_sym = find_symbol_for_addr(addr);
+		//printf("> %s\n", stralloc[actual_sym->name]);
+		
 		// iterate backwards through any symbols with equal address to find first one
 		// but ignore ones in the global symbol_record_stream, as they contain mangled version of the symbol without size, but we sometimes want those if there is no real symbol
 		// like __ImageBase
-		for (Symbol* cur=&*it; cur >= sym_sorted.data() && cur->base_addr == sym_addr; --cur) {
+		for (Symbol* cur=&*it; cur >= &*sym_unfiltered.begin() && cur->base_addr == sym_addr; --cur) {
+			//printf(">> %s\n", stralloc[cur->name]);
 			if (strcmp(stralloc[cur->name], name)==0) {
 				return cur;
 			}
@@ -1372,6 +1316,8 @@ public:
 	}
 	
 	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
+		ZoneScoped;
+
 		intptr_t proc_raddr = (intptr_t)addr - (intptr_t)sym->base_addr;
 		if (proc_raddr >= (intptr_t)sym->size) {
 			// past symbol address range, no valid line number

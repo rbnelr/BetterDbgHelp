@@ -108,7 +108,7 @@ public:
 		auto dummy = T::dummy(addr);
 		return std::upper_bound(vec.begin(), vec.end(), dummy, _less);
 	}
-#if 0
+#if 1
 	// 'Upoptimized' = Normal binary search on sorted vector
 	void sort_and_build_index () {
 		ZoneScoped;

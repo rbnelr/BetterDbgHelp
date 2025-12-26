@@ -11,6 +11,7 @@
 bool run_dbghelp = true;
 bool clear_cpu_cache = false;
 void _clear_cpu_cache ();
+bool print_timings = true;
 
 class SymTesting {
 	STARTUPINFOA si{};
@@ -228,8 +229,7 @@ public:
 		auto err         = resolver->addr2sym(addr, &res);
 		
 		if (!res.equal(res_dbghelp, { &mismatch_counts, resolver.get(), addr })) {
-			logf("!!! [%llx] (%s) Result Mismatch:\n", (uintptr_t)addr, res_dbghelp.sym_name);
-			res.print_diff(res_dbghelp);
+			res.print_diff((uintptr_t)addr, res_dbghelp);
 			//tests_failed = true;
 		}
 	}
@@ -253,8 +253,7 @@ public:
 			}
 			
 			if (!res.equal(res_dbghelp, { &mismatch_counts, resolver.get(), (void*)addr })) {
-				logf("!!! [%llx] (%s) Result Mismatch:\n", addr, res_dbghelp.sym_name);
-				res.print_diff(res_dbghelp);
+				res.print_diff((uintptr_t)addr, res_dbghelp);
 				//tests_failed = true;
 			}
 
@@ -310,11 +309,13 @@ public:
 			for (int i=0; i<meas_iterations; i++) {
 				run_examples(fmeas);
 			}
-			if (dbghelp) {
-				dbghelp->print_timings();
-				logf("---\n");
+			if (print_timings) {
+				if (dbghelp) {
+					dbghelp->print_timings();
+					logf("---\n");
+				}
+				resolver->print_timings();
 			}
-			resolver->print_timings();
 		}
 	}
 
@@ -326,26 +327,26 @@ public:
 		resolver->addr2sym(addr, &sym);
 	}
 
-	void sweep_mod (std::string_view filter) {
+	void sweep_mod (std::string_view filter, bool show=false) {
 		auto& mod = loaded_modules.find(filter);
-		auto start = (uintptr_t)mod.addr;
-		auto end = (uintptr_t)mod.addr + mod.size;
-
-	#if 0
-		int before = 0x100;
-		int after = 0x100;
-
-		logf("@ Sweep for module %s: [%llx-%llx] (-%x +%x)\n", mod.path.c_str(), start, end, before, after);
-		for (uintptr_t addr = start - before; addr < end + after; addr++) {
-			//show_and_test_distinct_addr2sym(addr);
-			test_distinct_addr2sym(addr);
-		}
-	#else
+		sweep_mod(filter, 0, mod.size, show);
+	}
+	void sweep_mod (std::string_view filter, uintptr_t rva_start, uintptr_t rva_end, bool show=false) {
+		auto& mod = loaded_modules.find(filter);
+		auto start = (uintptr_t)mod.addr + rva_start;
+		auto end = (uintptr_t)mod.addr + rva_end;
+		
 		logf("@ Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
-		for (uintptr_t addr = start; addr < end; addr++) {
-			test_distinct_addr2sym(addr);
+		if (show) {
+			for (uintptr_t addr = start; addr < end; addr++) {
+				show_and_test_distinct_addr2sym(addr);
+			}
 		}
-	#endif
+		else {
+			for (uintptr_t addr = start; addr < end; addr++) {
+				test_distinct_addr2sym(addr);
+			}
+		}
 
 		mismatch_counts.print();
 	}
@@ -359,12 +360,13 @@ public:
 		for (uintptr_t addr = start; addr < end; addr++) {
 			measure_addr2sym((char*)addr);
 		}
-
-		if (dbghelp) {
-			dbghelp->print_timings();
-			logf("---\n");
+		if (print_timings) {
+			if (dbghelp) {
+				dbghelp->print_timings();
+				logf("---\n");
+			}
+			resolver->print_timings();
 		}
-		resolver->print_timings();
 	}
 
 	// seed=-1 => random seed
@@ -386,11 +388,13 @@ public:
 			measure_addr2sym((char*)addr);
 		}
 		
-		if (dbghelp) {
-			dbghelp->print_timings();
-			logf("---\n");
+		if (print_timings) {
+			if (dbghelp) {
+				dbghelp->print_timings();
+				logf("---\n");
+			}
+			resolver->print_timings();
 		}
-		resolver->print_timings();
 	}
 
 	void measure_pdb_parse (std::string_view filter, int iterations) {
@@ -403,7 +407,8 @@ public:
 			//dbghelp->measure_addr2sym(addr);
 			resolver->measure_pdb_parse(addr);
 		}
-		resolver->print_timings();
+		if (print_timings)
+			resolver->print_timings();
 	}
 
 	void print_pdb_stats (std::string_view filter) {
@@ -571,7 +576,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 			at_addr(exe + 0x2DB2BF0); // rand_chacha::guts::refill_wide
 			at_addr(exe + 0x2DB2BF0+21); // rand_chacha::guts::refill_wide
 	
-			at_addr(ucrtbase + 0x69FB30); // ucrtbase.dll!sinf(), returns wrong symbol for some reason, I even double checked everything, am I missing something?
+			//at_addr(ucrtbase + 0x69FB30); // ucrtbase.dll!sinf(), returns wrong symbol for some reason, I even double checked everything, am I missing something?
 			at_addr(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf, weirdly this one works, so it's even the same ucrtbase.dll as the two other executables
 		});
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
@@ -589,7 +594,7 @@ void sweep_tests () {
 		char* exe = sym.get_addr(".exe");
 
 		sym.sweep_mod(".exe");
-		sym.sweep_mod("ucrtbase.dll");
+		//sym.sweep_mod("ucrtbase.dll");
 
 		//sym.show_addr2sym(exe + 0x1130);
 		//sym.show_addr2sym(exe + 0x13c0); // TODO: linoinfo not found by me because lineheader stores address before symbol (and first line offset is symbol)
@@ -755,9 +760,11 @@ void profiling_run_cachemiss () {
 }
 
 int main(int argc, const char** argv) {
-	//example_addresses(true, false);
-	//sweep_tests();
-	profiling_run_cachemiss();
+	print_timings = false;
+	example_addresses(true, false, 0);
+	sweep_tests();
+	
+	//profiling_run_cachemiss();
 	
 	//try {
 	//	ZoneScopedN("city_builder_rel.exe");

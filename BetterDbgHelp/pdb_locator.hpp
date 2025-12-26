@@ -4,26 +4,12 @@
 #include <Urlmon.h>
 #pragma comment(lib, "Urlmon.lib")
 
-// The executable (.exe or .dll) itself contains data which can be used to find the associated pdb file
-// commonly when building your own application or when sometimes when downloading application, a pdb with the same name as the exe will simply be placed next to the exe
-// so we first look for a pdb of the same name next to the exe
-// then we look at the absolute pdb path stored inside the exe RSDS debug info, which likely is where it was built in VS
-// if neither are found, we look at %temp%/SymbolCache/<pdb_filename>/<pdb_guid><pdb_age>/<pdb_filename>, which is where symbol server pdbs get placed by VS
-// if not, try to fetch it from https://msdl.microsoft.com/download/symbols/<pdb_name>/<pdb_guid><pdb_age>/<pdb_name> and cache it inside this folder ourselves
-class PDB_Locator {
+class ExeParser {
 	MemoryMappedFile file;
-	
-	struct RSDSI { // RSDS debug info
-		DWORD   dwSig; // RSDS
-		GUID    guidSig;
-		DWORD   age;
-		char    pdb_name[1];
-	};
 
 	IMAGE_DOS_HEADER* dos_header = {};
 	IMAGE_NT_HEADERS* nt_header = {}; // includes optional header
 	IMAGE_SECTION_HEADER* section_headers = {};
-	RSDSI* rsds = {};
 
 	// map loaded virtual address to exe file address
 	char* map_rva (DWORD rva) {
@@ -37,36 +23,90 @@ class PDB_Locator {
 		throw std::runtime_error("");
 	}
 
-	void open_image_and_find_rsds (std::filesystem::path const& filepath) {
+public:
+	void open_image (std::filesystem::path const& filepath) {
 		if (!file.open(filepath.c_str()))
-			throw std::runtime_error("File not found: "+ filepath.string());
+			throw std::runtime_error("File not found");
 
 		dos_header = (IMAGE_DOS_HEADER*)file.data();
 		if (dos_header->e_magic != 0x5A4D) // MZ
-			throw std::runtime_error("Error parsing image: "+ filepath.string());
+			throw std::runtime_error("Error parsing image");
 		
 		nt_header = (IMAGE_NT_HEADERS*)((char*)file.data() + dos_header->e_lfanew);
 		if (nt_header->Signature != 0x00004550) // PE\0\0
-			throw std::runtime_error("Error parsing image: "+ filepath.string());
+			throw std::runtime_error("Error parsing image");
 		
 		section_headers = (IMAGE_SECTION_HEADER*)((char*)file.data() + dos_header->e_lfanew + sizeof(IMAGE_NT_HEADERS));
-
-		auto dbg = nt_header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
-		auto* debug_directory = (IMAGE_DEBUG_DIRECTORY*)map_rva(dbg.VirtualAddress);
-		auto num_debug_directory = dbg.Size / sizeof(IMAGE_DEBUG_DIRECTORY);
-		for (int i=0; i<num_debug_directory; i++) {
-			auto& d = debug_directory[i];
-
-			if (d.Type == IMAGE_DEBUG_TYPE_CODEVIEW) {
-				rsds = (RSDSI*)((char*)file.data() + d.PointerToRawData);
-				if (rsds->dwSig != 0x53445352) // "RSDS"
-					throw std::runtime_error("Error parsing image: "+ filepath.string());
-
-				return;
-			}
-		}
 	}
 	
+	
+	struct RSDSI { // RSDS debug info
+		DWORD   dwSig; // RSDS
+		GUID    guidSig;
+		DWORD   age;
+		char    pdb_name[1];
+	};
+	RSDSI* find_rsds () {
+		auto& dbg = nt_header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+		if (dbg.VirtualAddress) {
+			auto* debug_directory = (IMAGE_DEBUG_DIRECTORY*)map_rva(dbg.VirtualAddress);
+			auto num_debug_directory = dbg.Size / sizeof(IMAGE_DEBUG_DIRECTORY);
+			for (int i=0; i<num_debug_directory; i++) {
+				auto& d = debug_directory[i];
+
+				if (d.Type == IMAGE_DEBUG_TYPE_CODEVIEW) {
+					auto* rsds = (RSDSI*)((char*)file.data() + d.PointerToRawData);
+					if (rsds->dwSig != 0x53445352) // "RSDS"
+						throw std::runtime_error("Error parsing image");
+
+					return rsds;
+				}
+			}
+		}
+		throw std::runtime_error("RSDSI not found");
+	}
+
+	template <typename FUNC>
+	void find_exports (StrAlloc& strs, FUNC func_and_name) {
+		auto& exports = nt_header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+		if (exports.VirtualAddress) {
+			auto* export_directory = (IMAGE_EXPORT_DIRECTORY*)map_rva(exports.VirtualAddress);
+			
+			// list[NumberOfFunctions] of RVA of function addresses
+			// Not sorted!
+			auto* functions = (DWORD*)map_rva(export_directory->AddressOfFunctions);
+			// list[NumberOfNames] of RVA of function name strings
+			auto* names = (DWORD*)map_rva(export_directory->AddressOfNames);
+			// list[NumberOfNames] of RVA of indices into functions, for each name
+			auto* ordinals = (WORD*)map_rva(export_directory->AddressOfNameOrdinals);
+			
+			// export table can have functions without name entry,
+			// which is why we iterate list of ordinals instead to skip nameless function
+			for (DWORD i=0; i<export_directory->NumberOfNames; i++) {
+				auto ord = ordinals[i];
+				auto* name = (const char*)map_rva(names[i]);
+				auto func_rva = functions[ord];
+
+				func_and_name(func_rva, strs.push(name));
+			}
+
+			return;
+		}
+		throw std::runtime_error("Exports not found");
+	}
+};
+
+// The executable (.exe or .dll) itself contains data which can be used to find the associated pdb file
+// commonly when building your own application or when sometimes when downloading application, a pdb with the same name as the exe will simply be placed next to the exe
+// so we first look for a pdb of the same name next to the exe
+// then we look at the absolute pdb path stored inside the exe RSDS debug info, which likely is where it was built in VS
+// if neither are found, we look at %temp%/SymbolCache/<pdb_filename>/<pdb_guid><pdb_age>/<pdb_filename>, which is where symbol server pdbs get placed by VS
+// if not, try to fetch it from https://msdl.microsoft.com/download/symbols/<pdb_name>/<pdb_guid><pdb_age>/<pdb_name> and cache it inside this folder ourselves
+class PDB_Locator {
+	ExeParser exe;
+
+	ExeParser::RSDSI* rsds = {};
+
 	std::filesystem::path const& exe_path;
 	std::filesystem::path pdb_path_in_exe;
 	
@@ -153,9 +193,15 @@ public:
 	PDB_Locator (std::filesystem::path const& filepath): exe_path{filepath} {
 		ZoneScoped;
 
-		open_image_and_find_rsds(exe_path);
-		parse_rsds();
+		try {
+			exe.open_image(exe_path);
+			rsds = exe.find_rsds();
 
+			parse_rsds();
+		}
+		catch (std::exception& ex) {
+			throw std::runtime_error((exe_path.string() +": ")+ ex.what());
+		}
 		//printf(">> %s ->\n>>> symbol_server_url: %s\n>>> cache_path: %s\n", filepath.c_str(), symbol_server_url.c_str(), cache_path.u8string().c_str());
 	}
 
@@ -203,5 +249,57 @@ public:
 	// does this mean exe and pdb can be modified seperately and the age does not have to match?
 	static bool verify_pdb (PDB_guid_and_age const& exe, pdb_information_stream_header const* pdb) {
 		return memcmp(&exe.guidSig, &pdb->guid, sizeof(GUID)) == 0; /* && exe.age == pdb->age;*/
+	}
+};
+
+class ExportTableQuery {
+	StrAlloc names;
+
+	struct Function {
+		uint32_t address;
+		StrAlloc::sid mangled_name;
+	};
+	std::vector<Function> functions_sorted;
+	
+	static __forceinline int _cmp (Function const& l, Function const& r) {
+		return std::less<uintptr_t>()(l.address, r.address);
+	}
+	static __forceinline bool _less (Function const& l, Function const& r) {
+		return l.address < r.address;
+	}
+
+public:
+	ExportTableQuery (std::filesystem::path const& filepath) {
+		ZoneScoped;
+
+		try {
+			ExeParser exe;
+			
+			exe.open_image(filepath);
+			exe.find_exports(names, [this] (uint32_t func_rva, StrAlloc::sid mangled_name) {
+				functions_sorted.emplace_back(func_rva, mangled_name);
+			});
+			
+			std::stable_sort(functions_sorted.begin(), functions_sorted.end(), _cmp);
+		}
+		catch (std::exception& ex) {
+			throw std::runtime_error((filepath.string() +": ")+ ex.what());
+		}
+	}
+
+	const char* query (uintptr_t mod_raddr) {
+		if (mod_raddr >= INT_MAX) {
+			assert(false); // If exe is ever over 4GB, likely exports can't be in upper addresses
+			return nullptr;
+		}
+
+		auto dummy = Function{ (uint32_t)mod_raddr, 0 };
+		auto it = std::upper_bound(functions_sorted.begin(), functions_sorted.end(), dummy, _less);
+		if (it <= functions_sorted.begin())
+			return nullptr;
+		it--;
+
+		assert(mod_raddr >= it->address);
+		return names[it->mangled_name];
 	}
 };

@@ -178,3 +178,77 @@ public:
 		}
 	}
 };
+
+struct StrAlloc {
+	typedef uint32_t sid; // Strbuf index
+	std::vector<char> buf;
+
+	StrAlloc () {
+		buf.reserve(1024*8);
+	}
+
+	const char* operator[] (sid offset) {
+		return buf.data() + offset;
+	}
+	
+	static_assert(sizeof(sid) == sizeof(uint32_t));
+	sid _grow (size_t len) {
+		auto offset = buf.size();
+		buf.resize(offset + len);
+		
+		if (offset > 0xffffffff) {
+			assert(false);
+		}
+		return (sid)offset;
+	}
+	sid get_offset () {
+		auto offset = buf.size();
+		if (offset > 0xffffffff) {
+			assert(false);
+		}
+		return (sid)offset;
+	}
+	
+	// push null-terminated
+	sid push (const char* str) {
+		return push(str, strlen(str));
+	}
+	// push substr (non-null-terminated substr, will be null-terminated on write)
+	sid push (const char* str, size_t len) {
+		sid offset = _grow(len+1);
+		memcpy(buf.data()+offset, str, len);
+		buf[offset+len] = '\0';
+		return offset;
+	}
+	
+	// concat null-terminated strings
+	sid push_concat (const char* a, const char* b, const char* c) {
+		auto la = strlen(a);
+		auto lb = strlen(b);
+		auto lc = strlen(c);
+		
+		sid offset = _grow(la+lb+lc+1);
+		auto* cur = buf.data() + offset;
+
+		memcpy(cur, a, la); cur += la;
+		memcpy(cur, b, lb); cur += lb;
+		memcpy(cur, c, lc+1);
+
+		return offset;
+	}
+	// push null terminated string + "::" but omit null-terminator to allow easy concatination
+	// (followed by a normal push to terminate)
+	sid push_concat_scope_no_terminate (const char* scope) {
+		auto len = strlen(scope);
+		
+		sid offset = _grow(len + 2);
+		auto* cur = buf.data() + offset;
+
+		memcpy(cur, scope, len); cur += len;
+		*cur++ = ':';
+		*cur++ = ':';
+
+		return offset;
+	}
+
+};

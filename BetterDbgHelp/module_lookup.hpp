@@ -13,6 +13,7 @@ struct LoadedModule {
 	size_t size;
 
 	std::unique_ptr<PDB_File> pdb;
+	std::unique_ptr<ExportTableQuery> exports;
 
 	LoadedModule (std::filesystem::path&& path, uintptr_t base_addr, size_t size) {
 		this->path = std::move(path);
@@ -22,6 +23,19 @@ struct LoadedModule {
 	}
 	void load_pdb () {
 		pdb = PDB_File::try_load_pdb(path);
+	}
+
+	ExportTableQuery* load_export_table () {
+		if (!exports) {
+			//try {
+				exports = std::make_unique<ExportTableQuery>(path);
+			// Image parser should never fail!
+			//} catch (std::exception& ex) {
+			//	logf("!!! Export Table loading exception: %s\n", ex.what());
+			//	return nullptr;
+			//}
+		}
+		return exports.get();
 	}
 };
 struct ModuleCache {
@@ -45,7 +59,7 @@ struct ModuleCache {
 		return nullptr;
 	}
 
-	const LoadedModule* find_module_for_addr (HANDLE inspectee, uintptr_t addr) {
+	LoadedModule* find_module_for_addr (HANDLE inspectee, uintptr_t addr) {
 		ZoneScoped;
 
 		// Linear search shoule be fast enough for the moment
@@ -58,7 +72,7 @@ struct ModuleCache {
 		return try_get_and_cache_module(inspectee, addr);
 	}
 
-	const LoadedModule* try_get_and_cache_module (HANDLE inspectee, uintptr_t addr) {
+	LoadedModule* try_get_and_cache_module (HANDLE inspectee, uintptr_t addr) {
 		ZoneScopedC(0xffff00);
 
 		LoadedModule* loaded = nullptr;
