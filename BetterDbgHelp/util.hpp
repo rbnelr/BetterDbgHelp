@@ -253,5 +253,46 @@ struct StrAlloc {
 
 		return offset;
 	}
+};
 
+// Small string allocator that uses a fixed amount of stack space before spilling to heap
+template <size_t STACK_BUF>
+struct SmallStringAlloc {
+	typedef std::unique_ptr<char[]> heap_str;
+
+	char buf[STACK_BUF];
+	size_t cur = 0;
+	std::vector<heap_str> large_strs;
+
+	// push null-terminated onto stack buf if it fits, otherwise onto vector
+	// return stable C string pointer
+	const char* push (const char* str, size_t len) {
+		size_t size = len + 1;
+		size_t remain = STACK_BUF - cur;
+		if (size <= remain) {
+			char* res = &buf[cur];
+
+			memcpy(res, str, len);
+			res[len] = '\0';
+
+			cur += size;
+			return res;
+		}
+		else {
+			auto heap = std::make_unique<char[]>(size);
+			memcpy(heap.get(), str, len);
+			heap[len] = '\0';
+
+			auto& res = large_strs.emplace_back(std::move(heap));
+			return res.get();
+		}
+	}
+
+	// This cannot be moved without invalidating returned pointers
+	SmallStringAlloc () = default;
+	~SmallStringAlloc () = default;
+	SmallStringAlloc (SmallStringAlloc&& other) = delete;
+	SmallStringAlloc& operator= (SmallStringAlloc&& other) = delete;
+	SmallStringAlloc (SmallStringAlloc const& other) = delete;
+	SmallStringAlloc& operator= (SmallStringAlloc const& other) = delete;
 };

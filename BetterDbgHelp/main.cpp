@@ -229,7 +229,7 @@ public:
 		if (dbghelp) {
 			dbghelp->addr2sym(addr, &res_dbghelp);
 			print_addr("dbghelp.dll", addr);
-			res_dbghelp.print(); // TODO: calcualte and print speedup percent after both timings, probably should move all measurements to central class for that, then pass ptr to that to both classes
+			res_dbghelp.print(); // TODO: calculate and print speedup percent after both timings, probably should move all measurements to central class for that, then pass ptr to that to both classes
 		}
 
 		resolver->addr2sym(addr, &res);
@@ -257,59 +257,64 @@ public:
 		}
 	}
 	
-	SymResult prev_res = {};
-	SymResult prev_res_dbghelp = {};
+	std::unique_ptr<SymResult> prev_res = std::make_unique<SymResult>();
+	std::unique_ptr<SymResult> prev_res_dbghelp = std::make_unique<SymResult>();
 	
 	void test_distinct_addr2sym (uintptr_t addr) {
 		show_and_test_distinct_addr2sym(addr, false);
 	}
 	void show_and_test_distinct_addr2sym (uintptr_t addr, bool show=true) {
-		SymResult res={}, res_dbghelp={};
+		auto res = std::make_unique<SymResult>();
+		auto res_dbghelp = std::make_unique<SymResult>();
 
-		dbghelp->addr2sym((void*)addr, &res_dbghelp);
-		resolver->addr2sym((void*)addr, &res);
+		dbghelp->addr2sym((void*)addr, res_dbghelp.get());
+		resolver->addr2sym((void*)addr, res.get());
 		
-		if (!res.equal(prev_res) || !res_dbghelp.equal(prev_res_dbghelp)) {
+		if (!res->equal(*prev_res) || !res_dbghelp->equal(*prev_res_dbghelp)) {
 			if (show) {
 				print_addr("SymResolver.dll", (char*)addr);
-				res.print();
+				res->print();
 			}
 
-			if (!res.equal(res_dbghelp, { &mismatch_counts, resolver.get(), (void*)addr })) {
-			
+			auto _old = mismatch_counts.symbol_mismatch_overlap;
+
+			if (!res->equal(*res_dbghelp, { &mismatch_counts, resolver.get(), (void*)addr }) &&
+				mismatch_counts.symbol_mismatch_overlap == _old // HACK: Avoid showing diff for mismatched due to overlapping symbols, to better find issues I can fix
+				) {
+				
 				auto& mod = get_mod((char*)addr);
 				auto rel_addr = (intptr_t)addr - (intptr_t)mod.addr;
 
-				res.print_diff(mod.name.c_str(), rel_addr, res_dbghelp);
+				res->print_diff(mod.name.c_str(), rel_addr, *res_dbghelp);
 				//tests_failed = true;
 			}
 
-			prev_res = res;
-			prev_res_dbghelp = res_dbghelp;
+			prev_res = std::move(res);
+			prev_res_dbghelp = std::move(res_dbghelp);
 		}
 	}
 	void show_distinct_sym_lineinfo (LoadedModule const& mod, uintptr_t addr) {
-		SymResult res={};
+		auto res = std::make_unique<SymResult>();
 
-		resolver->addr2sym((void*)addr, &res);
+		resolver->addr2sym((void*)addr, res.get());
 		
-		if (!res.equal_no_inline(prev_res)) {
+		if (!res->equal_no_inline(*prev_res)) {
 			logf("[%llx] ", addr - (uintptr_t)mod.addr);
-			res.print_no_inline();
+			res->print_no_inline();
 
-			prev_res = res;
+			prev_res = std::move(res);
 		}
 	}
 	void show_distinct_sym (LoadedModule const& mod, uintptr_t addr) {
-		SymResult res={};
+		auto res = std::make_unique<SymResult>();
 
-		resolver->addr2sym((void*)addr, &res);
+		resolver->addr2sym((void*)addr, res.get());
 		
-		if (!res.equal_sym(prev_res)) {
+		if (!res->equal_sym(*prev_res)) {
 			logf("[%llx] ", addr - (uintptr_t)mod.addr);
-			res.print_sym();
+			res->print_sym();
 
-			prev_res = res;
+			prev_res = std::move(res);
 		}
 	}
 
@@ -793,16 +798,18 @@ int main(int argc, const char** argv) {
 	
 	//profiling_run_cachemiss();
 	
-	try {
-		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
-		
-		char* exe = sym.get_addr(".exe");
-		//sym.show_addr2sym(exe + 0xfa4f4);
-		
-		//sym.sweep_mod(".exe", 0xfa4d2, 0xfa74a, true); // Engine::Engine
-	
-		sym.sweep_mod(".exe");
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	//try {
+	//	SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+	//	
+	//	char* exe = sym.get_addr(".exe");
+	//	//sym.show_addr2sym(exe + 0xfa4f4);
+	//	//sym.show_addr2sym(exe + 0x6c7fc);
+	//	sym.show_addr2sym(exe + 0x73217);
+	//	
+	//	//sym.sweep_mod(".exe", 0xfa4d2, 0xfa74a, true); // Engine::Engine
+	//
+	//	//sym.sweep_mod(".exe");
+	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
 	//try {
 	//	ZoneScopedN("city_builder_rel.exe");

@@ -38,32 +38,50 @@ struct MismatchCounts {
 
 
 struct SymResult {
-	// TODO: dbghelp.dll requires us to pass in a string buffer, and I want to avoid heap alloc for the moment
-	static inline constexpr unsigned STRBUF_SIZE = 4096;
 	static inline constexpr unsigned MAX_INLINES = 64;
 
-	char str_buf[STRBUF_SIZE];
+	const char* err;
 
-	union {
-		const char* err;
+	const char* module_path;
+	const char* sym_name;
 
-		struct { // valid if sym_name!=null, otherwise err set
-			const char* module_path;
-			const char* sym_name;
-
-			const char* src_filepath;
-			uint32_t    src_lineno;
-		
-			int num_inlines;
-			SourceLocAndFn inlines[MAX_INLINES];
-		};
-	};
+	const char* src_filepath;
+	uint32_t    src_lineno;
+	
+	int num_inlines;
+	SourceLocAndFn inlines[MAX_INLINES];
+	
+	// Source Filenames (path is included) and function names with C++ templates can be extremely long
+	// And 64 Inline sites cause huge string output amounts occasionally
+	// Use reasonably sized stack buffer first, then heap if it overflows
+	// Note that this struct can't be moved as it points to the internal string buffer,
+	// you probably also want to avoid copying it
+	SmallStringAlloc<4096> str_alloc;
+	
+	// I could have just resorted to using std::string everywhere
+	// but i REALLY want to avoid this as it inserted slow-ish heap allocations in the code I want to optimize
+	// especially since in 90% of the cases we can get away without the heap
+	// and because if I mimic dbghelp's API later, i get passed user-allocated buffers (though only for some of the functions)
+	
+	// an alternative actually would be to make sym_name etc. getters and use offsets into a string buffer instead
+	// TODO: do this?
+	
+	// This cannot be moved without carefully adjusting the contained pointers
+	// instead use unique_ptr
+	SymResult (SymResult&& other) = delete;
+	SymResult& operator= (SymResult&& other) = delete;
+	SymResult (SymResult const& other) = delete;
+	SymResult& operator= (SymResult const& other) = delete;
 
 	SymResult () {
 		clear();
 	}
+	~SymResult () = default;
+	
 	// call this from symbol resolver as it is faster to only clear relevant fields rather than sym={}, at that copies entire str_buf!
 	void clear () {
+		err = nullptr;
+
 		module_path = nullptr;
 		sym_name = nullptr;
 		
@@ -78,6 +96,11 @@ struct SymResult {
 		//memset((char*)this + STRBUF_SIZE, 0, sizeof(SymResult)-STRBUF_SIZE);
 		//memset(inlines, 0, sizeof(inlines));
 		//#endif
+	}
+	void clear_inlines () {
+		for (int i=num_inlines; i<MAX_INLINES; i++) {
+			inlines[i] = {};
+		}
 	}
 
 	bool valid () const {

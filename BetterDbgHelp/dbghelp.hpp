@@ -146,26 +146,13 @@ public:
 	bool addr2sym (void* addr, SymResult* res) {
 		res->clear();
 
-		size_t strbuf_cur = 0;
-		auto copy_to_strbuf = [&] (const char* str, size_t len) -> const char* {
-			char* out = res->str_buf + strbuf_cur;
-			size_t remain = SymResult::STRBUF_SIZE - strbuf_cur;
-			size_t bytes_to_copy = remain >= len+1 ? len+1 : remain;
-			if (bytes_to_copy <= 0) {
-				return nullptr;
-			}
-			// copies whole or truncated
-			memcpy(out, str, bytes_to_copy);
-			strbuf_cur += bytes_to_copy;
-			return out;
-		};
-
+		constexpr ULONG BUFSZ = 4096;
 		// SymFromAddr expects SYMBOL_INFO followed by string buffer memory
-		char buf[sizeof(SYMBOL_INFO) + SymResult::STRBUF_SIZE] = {};
+		char buf[sizeof(SYMBOL_INFO) + BUFSZ] = {};
 
 		auto* si = (SYMBOL_INFO*)buf;
 		si->SizeOfStruct = sizeof(SYMBOL_INFO);
-		si->MaxNameLen = SymResult::STRBUF_SIZE;
+		si->MaxNameLen = BUFSZ;
 
 		DWORD Displacement = 0;
 
@@ -176,7 +163,7 @@ public:
 
 		// need to copy into per-SymResult string buffer
 		res->module_path = nullptr; // dbghelp.dll does not seem to return this, module_path is mainly for completeness sake, tracy actually determines this itself
-		res->sym_name = copy_to_strbuf(si->Name, si->NameLen);
+		res->sym_name = res->str_alloc.push(si->Name, si->NameLen);
 		res->src_filepath = nullptr;
 		res->src_lineno = 0;
 		
@@ -184,7 +171,7 @@ public:
 			IMAGEHLP_LINE64 line = {};
 			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
 			if (SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line)) {
-				res->src_filepath = copy_to_strbuf(line.FileName, strlen(line.FileName));
+				res->src_filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
 				res->src_lineno = line.LineNumber;
 			}
 		}
@@ -207,12 +194,12 @@ public:
 				res->inlines[i] = {};
 
 				if (_SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si)) {
-					res->inlines[i].fnname = copy_to_strbuf(si->Name, si->NameLen);
+					res->inlines[i].fnname = res->str_alloc.push(si->Name, si->NameLen);
 					
 					IMAGEHLP_LINE64 line = {};
 					line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
 					if (_SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line)) {
-						res->inlines[i].filepath = copy_to_strbuf(line.FileName, strlen(line.FileName));
+						res->inlines[i].filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
 						res->inlines[i].lineno = line.LineNumber;
 					}
 				}
