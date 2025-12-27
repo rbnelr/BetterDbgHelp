@@ -216,8 +216,11 @@ struct StrAlloc {
 	// push substr (non-null-terminated substr, will be null-terminated on write)
 	sid push (const char* str, size_t len) {
 		sid offset = _grow(len+1);
-		memcpy(buf.data()+offset, str, len);
-		buf[offset+len] = '\0';
+		auto* cur = buf.data() + offset;
+
+		memcpy(cur, str, len); cur += len;
+		*cur++ = '\0';
+
 		return offset;
 	}
 	

@@ -11,7 +11,7 @@ struct MismatchCounts {
 	int inline_mimatch = 0;
 
 	int symbol_mismatch_overlap = 0; // different symbol name (but overlapping symbol with correct name existed)
-	int symbol_name_mangled = 0; // correct symbol but we did not filer out mangled scoped info (Note: I did not enable demangling, but dbghelp still 'stripped' the name of the mangled parts)
+	//int symbol_name_mangled = 0; // correct symbol but we did not filer out mangled scoped info (Note: I did not enable demangling, but dbghelp still 'stripped' the name of the mangled parts)
 	int DH_no_source = 0; // we have source info, dbghelp does not
 
 	int other = 0;
@@ -22,7 +22,7 @@ struct MismatchCounts {
 		logf("  source_mismatch: %d\n", source_mismatch);
 		logf("  inline_mimatch: %d\n", inline_mimatch);
 		logf("  symbol_mismatch_overlap: %d\n", symbol_mismatch_overlap);
-		logf("  symbol_name_mangled: %d\n", symbol_name_mangled);
+		//logf("  symbol_name_mangled: %d\n", symbol_name_mangled);
 		logf("  DH_no_source: %d\n", DH_no_source);
 		logf("  other: %d\n", other);
 	}
@@ -159,7 +159,8 @@ struct SymResult {
 		auto* counts = c.counts;
 
 		if (valid() != r.valid()) {
-			if (counts) counts->other++;
+			if (counts)
+				counts->other++;
 			return false;
 		}
 
@@ -167,30 +168,36 @@ struct SymResult {
 			// dbghelp.dll not returning module name, assume it's correct
 			//if (my_strcmp(module_path, r.module_path) != 0) return false;
 			if (!my_strcmp(sym_name, r.sym_name)) {
-				if (counts) counts->symbol_mismatch_or_mangled(*this, r, c);
+				if (counts)
+					counts->symbol_mismatch_or_mangled(*this, r, c);
 				return false;
 			}
 
 			if (has_source() != r.has_source()) {
 				if (has_source())
-					if (counts) counts->DH_no_source++;
+					if (counts)
+						counts->DH_no_source++;
 				else
-					if (counts)counts->source_mismatch++;
+					if (counts)
+						counts->source_mismatch++;
 				return false;
 			}
 			if (has_source()) {
 				if (!my_strcmp(src_filepath, r.src_filepath)) {
-					if (counts) counts->source_mismatch++;
+					if (counts)
+						counts->source_mismatch++;
 					return false;
 				}
 				if (src_lineno != r.src_lineno) {
-					if (counts) counts->source_mismatch++;
+					if (counts)
+						counts->source_mismatch++;
 					return false;
 				}
 			}
 				
 			if (num_inlines != r.num_inlines) {
-				if (counts) counts->inline_mimatch++;
+				if (counts)
+					counts->inline_mimatch++;
 				return false;
 			}
 			for (int i=0; i<num_inlines; i++) {
@@ -199,7 +206,8 @@ struct SymResult {
 				if (    !my_strcmp(li.fnname, ri.fnname)
 					 || !my_strcmp(li.filepath, ri.filepath)
 					 || li.lineno != ri.lineno ) {
-					if (counts) counts->inline_mimatch++;
+					if (counts)
+						counts->inline_mimatch++;
 					return false;
 				}
 			}
@@ -263,11 +271,11 @@ struct SymResult {
 			return true;
 		return strcmp(l, r) == 0;
 	}
-	void print_diff (uintptr_t addr, SymResult const& r) const {
+	void print_diff (const char* mod_name, intptr_t rel_addr, SymResult const& r) const {
 		if (r.valid())
-			logf("!!! [%llx] (%s) Result Mismatch:\n", addr, r.sym_name);
+			logf("!!! [%s+%llx] (%s) Result Mismatch:\n", mod_name, rel_addr, r.sym_name);
 		else
-			logf("!!! [%llx] (SymResolver: %s) Result Mismatch:\n", addr, sym_name);
+			logf("!!! [%s+%llx] (SymResolver: %s) Result Mismatch:\n", mod_name, rel_addr, sym_name);
 
 		if (valid() != r.valid()) {
 			if (!  valid()) logf("> SymResolver: %s\n", err);
@@ -501,18 +509,18 @@ public:
 };
 
 void MismatchCounts::symbol_mismatch_or_mangled (SymResult const& res, SymResult const& dbghelp_res, MismatchCounts::Data const& d) {
-	if (res.sym_name[0] == '?') {
-		// Should be obsolete now as I am processing these names
-		auto* end = strchr(res.sym_name+1, '@');
-		if (end) {
-			std::string_view a = dbghelp_res.sym_name;
-			std::string_view b = std::string_view(res.sym_name+1, end-(res.sym_name+1));
-			if (a == b) {
-				symbol_name_mangled++;
-				return;
-			}
-		}
-	}
+	//if (res.sym_name[0] == '?') {
+	//	// Should be obsolete now as I am processing these names
+	//	auto* end = strchr(res.sym_name+1, '@');
+	//	if (end) {
+	//		std::string_view a = dbghelp_res.sym_name;
+	//		std::string_view b = std::string_view(res.sym_name+1, end-(res.sym_name+1));
+	//		if (a == b) {
+	//			symbol_name_mangled++;
+	//			return;
+	//		}
+	//	}
+	//}
 	
 	if (d.resolver->has_symbol_for_addr(d.addr, dbghelp_res))
 		symbol_mismatch_overlap++;

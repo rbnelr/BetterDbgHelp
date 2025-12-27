@@ -1351,40 +1351,51 @@ public:
 		auto* header = (codeview_line_header*)ptr;
 		ptr += sizeof(codeview_line_header);
 		
-		auto find_line = [] (codeview_line* lines, u32 num_lines, intptr_t proc_raddr) -> codeview_line* {
-			for (u32 i=0;; i++) {
-				// if address past all entries, return previous (highest) one
-				// if address lower than current, return previous one
-				if (i >= num_lines || proc_raddr < (intptr_t)lines[i].offset) {
-					if (i > 0) {
-						return &lines[i-1];
-					}
-					return nullptr; // no match, either 0 entries or higher address than first entry
-				}
-				// first line with exact address is returned
-				if (proc_raddr == (intptr_t)lines[i].offset) {
-					return &lines[i];
-				}
-			}
-		};
+		// It seems like lines within a block and across blocks are strictly sorted
+		// lines seem to generally cover [line.offset, next_line.offset)
+		// But multiple line entries can be observed with the same offset
+		//  in the case of an exact match, the first one is returned by dbghelp (depite that according to the above rule a zero-sized address range should never match)
+		//  in the case of a higher address, but lower than the following lines, the previous addr>line is returned, ie the last one of the equal line range
+		// Despite block having sizes stored (and there being gaps between them if first_line_in_block.offset is assumed to be the block start address
+		// dbghelp still returns the previous line for addresses in gaps,
+		// so the algorithm seems to be simple, remember line on addr>=line, break if addr<line, last line is returned
+		
+		codeview_line_block_header* found_block = nullptr;
+		codeview_line* found_line = nullptr;
 
+		//// Iterate blocks
 		while (ptr < (char*)header + sym->src_subsec->length) {
-			auto* line_block = (codeview_line_block_header*)ptr;
+			auto* block = (codeview_line_block_header*)ptr;
 			ptr += sizeof(codeview_line_block_header);
 
+			assert(block->amount_of_lines > 0);
 			auto* lines = (codeview_line*)ptr;
-			auto* line = find_line(lines, line_block->amount_of_lines, proc_raddr);
-			if (line) {
-				*out_src_loc = {
-					get_lineinfo_source_filepath(modules[sym->module_index], line_block->offset_in_file_checksums),
-					line->start_line_number
-				};
-				return true;
+			ptr += block->amount_of_lines * sizeof(codeview_line);
+
+			//// Iterate lines
+			for (u32 i=0; i<block->amount_of_lines; i++) {
+				// first line with addr==line is returned
+				// if addr in gap between lines, last seen line with addr>line is returned
+				if (proc_raddr < (intptr_t)lines[i].offset) {
+					goto L_found_line; // break both loops
+				}
+
+				found_block = block;
+				found_line = &lines[i];
+
+				if (proc_raddr == (intptr_t)lines[i].offset) {
+					goto L_found_line; // break both loops
+				}
 			}
-
-			ptr += line_block->amount_of_lines * sizeof(codeview_line);
 		}
-
+		L_found_line:
+		if (found_line) {
+			*out_src_loc = {
+				get_lineinfo_source_filepath(modules[sym->module_index], found_block->offset_in_file_checksums),
+				found_line->start_line_number
+			};
+			return true;
+		}
 		return false;
 	}
 	

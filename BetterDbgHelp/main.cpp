@@ -21,6 +21,7 @@ class SymTesting {
 	
 	struct LoadedModule {
 		std::string path;
+		std::string name;
 		void* addr; // Virtual memory address module was loaded at in child process
 		size_t size;
 	};
@@ -28,7 +29,9 @@ class SymTesting {
 		std::vector<LoadedModule> list;
 
 		void add (std::string path, void* addr, size_t size) {
-			list.push_back({ path, addr, size });
+			std::filesystem::path p = path;
+			auto name = p.filename().string();
+			list.push_back({ path, name, addr, size });
 		}
 		
 		LoadedModule const& find (std::string_view name_suffix) {
@@ -38,6 +41,14 @@ class SymTesting {
 				}
 			}
 			throw std::runtime_error(std::string(name_suffix) + " not found");
+		}
+		LoadedModule const& find (char* addr) {
+			for (auto& m : list) {
+				if (addr >= m.addr && addr < (char*)m.addr + m.size) {
+					return m;
+				}
+			}
+			throw std::runtime_error("not found");
 		}
 	};
 
@@ -198,9 +209,18 @@ public:
 		finish_debugging_and_kill_child_process();
 
 	}
-
+	
+	LoadedModule const& get_mod (char* addr) {
+		return loaded_modules.find(addr);
+	}
 	char* get_addr (std::string_view filter) {
 		return (char*)loaded_modules.find(filter).addr;
+	}
+
+	void print_addr (const char* context, char* addr) {
+		auto& mod = get_mod(addr);
+		auto rel_addr = (intptr_t)addr - (intptr_t)mod.addr;
+		logf("%s: [%s+%llx] ", context, mod.name.c_str(), rel_addr);
 	}
 
 	void show_addr2sym (char* addr) {
@@ -208,12 +228,12 @@ public:
 
 		if (dbghelp) {
 			dbghelp->addr2sym(addr, &res_dbghelp);
-			logf("dbghelp.dll: [%llx] ", (uintptr_t)addr);
+			print_addr("dbghelp.dll", addr);
 			res_dbghelp.print(); // TODO: calcualte and print speedup percent after both timings, probably should move all measurements to central class for that, then pass ptr to that to both classes
 		}
 
 		resolver->addr2sym(addr, &res);
-		logf("SymResolver: [%llx] ", (uintptr_t)addr);
+		print_addr("SymResolver", addr);
 		res.print();
 	}
 	void measure_addr2sym (char* addr) {
@@ -229,7 +249,10 @@ public:
 		auto err         = resolver->addr2sym(addr, &res);
 		
 		if (!res.equal(res_dbghelp, { &mismatch_counts, resolver.get(), addr })) {
-			res.print_diff((uintptr_t)addr, res_dbghelp);
+			auto& mod = get_mod(addr);
+			auto rel_addr = (intptr_t)addr - (intptr_t)mod.addr;
+
+			res.print_diff(mod.name.c_str(), rel_addr, res_dbghelp);
 			//tests_failed = true;
 		}
 	}
@@ -248,12 +271,16 @@ public:
 		
 		if (!res.equal(prev_res) || !res_dbghelp.equal(prev_res_dbghelp)) {
 			if (show) {
-				logf("SymResolver: [%llx] ", addr);
+				print_addr("SymResolver.dll", (char*)addr);
 				res.print();
 			}
-			
+
 			if (!res.equal(res_dbghelp, { &mismatch_counts, resolver.get(), (void*)addr })) {
-				res.print_diff((uintptr_t)addr, res_dbghelp);
+			
+				auto& mod = get_mod((char*)addr);
+				auto rel_addr = (intptr_t)addr - (intptr_t)mod.addr;
+
+				res.print_diff(mod.name.c_str(), rel_addr, res_dbghelp);
 				//tests_failed = true;
 			}
 
@@ -766,6 +793,17 @@ int main(int argc, const char** argv) {
 	
 	//profiling_run_cachemiss();
 	
+	try {
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+		
+		char* exe = sym.get_addr(".exe");
+		//sym.show_addr2sym(exe + 0xfa4f4);
+		
+		//sym.sweep_mod(".exe", 0xfa4d2, 0xfa74a, true); // Engine::Engine
+	
+		sym.sweep_mod(".exe");
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+
 	//try {
 	//	ZoneScopedN("city_builder_rel.exe");
 	//	SymTesting sym("CityBuilderExample/city_builder_rel.exe");
