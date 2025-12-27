@@ -5,7 +5,7 @@
 #include "address_index.hpp"
 #include <map>
 
-#define TRACK_ALL_SYMBOLS 1
+#define TRACK_ALL_SYMBOLS 0
 
 // https://github.com/PascalBeyer/PDB-Documentation
 
@@ -820,8 +820,8 @@ class PDB_File {
 				// I have no idea how to handle this case correctly, there might be one InlineeSourceLine per INLINESITE, but I can't confirm this
 				// I will have to see if my output matches dbghelp when taking the first or last entry instead of trying to match them by order
 				auto verify_duplicates = [&] (InlineeSourceLine* line) {
-					auto it = mod.inlinee_c13.find(line->inlinee);
-					if (it != mod.inlinee_c13.end()) {
+					auto it = inlinee_c13.find(InlineeID{ module_index, line->inlinee });
+					if (it != inlinee_c13.end()) {
 						// duplicate entry, verify they are functionally identical
 						//assert(line->sourceLineNum == it->second->sourceLineNum);
 
@@ -843,7 +843,7 @@ class PDB_File {
 						//logf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates(line);
-						mod.inlinee_c13.try_emplace(line->inlinee, line);
+						inlinee_c13.try_emplace(InlineeID{ module_index, line->inlinee }, line);
 					}
 				} else if (header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE_EX) {
 					while (ptr < ptr3 + subsec->length) {
@@ -853,7 +853,7 @@ class PDB_File {
 						//logf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
 						verify_duplicates((InlineeSourceLine*)line);
-						mod.inlinee_c13.try_emplace(line->inlinee, (InlineeSourceLine*)line);
+						inlinee_c13.try_emplace(InlineeID{ module_index, line->inlinee }, (InlineeSourceLine*)line);
 
 						ptr += line->countOfExtraFiles * sizeof(CV_off32_t);
 					}
@@ -1132,8 +1132,6 @@ private:
 		// but actually, sometimes the filepath differs (same header, paths, compiled on different machines?)
 		// so functions compiled from different copies of a header can get the same id
 		char* file_checksum_ptr = nullptr;
-		ankerl::unordered_dense::map<CV_ItemId, InlineeSourceLine*> inlinee_c13; // TODO: make single hashmap with module id + item id as key to avoid too scattered allocations as optimization, or maybe map or sorted vec could actually be faster?
-
 	};
 	std::vector<Module> modules;
 
@@ -1147,7 +1145,25 @@ private:
 	}
 	
 	AddressIndex<Symbol> symbols;
-	
+
+	struct InlineeID {
+		s32 mod_idx;
+		CV_ItemId inlinee;
+
+		auto operator== (InlineeID const& other) const -> bool {
+			return mod_idx == other.mod_idx && inlinee == inlinee;
+		}
+	};
+	struct InlineeID_hash {
+		using is_avalanching = void;
+		auto operator()(InlineeID const& x) const noexcept -> uint64_t {
+			static_assert(sizeof(InlineeID) == 8);
+			uint64_t val = *(uint64_t*)&x;
+			return ankerl::unordered_dense::detail::wyhash::hash(val);
+		}
+	};
+	ankerl::unordered_dense::map<InlineeID, InlineeSourceLine*, InlineeID_hash> inlinee_c13; // TODO: make single hashmap with module id + item id as key to avoid too scattered allocations as optimization, or maybe map or sorted vec could actually be faster?
+
 #if TRACK_ALL_SYMBOLS
 	AddressIndex<Symbol> sym_unfiltered; // to support has_symbol_for_addr
 
@@ -1408,8 +1424,9 @@ public:
 		// Alternatively, if I just build my own inlinee tree structure, I can simply embed the start line+filenumber info into that, which is barely less space efficient
 		// +4bytes lineno, -4bytes inlinee id, +4bytes filename id
 		// probably need to merge filenames into a global filename table, which would allow avoiding module ids alltogether
-		auto it = mod.inlinee_c13.find(inl->inlinee);
-		if (it == mod.inlinee_c13.end()) {
+		auto module_index = &mod - modules.data();
+		auto it = inlinee_c13.find(InlineeID{ (int32_t)module_index, inl->inlinee });
+		if (it == inlinee_c13.end()) {
 			assert(false);
 			return false;
 		}
