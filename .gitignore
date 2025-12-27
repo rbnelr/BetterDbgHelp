@@ -11,6 +11,8 @@ backup/*
 
 BetterDbgHelp.exe
 BetterDbgHelp.pdb
+BetterDbgHelp_dbg.exe
+BetterDbgHelp_dbg.pdb
 
 # User-specific files
 *.rsuser
