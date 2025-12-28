@@ -15,11 +15,6 @@ struct Symbol {
 	uint32_t size = 0;
 	StrAlloc::sid name;
 	
-	PROCSYM32* procsym = nullptr; // needed for scanning INLINESITEs later
-
-	codeview_subsection_header* src_subsec = nullptr;
-	int32_t src_offset = 0; // sometimes lineinfo has different start offset than symbol, sym base_addr = codeview_line.offset + offset
-	
 	s16 module_index = -1;
 	uint8_t inline_depth = 0;
 
@@ -27,14 +22,29 @@ struct Symbol {
 	BinAlloc::bid p_lineinfo = -1;
 	BinAlloc::bid p_inlinesites = -1;
 
-	bool src_valid () const { return src_subsec != nullptr; }
-
 	__forceinline uintptr_t get_addr () const {
 		return base_addr;
 	}
 	static __forceinline Symbol dummy (uintptr_t base_addr) { // needed for std::upper_bound
 		return Symbol { base_addr };
 	}
+};
+
+struct Module {
+	pdb_module_information* mi;
+	std::string_view name;
+	std::string_view file_name;
+
+	std::vector<char> symbol_stream_data;
+	char* sym_info;
+		
+	// It seems like we can get duplicate entries of the same inlinee id across different modules via InlineeSourceLine
+	// So in every module with a INLINESITE, the corresponding InlineeSourceLine and filename in DEBUG_S_FILECHKSMS exist in the same module
+	// but the same inlinee file id can exist in multiple modules
+	// this could be because due to link time optimization (the same function being inlined into different translation lines)
+	// but actually, sometimes the filepath differs (same header, paths, compiled on different machines?)
+	// so functions compiled from different copies of a header can get the same id
+	char* file_checksum_ptr = nullptr;
 };
 
 /*
@@ -58,19 +68,16 @@ struct Inlinesite {
 	CV_off32_t sourceLineNum;
 	BinAlloc::bid pSibling = -1;
 	BinAlloc::bid pChildren = -1;
-	//unsigned char binaryAnnotations[1];
-	//Lineinfo
+	// followed by Lineinfo
 	
-	BinAlloc::bid p_lineinfo = -1;
+	Lineinfo* get_lineinfo () {
+		return (Lineinfo*)(this+1);
+	}
 
 	Inlinesite () {};
-
-	PCompressedAnnotation binaryAnnotations () {
-		return (PCompressedAnnotation)(this+1);
-	}
 };
-// TODO: come up custom alternative to CompressedAnnotation
 
+// TODO: eventually extract pdb parsing code and have it output symbol resolver with all custom data structure
 class PDB_File {
 	std::filesystem::path path;
 
@@ -145,6 +152,25 @@ class PDB_File {
 		size_t size;
 	};
 	std::vector<Section> sections_sorted;
+
+public:
+	BinAlloc binalloc;
+	StrAlloc stralloc;
+private:
+
+	std::vector<Module> modules;
+
+	AddressIndex<Symbol> symbols;
+
+#if TRACK_ALL_SYMBOLS
+	AddressIndex<Symbol> sym_unfiltered; // to support has_symbol_for_addr
+
+	void print_all_symbols () {
+		for (auto& s : sym_unfiltered) {
+			logf(">> %4llx %4x mod=%d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
+		}
+	}
+#endif
 
 	void* read_stream (u32 stream, u32 ptr) {
 		u32 page_idx    = ptr / header->page_size;
@@ -683,28 +709,18 @@ class PDB_File {
 						if (name_it == IPI_id2name.end())
 							continue;
 
-
 						auto* anno_end = (PCompressedAnnotation)((char*)site.inl + sizeof(u16) + site.inl->reclen); // length field of codeview_symbol_header not contained in length
-						size_t anno_len = anno_end - site.inl->binaryAnnotations;
-
-						
-						site.site_id = binalloc.push_default<Inlinesite>();
-						binalloc.push_bytes(site.inl->binaryAnnotations, anno_len);
-
-						char terminator = -1;
-						binalloc.push_bytes(&terminator, 1);
 						
 						Inlinesite s = {};
 						s.fnname = name_it->second;
 						s.fileId = it->second->fileId;
 						s.sourceLineNum = it->second->sourceLineNum;
+						site.site_id = binalloc.push(&s);
 
-						s.p_lineinfo = Lineinfo::encode_compressed_annotation(
+						Lineinfo::encode_compressed_annotation(
 							site.inl->binaryAnnotations, anno_end,
 							it->second->fileId, it->second->sourceLineNum,
 							mod.file_checksum_ptr, binalloc);
-
-						*binalloc.get<Inlinesite>(site.site_id) = s;
 					}
 				}
 				
@@ -764,7 +780,6 @@ class PDB_File {
 						s.base_addr = module_raddr;
 						s.size = proc->len;
 						s.name = stralloc.push( (const char*)proc->name ); // TODO: make sure to not do this for unused symbols improve string buffer cache hit rate
-						s.procsym = proc;
 						s.module_index = module_index;
 
 					#if TRACK_ALL_SYMBOLS
@@ -775,19 +790,9 @@ class PDB_File {
 						// this lookup, which is used to attach lineinfo to the symbols so we don't have to search the address space twice (like dbghelp does?)
 						// in case of overlapping symbols, only keep first occurance
 						if (module_symbols.find(module_raddr) == module_symbols.end()) {
-							//if (module_raddr == 9344) {
-							//	printf("");
-							//}
-							
 							auto* lineinfo = find_first_overlapping_lineinfo(s, &s.lineinfo_base_addr);
 							if (lineinfo) {
 								s.p_lineinfo = Lineinfo::encode_c13_lineinfo(lineinfo, mod.file_checksum_ptr, binalloc);
-								
-								//assert(module_raddr == sym->base_addr); // lines section contribtion offset need to be procedure symbol offset
-								
-								auto offset = (intptr_t)s.base_addr - (intptr_t)s.lineinfo_base_addr;
-								s.src_subsec = lineinfo;
-								s.src_offset = (int32_t)offset;
 							}
 
 							int idx = (int)symbols.size();
@@ -942,25 +947,28 @@ class PDB_File {
 
 		//// C13 line info
 		
-		auto parse_c13_inlinees = [&] () {
-			//logf("> c13_line_information\n");
-			char* ptr = c13_line_information;
+		auto parse_c13 = [&] () {
+			{
+				//logf("> c13_line_information\n");
+				char* ptr = c13_line_information;
 			
-			// first pass to find FILECHKSMS ptr
-			while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
-				auto* header = (codeview_subsection_header*)ptr;
-				ptr += sizeof(codeview_subsection_header);
+				// first pass to find FILECHKSMS ptr
+				while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
+					auto* header = (codeview_subsection_header*)ptr;
+					ptr += sizeof(codeview_subsection_header);
 
-				if (header->type == DEBUG_S_FILECHKSMS) {
-					mod.file_checksum_ptr = ptr;
-					break;
+					if (header->type == DEBUG_S_FILECHKSMS) {
+						mod.file_checksum_ptr = ptr;
+						break;
+					}
+					ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
 				}
-				ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
 			}
-			ptr = c13_line_information; // reset ptr
 			
 			auto read_inlinee_line_numbers = [&] (codeview_subsection_header* subsec) {
-				auto* ptr3 = ptr;
+				auto* ptr = (char*)subsec;
+				ptr += sizeof(codeview_subsection_header);
+				auto* end = ptr + subsec->length;
 
 				auto* header = (codeview_inlinee_source_line_header*)ptr;
 				ptr += sizeof(codeview_inlinee_source_line_header);
@@ -988,7 +996,7 @@ class PDB_File {
 					}
 				};
 				if (header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE) {
-					while (ptr < ptr3 + subsec->length) {
+					while (ptr < end) {
 						auto* line = (InlineeSourceLine*)ptr;
 						ptr += sizeof(InlineeSourceLine);
 						
@@ -996,11 +1004,9 @@ class PDB_File {
 						
 						verify_duplicates(line);
 						module_inlinee_c13.try_emplace(line->inlinee, line);
-						
-						inlinee_c13.try_emplace(InlineeID{ module_index, line->inlinee }, line);
 					}
 				} else if (header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE_EX) {
-					while (ptr < ptr3 + subsec->length) {
+					while (ptr < end) {
 						auto* line = (InlineeSourceLineEx*)ptr;
 						ptr += sizeof(InlineeSourceLineEx);
 						
@@ -1009,56 +1015,29 @@ class PDB_File {
 						verify_duplicates((InlineeSourceLine*)line);
 						module_inlinee_c13.try_emplace(line->inlinee, (InlineeSourceLine*)line);
 
-						inlinee_c13.try_emplace(InlineeID{ module_index, line->inlinee }, (InlineeSourceLine*)line);
-
 						ptr += line->countOfExtraFiles * sizeof(CV_off32_t);
 					}
 				} else {
 					assert(false);
 				}
-				assert((ptr - ptr3) == subsec->length);
+				assert(ptr == end);
 			};
 
-			while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
-				auto* header = (codeview_subsection_header*)ptr;
-				ptr += sizeof(codeview_subsection_header);
-
-				//logf(">> %s\n", DEBUG_S_SUBSECTION_TYPE_e_str(header->type));
-
-				if ((header->type & DEBUG_S_IGNORE) == 0) {
-					switch (header->type) {
-						case DEBUG_S_INLINEELINES: {
-							read_inlinee_line_numbers(header);
-						} break;
-					}
-				}
-				ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
-			}
-			assert((ptr - c13_line_information) == mi->byte_size_of_c13_line_information);
-		};
-		auto parse_c13 = [&] () {
-			//logf("> c13_line_information\n");
-			char* ptr = c13_line_information;
-			
 			auto read_line_numbers = [&] (codeview_subsection_header* subsec) {
-				auto* ptr3 = ptr;
-				
+				auto* ptr = (char*)subsec;
+				ptr += sizeof(codeview_subsection_header);
+				auto* end = ptr + subsec->length;
+		
 				// With usual compiler, this is once per function
 				auto* header = (codeview_line_header*)ptr;
 				ptr += sizeof(codeview_line_header);
-				assert(header->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
+				if (header->flags != 0)
+					return; // CV_LINES_HAVE_COLUMNS not implemented
 				
-				//logf(">> Header %d, %8x %8x\n", header->contribution_section_id, header->contribution_offset, header->contribution_size);
-			
 				uintptr_t sec_offs = sections_sorted[header->contribution_section_id-1].base_addr;
 				uintptr_t module_raddr = header->contribution_offset + sec_offs;
 				
 				c13_lineinfo.try_emplace(module_raddr, C13Lineinfo{ subsec });
-				//auto* sym = find_overlapping_symbol(module_raddr, header->contribution_size);
-
-				// check if we ever double attribute lineinfo
-				// Actually we do, I've observed identical lineinfo appear twice
-				//assert(!sym->src.valid());
 				
 				// Line => Code range that has the same line number
 				// Block => Consecutive lines where all come from the same file
@@ -1066,6 +1045,10 @@ class PDB_File {
 				// c++ #include in the middle of functions (very rare)
 				// c++ constructors that have assignment of fields in the class in the header, and the actual ctor code in the source
 
+				/*
+				
+				//logf(">> Header %d, %8x %8x\n", header->contribution_section_id, header->contribution_offset, header->contribution_size);
+				
 				while (ptr < ptr3 + subsec->length) {
 					auto* line_block = (codeview_line_block_header*)ptr;
 					ptr += sizeof(codeview_line_block_header);
@@ -1088,18 +1071,12 @@ class PDB_File {
 
 				}
 				assert((ptr - ptr3) == subsec->length);
-
-				//if (sym && !sym->src_valid()) {
-				//	sym->lineinfo = Lineinfo::encode_c13_lineinfo(subsec, mod.file_checksum_ptr, binalloc);
-				//
-				//	//assert(module_raddr == sym->base_addr); // lines section contribtion offset need to be procedure symbol offset
-				//
-				//	auto offset = (intptr_t)sym->base_addr - (intptr_t)module_raddr;
-				//	sym->src_subsec = subsec;
-				//	sym->src_offset = (int32_t)offset;
-				//}
+				*/
 			};
 			
+			//logf("> c13_line_information\n");
+			char* ptr = c13_line_information;
+
 			while (ptr < c13_line_information + mi->byte_size_of_c13_line_information) {
 				auto* header = (codeview_subsection_header*)ptr;
 				ptr += sizeof(codeview_subsection_header);
@@ -1111,6 +1088,9 @@ class PDB_File {
 						case DEBUG_S_LINES: {
 							read_line_numbers(header);
 						} break;
+						case DEBUG_S_INLINEELINES: {
+							read_inlinee_line_numbers(header);
+						} break;
 					}
 				}
 				ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
@@ -1118,7 +1098,6 @@ class PDB_File {
 			assert((ptr - c13_line_information) == mi->byte_size_of_c13_line_information);
 		};
 		
-		parse_c13_inlinees(); // TODO: merge inlinees parsing with lineinfo parsing again
 		parse_c13();
 		parse_symbol_info();
 	}
@@ -1348,90 +1327,6 @@ class PDB_File {
 		assert((ptr - type_info) == header->byte_count_of_type_record_data_following_the_header);
 	}
 
-public:
-	BinAlloc binalloc;
-	StrAlloc stralloc;
-private:
-
-	struct Module {
-		pdb_module_information* mi;
-		std::string_view name;
-		std::string_view file_name;
-
-		std::vector<char> symbol_stream_data;
-		char* sym_info;
-		
-		// It seems like we can get duplicate entries of the same inlinee id across different modules via InlineeSourceLine
-		// So in every module with a INLINESITE, the corresponding InlineeSourceLine and filename in DEBUG_S_FILECHKSMS exist in the same module
-		// but the same inlinee file id can exist in multiple modules
-		// this could be because due to link time optimization (the same function being inlined into different translation lines)
-		// but actually, sometimes the filepath differs (same header, paths, compiled on different machines?)
-		// so functions compiled from different copies of a header can get the same id
-		char* file_checksum_ptr = nullptr;
-	};
-	std::vector<Module> modules;
-
-	const char* get_lineinfo_source_filepath (Module const& mod, CV_off32_t fileId) const {
-		assert(names != nullptr);
-		if (names == nullptr) return nullptr;
-
-		auto* cksm = (codeview_file_checksum*)(mod.file_checksum_ptr + fileId);
-		auto* name = &names[cksm->offset_in_string_table];
-		return name;
-	}
-	
-	AddressIndex<Symbol> symbols;
-
-	struct InlineeID {
-		s32 mod_idx;
-		CV_ItemId inlinee;
-
-		auto operator== (InlineeID const& other) const -> bool {
-			return mod_idx == other.mod_idx && inlinee == inlinee;
-		}
-	};
-	struct InlineeID_hash {
-		using is_avalanching = void;
-		auto operator()(InlineeID const& x) const noexcept -> uint64_t {
-			static_assert(sizeof(InlineeID) == 8);
-			uint64_t val = *(uint64_t*)&x;
-			return ankerl::unordered_dense::detail::wyhash::hash(val);
-		}
-	};
-	ankerl::unordered_dense::map<InlineeID, InlineeSourceLine*, InlineeID_hash> inlinee_c13; // TODO: make single hashmap with module id + item id as key to avoid too scattered allocations as optimization, or maybe map or sorted vec could actually be faster?
-
-#if TRACK_ALL_SYMBOLS
-	AddressIndex<Symbol> sym_unfiltered; // to support has_symbol_for_addr
-
-	void print_all_symbols () {
-		for (auto& s : sym_unfiltered) {
-			logf(">> %4llx %4x mod=%d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
-		}
-	}
-#endif
-
-	/*
-	void sort_symbols (std::vector<Symbol>& syms) {
-		// sort based on base_addr
-		// use stable sorts as symbol can and will overlap, so try and preserve insertion order
-		// TODO: insertion order may not always actually replicate dbghelp.dll behavior though(?)
-		std::stable_sort(syms.begin(), syms.end(), [] (Symbol const& l, Symbol const& r) {
-			return std::less<uintptr_t>()(l.base_addr, r.base_addr);
-		});
-
-		// seems like functions like logf will appear both as procedure symbols with size in modules
-		// and as PUB32 symbols without a size but with mangled names, and thus we will always have overlapping symbols
-		
-		// assert non overlap including size
-		//for (size_t i=1; i<syms.size(); i++) {
-		//	//assert(syms[i].base_addr > syms[i-1].base_addr + syms[i-1].size);
-		//	if (!(syms[i].base_addr > syms[i-1].base_addr + syms[i-1].size)) {
-		//		logf("!! Overlapping symbols: [%8llx] %s/%s\n", syms[i].base_addr, syms[i-1].name, syms[i].name);
-		//	}
-		//}
-	}
-	*/
-	
 	void _reserve () {
 		modules.reserve(128);
 		sections_sorted.reserve(32);
@@ -1567,97 +1462,9 @@ public:
 	#endif
 	}
 	
-	bool _find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
-		ZoneScoped;
-
-		intptr_t proc_raddr = (intptr_t)addr - (intptr_t)sym->base_addr;
-		if (proc_raddr >= (intptr_t)sym->size) {
-			// past symbol address range, no valid line number
-			return false;
-		}
-		if (!sym || !sym->src_valid()) {
-			return false;
-		}
-
-		// handle case where line info is before symbol range but still overlaps
-		proc_raddr += sym->src_offset;
-
-		// codeview_lines seems to be sorted by offset, ie code address relative to start of function
-		// there is only offset, no size, so I assume any addresses between this offset and the next belong to the line as well
-		// lines can be out of order (earlier instructions belonging to later lines due to compiler optimizations for example)
-		// lines will be missing (empty lines or lines with no generated code)
-		// different entries can have the same line (single line to multiple instruction spans)
-		// the same offset can appear twice with different lines (I guess multiple related lines that do one thing, maybe also when a statement is split over lines?)
-		// dbghelp does this in a somewhat unexpected way (which seems wrong to me, but I'll match its behavior here)
-		// Example:
-		// offset 0: Lino: 90
-		// offset 0: Lino: 92
-		// offset 7: Lino: 99
-		// SymGetLineFromAddr64(function+0) => Lino:90
-		// SymGetLineFromAddr64(function+1) => Lino:92
-		// SymGetLineFromAddr64(function+5) => Lino:92
-		// SymGetLineFromAddr64(function+7) => Lino:99
-
-		auto* ptr = (char*)sym->src_subsec + sizeof(codeview_subsection_header);
-
-		auto* header = (codeview_line_header*)ptr;
-		ptr += sizeof(codeview_line_header);
-		
-		// It seems like lines within a block and across blocks are strictly sorted
-		// lines seem to generally cover [line.offset, next_line.offset)
-		// But multiple line entries can be observed with the same offset
-		//  in the case of an exact match, the first one is returned by dbghelp (depite that according to the above rule a zero-sized address range should never match)
-		//  in the case of a higher address, but lower than the following lines, the previous addr>line is returned, ie the last one of the equal line range
-		// Despite block having sizes stored (and there being gaps between them if first_line_in_block.offset is assumed to be the block start address
-		// dbghelp still returns the previous line for addresses in gaps,
-		// so the algorithm seems to be simple, remember line on addr>=line, break if addr<line, last line is returned
-		
-		codeview_line_block_header* found_block = nullptr;
-		codeview_line* found_line = nullptr;
-
-		//// Iterate blocks
-		while (ptr < (char*)header + sym->src_subsec->length) {
-			auto* block = (codeview_line_block_header*)ptr;
-			ptr += sizeof(codeview_line_block_header);
-
-			assert(block->amount_of_lines > 0);
-			auto* lines = (codeview_line*)ptr;
-			ptr += block->amount_of_lines * sizeof(codeview_line);
-
-			//// Iterate lines
-			for (u32 i=0; i<block->amount_of_lines; i++) {
-				// first line with addr==line is returned
-				// if addr in gap between lines, last seen line with addr>line is returned
-				if (proc_raddr < (intptr_t)lines[i].offset) {
-					goto L_found_line; // break both loops
-				}
-
-				found_block = block;
-				found_line = &lines[i];
-
-				if (proc_raddr == (intptr_t)lines[i].offset) {
-					goto L_found_line; // break both loops
-				}
-			}
-		}
-		L_found_line:
-		if (found_line) {
-			*out_src_loc = {
-				get_lineinfo_source_filepath(modules[sym->module_index], found_block->offset_in_file_checksums),
-				found_line->start_line_number
-			};
-			return true;
-		}
-		return false;
-	}
 	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
 		ZoneScoped;
-		//return _find_source_loc_for_addr(sym, addr, out_src_loc);
-
-		//if (addr == 9364) {
-		//	printf("");
-		//}
-
+		
 		assert(addr >= sym->base_addr);
 		if (addr >= sym->base_addr + sym->size) {
 			// past symbol address range, no valid line number
@@ -1668,189 +1475,12 @@ public:
 		auto* lineinfo = binalloc.get<Lineinfo>(sym->p_lineinfo);
 		if (!lineinfo)
 			return false;
-		bool res = lineinfo->find_line_for_addr(rel_addr, names, out_src_loc);
-		
-		//SourceLoc src_loc2 = {};
-		//bool res2 = _find_source_loc_for_addr(sym, addr, &src_loc2);
-		//
-		//assert(res == res2);
-		//if (res) assert(*out_src_loc == src_loc2);
-		return res;
+		return lineinfo->find_line_for_addr(rel_addr, names, out_src_loc);
 	}
 	
-	bool _decode_and_scan_inlinee_lineinfo_old (Inlinesite* site, Module const& mod, uintptr_t proc_raddr, SourceLoc* out_loc) {
-		// While BinaryAnnotationOpcode enum was released, the exact definition or code was apparently to released(?)
-		// Only possible thanks to these implementations:
-		// https://github.com/EpicGamesExt/raddebugger/blob/08642d2745da516387fa0f43639b7a8776a154b0/src/codeview/codeview_parse.c#L277
-		// https://github.com/getsentry/pdb/blob/65c5b6d5c38c5f84225bfb3bc5365ea4097c8adf/src/modi/c13.rs#L1135
-		auto* cur = (PCompressedAnnotation)site->binaryAnnotations();
-		
-		u32 file_id = site->fileId;
-		u32 code_offset_base = 0;
-		u32 code_offset = 0;
-		u32 code_length = 0; // 0 = null
-		u32 lineno = site->sourceLineNum;
-		u32 num_lines = 1;
-		u32 kind = 1; // 0 == Expression, 1 == Statement
-		
-		// Optimized away vector entirely
-
-		struct Line {
-			u32 code_offset;
-			u32 code_length;
-			u32 lineno;
-			u32 num_lines; // could mean one code range can be associated with a range of line numbers(?)
-			u32 file_id;
-			u32 kind;
-		};
-		Line prev_line;
-		bool has_prev_line = false;
-
-		for (;;) {
-			auto opcode = (BinaryAnnotationOpcode)CVUncompressData(cur);
-			if (opcode == BA_OP_Invalid)
-				continue;
-			if (opcode == -1) // my own terminator, I think CVUncompressData never produces -1 unless byte is -1, which is not a valid compression
-				break;
-
-			auto param1 = CVUncompressData(cur);
-			switch (opcode) {
-				case BA_OP_CodeOffset: {
-					code_offset = param1;
-				} break;
-				case BA_OP_ChangeCodeOffsetBase: {
-					assert(false);
-					// Is this never used?
-					code_offset_base = param1;
-				} break;
-				case BA_OP_ChangeCodeOffset: {
-					code_offset += param1;
-				} break;
-				case BA_OP_ChangeCodeLength: {
-					if (has_prev_line) {
-						if (prev_line.code_length == 0 && prev_line.kind == kind) {
-							prev_line.code_length = param1;
-
-							if (proc_raddr >= prev_line.code_offset && proc_raddr < prev_line.code_offset + prev_line.code_length)
-								goto Lmatch;
-						}
-					}
-					code_offset += param1;
-				} break;
-				case BA_OP_ChangeFile: {
-					// supposedly there are bugs with file changes inside functions, but presumably functions are almost always inside one file, so this should be rare anyway
-					// TODO: these file_ids likely are local to the module that contained this INLINESITESYM with CompressedAnnotation,
-					// while my current lookup for inlinee id and InlineeSourceLine can come from different modules as that data seems to be duplicated
-					file_id = param1;
-				} break;
-				case BA_OP_ChangeLineOffset: {
-					lineno += DecodeSignedInt32(param1);
-				} break;
-				case BA_OP_ChangeLineEndDelta: {
-					num_lines = param1;
-				} break;
-				case BA_OP_ChangeRangeKind: {
-					assert(param1 == 0 || param1 == 1);
-					kind = param1;
-				} break;
-				case BA_OP_ChangeCodeOffsetAndLineOffset: {
-					// param : ((sourceDelta << 4) | CodeDelta)
-					u32 CodeDelta = param1 & 0b1111;
-					s32 sourceDelta = DecodeSignedInt32(param1 >> 4); // signed int encoded weirdly because CVUncompressData chops off upper bits
-
-					code_offset += CodeDelta;
-					lineno += sourceDelta;
-				} break;
-				case BA_OP_ChangeCodeLengthAndCodeOffset: {
-					auto param2 = CVUncompressData(cur);
-					code_length = param1;
-					code_offset += param2;
-				} break;
-
-				case BA_OP_ChangeColumnStart:
-				case BA_OP_ChangeColumnEndDelta:
-				case BA_OP_ChangeColumnEnd: {
-					// ignore column info
-				} break;
-
-				default: {
-					assert(false);
-				}
-			}
-			
-			switch (opcode) {
-				case BA_OP_ChangeCodeOffset:
-				case BA_OP_ChangeCodeOffsetAndLineOffset:
-				case BA_OP_ChangeCodeLengthAndCodeOffset: {
-					// code_length is either explicitly given with BA_OP_ChangeCodeLengthAndCodeOffset
-					// or written after push_line with BA_OP_ChangeCodeLength
-					// or implicitly computed from last and current offset
-
-					u32 offset = code_offset + code_offset_base;
-					if (has_prev_line) {
-						if (prev_line.code_length == 0 && prev_line.kind == kind) {
-							prev_line.code_length = offset - prev_line.code_offset;
-							
-							if (proc_raddr >= prev_line.code_offset && proc_raddr < prev_line.code_offset + prev_line.code_length)
-								goto Lmatch;
-						}
-					}
-
-					// 'push' new line, instead of vector just keep last line
-					prev_line = {
-						offset,
-						code_length,
-						lineno,
-						num_lines,
-						file_id,
-						kind,
-					};
-					has_prev_line = true;
-					
-					if (proc_raddr >= prev_line.code_offset && proc_raddr < prev_line.code_offset + prev_line.code_length)
-						goto Lmatch;
-
-					code_length = 0;
-				} break;
-			}
-		}
-
-		if (has_prev_line) {
-			//assert(prev_line.code_length > 0); // We expect see a code_length established at the end
-			// I see cases where we got BA_OP_ChangeCodeLength with length 0, which trips the assert, I don't know why the code was emitted like this
-			// since length 0 presumably means line info for a 0 byte range?
-		}
-		return false;
-
-	// sorry for goto
-	Lmatch:
-
-		out_loc->filepath = get_lineinfo_source_filepath(mod, prev_line.file_id);
-		out_loc->lineno = prev_line.lineno;
-		return true;
-	}
-	bool _decode_and_scan_inlinee_lineinfo (Inlinesite* site, Module const& mod, uintptr_t proc_raddr, SourceLoc* out_loc) {
-		//return _decode_and_scan_inlinee_lineinfo_old(site, mod, proc_raddr, out_loc);
-
-		auto* lineinfo = binalloc.get<Lineinfo>(site->p_lineinfo);
-		bool res = lineinfo->find_line_for_addr2(proc_raddr, names, out_loc);
-		
-		//SourceLoc src_loc2 = {};
-		//bool res2 = _decode_and_scan_inlinee_lineinfo_old(site, mod, proc_raddr, &src_loc2);
-		//
-		//if (res != res2 || (res && !(*out_loc == src_loc2))) {
-		//	printf("");
-		//	assert(false);
-		//}
-		return res;
-	}
-	void trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs, int* out_num_locs) {
-		*out_num_locs = 0;
-		assert(sym->inline_depth > 0); // only call when actually needed!
-
+	int trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs) {
 		ZoneScoped;
-		assert(sym->module_index >= 0);
-		auto& mod = modules[sym->module_index];
+		assert(sym->inline_depth > 0); // only call when actually needed!
 
 		uintptr_t proc_raddr = addr - sym->base_addr;
 
@@ -1861,7 +1491,7 @@ public:
 			auto* site = binalloc.get<Inlinesite>(site_id);
 			SourceLoc encoded_loc = {};
 
-			if (_decode_and_scan_inlinee_lineinfo(site, mod, proc_raddr, &encoded_loc)) {
+			if (site->get_lineinfo()->find_line_for_addr2(proc_raddr, names, &encoded_loc)) {
 				// Matching Inlinesite
 
 				out_locs[depth].fnname = stralloc[site->fnname];
@@ -1881,7 +1511,7 @@ public:
 				site_id = site->pSibling;
 			}
 		}
-		*out_num_locs = depth;
+		return depth;
 	}
 
 	void print_stats_for_lookup () {

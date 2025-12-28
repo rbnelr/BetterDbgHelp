@@ -421,7 +421,7 @@ public:
 		}
 		
 		if (sym->inline_depth > 0) {
-			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES, &res->num_inlines);
+			res->num_inlines = mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES);
 		}
 
 		return res->valid();
@@ -508,7 +508,7 @@ public:
 
 		if (sym->inline_depth > 0) {
 			TimerMeasZone(ttrace_inlinesites);
-			mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES, &res->num_inlines);
+			res->num_inlines = mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES);
 		}
 
 		return res->valid();
