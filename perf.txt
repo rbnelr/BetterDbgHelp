@@ -59,6 +59,21 @@ almost no difference in normal profiling run, seemingly because it is well cache
 -> top levels always checking exactly 1-2 cache lines linearly, meaning we subdivide addresses by 8 or 16 each step, and each step does unrolled simd ops,
 should minimize ops and maximize cache hits, which I would assume speeds up even the well cached cases?
 
+@optimize inlines: copy out inline tree and binary annotations into custom allocated data,
+improving cache hits by no longer skipping over unrelated data, and eleminating hashmap lookup for InlineeSourceLine, by integrating into inlinesites
+-hashmiss example: avg/mean ~-80% 5x faster!
+
+@custom lineinfo: for symbol lineinfo, custom and fully uncompressed = unoptimized for now
+-12% total
+-30% find_source_loc
+no idea why actually, the data is less compact, is it just less branching, or just dependant jumps?
+
+@custom lineinfo: for symbol lineinfo and inlines, still unoptimized, note that this should be way less compact than compressed annotations
+and compressed annotations are still stored alongside, so inlines should be a lot more bloated and may cause more cache misses? unless prefetcher works well
+-28% total
+-60% trace inlines
+wtf, how? opcode did have lots of branching, so I figure this fixes that, but I had assumed the size bloat would counter this
+
 ========== load_pdb optimization ==============
 use memory mapped file instead of copying entire into ram (still copying another time due to pdb paging)
  -> -20%

@@ -284,6 +284,24 @@ struct BinAlloc {
 		bid offset = _grow_to_align(0, alignof(T));
 		return offset;
 	}
+	
+	template <typename T>
+	bid push (T&& data) {
+		//static_assert(std::is_trivial_v<T>);
+		static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>);
+
+		bid offset = _grow_to_align(sizeof(T), alignof(T));
+		auto* cur = buf.data() + offset;
+
+		//memcpy(cur, data, sizeof(T));
+		*(std::remove_reference_t<T>*)cur = std::move(data);
+
+		return offset;
+	}
+	template <typename T>
+	bid push_default () {
+		return push(T());
+	}
 
 	template <typename T>
 	bid push (T* data) {

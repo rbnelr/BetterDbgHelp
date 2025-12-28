@@ -464,6 +464,8 @@ public:
 			return false;
 		}
 
+		{ ZoneScopedN("without pdb load");
+
 		uintptr_t mod_raddr = addr - mod->base_addr;
 		res->module_path = mod->ansi_path.c_str();
 
@@ -510,6 +512,7 @@ public:
 		}
 
 		return res->valid();
+		}
 	}
 	
 	void print_pdb_stats (void* ptr) {

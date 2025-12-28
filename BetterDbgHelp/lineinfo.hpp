@@ -17,9 +17,6 @@ struct SourceLocAndFn {
 };
 
 class Lineinfo {
-	BinAlloc::bid data = -1;
-	u32 num_ranges = 0;
-	
 	// TODO: in normal c13 lineinfo there is no end, but inline opcodes do encode code size
 	// but maybe dbghelp does not use it? check if opcode scheme is always sorted and if it is,
 	// check if simply returning the first where offset==addr or next offset > addr gives correct results
@@ -30,8 +27,11 @@ class Lineinfo {
 		uint32_t sourcefile; // offset in pdb /names string table
 	};
 
+	u32 num_ranges = 0;
+	CodeRange const* get_ranges () const { return (CodeRange*)(this+1); }
+
 public:
-	static Lineinfo encode_c13_lineinfo (
+	static BinAlloc::bid encode_c13_lineinfo (
 			codeview_subsection_header* subsec,
 			void* file_checksums,
 			BinAlloc& alloc
@@ -72,6 +72,10 @@ public:
 
 		// the algorithm seems to be simple, remember line on addr>=line, break if addr<line, last line is returned
 		
+		auto result_offs = alloc.push_default<Lineinfo>();
+		Lineinfo result = {};
+		result.num_ranges = 0;
+
 		auto* ptr = (char*)subsec;
 		ptr += sizeof(codeview_subsection_header);
 		auto* end = ptr + subsec->length;
@@ -82,10 +86,6 @@ public:
 		
 		CodeRange prev_range = {};
 		bool has_prev_range = false;
-
-		Lineinfo result = {};
-		result.data = alloc.prepare_push<CodeRange>();
-		result.num_ranges = 0;
 
 		while (ptr < end) {
 			auto* line_block = (codeview_line_block_header*)ptr;
@@ -104,7 +104,7 @@ public:
 				CodeRange range{ line.offset, 0, line.start_line_number, sourcefile };
 
 				if (has_prev_range) {
-					alloc.push(&prev_range);
+					alloc.push(prev_range);
 					result.num_ranges++;
 				}
 
@@ -118,49 +118,230 @@ public:
 		assert(ptr == end);
 		
 		if (has_prev_range) {
-			alloc.push(&prev_range);
+			alloc.push(prev_range);
 			result.num_ranges++;
 		}
-		return result;
+
+		*alloc.get<Lineinfo>(result_offs) = result;
+		return result_offs;
 	}
+	
+	static BinAlloc::bid encode_compressed_annotation (
+			PCompressedAnnotation annotations, PCompressedAnnotation anno_end,
+			u32 initial_fileId, u32 initialSourceLineNum,
+			void* file_checksums,
+			BinAlloc& alloc
+		) {
+		auto result_offs = alloc.push_default<Lineinfo>();
+		Lineinfo result = {};
+		result.num_ranges = 0;
 
-	bool find_source_loc_for_addr (uintptr_t sym_addr, uint32_t sym_size,
-			uintptr_t addr, int32_t src_offset,
-			const char* pdb_names_table, SourceLoc* out_src_loc,
-			BinAlloc const& alloc) const {
-		ZoneScoped;
+		auto* cur = annotations;
+		
+		u32 file_id = initial_fileId;
+		u32 code_offset_base = 0;
+		u32 code_offset = 0;
+		u32 code_length = 0; // 0 = null
+		u32 lineno = initialSourceLineNum;
+		u32 num_lines = 1;
+		u32 kind = 1; // 0 == Expression, 1 == Statement
+		
+		// Optimized away vector entirely
 
-		auto* ranges = alloc.get<CodeRange>(data);
-		if (!ranges) {
-			return false;
+		struct Line {
+			u32 code_offset;
+			u32 code_length;
+			u32 lineno;
+			u32 num_lines; // could mean one code range can be associated with a range of line numbers(?)
+			u32 file_id;
+			u32 kind;
+		};
+		Line prev_line;
+		bool has_prev_line = false;
+		
+
+		auto emit_prev_line = [&] () {
+			auto* cksm = (codeview_file_checksum*)((char*)file_checksums + prev_line.file_id);
+			auto sourcefile = cksm->offset_in_string_table;
+
+			CodeRange range;
+			range.start = prev_line.code_offset;
+			range.end = range.start + prev_line.code_length;
+			range.lineno = prev_line.lineno;
+			range.sourcefile = sourcefile;
+
+			alloc.push(&range);
+			result.num_ranges++;
+		};
+
+		while (cur < anno_end) {
+			auto opcode = (BinaryAnnotationOpcode)CVUncompressData(cur);
+			if (opcode == BA_OP_Invalid)
+				continue;
+
+			auto param1 = CVUncompressData(cur);
+			switch (opcode) {
+				case BA_OP_CodeOffset: {
+					code_offset = param1;
+				} break;
+				case BA_OP_ChangeCodeOffsetBase: {
+					assert(false);
+					// Is this never used?
+					code_offset_base = param1;
+				} break;
+				case BA_OP_ChangeCodeOffset: {
+					code_offset += param1;
+				} break;
+				case BA_OP_ChangeCodeLength: {
+					if (has_prev_line) {
+						if (prev_line.code_length == 0 && prev_line.kind == kind) {
+							prev_line.code_length = param1;
+
+							emit_prev_line();
+						}
+					}
+					code_offset += param1;
+				} break;
+				case BA_OP_ChangeFile: {
+					// supposedly there are bugs with file changes inside functions, but presumably functions are almost always inside one file, so this should be rare anyway
+					// TODO: these file_ids likely are local to the module that contained this INLINESITESYM with CompressedAnnotation,
+					// while my current lookup for inlinee id and InlineeSourceLine can come from different modules as that data seems to be duplicated
+					file_id = param1;
+				} break;
+				case BA_OP_ChangeLineOffset: {
+					lineno += DecodeSignedInt32(param1);
+				} break;
+				case BA_OP_ChangeLineEndDelta: {
+					num_lines = param1;
+				} break;
+				case BA_OP_ChangeRangeKind: {
+					assert(param1 == 0 || param1 == 1);
+					kind = param1;
+				} break;
+				case BA_OP_ChangeCodeOffsetAndLineOffset: {
+					// param : ((sourceDelta << 4) | CodeDelta)
+					u32 CodeDelta = param1 & 0b1111;
+					s32 sourceDelta = DecodeSignedInt32(param1 >> 4); // signed int encoded weirdly because CVUncompressData chops off upper bits
+
+					code_offset += CodeDelta;
+					lineno += sourceDelta;
+				} break;
+				case BA_OP_ChangeCodeLengthAndCodeOffset: {
+					auto param2 = CVUncompressData(cur);
+					code_length = param1;
+					code_offset += param2;
+				} break;
+
+				case BA_OP_ChangeColumnStart:
+				case BA_OP_ChangeColumnEndDelta:
+				case BA_OP_ChangeColumnEnd: {
+					// ignore column info
+				} break;
+
+				default: {
+					assert(false);
+				}
+			}
+			
+			switch (opcode) {
+				case BA_OP_ChangeCodeOffset:
+				case BA_OP_ChangeCodeOffsetAndLineOffset:
+				case BA_OP_ChangeCodeLengthAndCodeOffset: {
+					// code_length is either explicitly given with BA_OP_ChangeCodeLengthAndCodeOffset
+					// or written after push_line with BA_OP_ChangeCodeLength
+					// or implicitly computed from last and current offset
+
+					u32 offset = code_offset + code_offset_base;
+					if (has_prev_line) {
+						if (prev_line.code_length == 0 && prev_line.kind == kind) {
+							prev_line.code_length = offset - prev_line.code_offset;
+							
+							emit_prev_line();
+						}
+					}
+
+					// 'push' new line, instead of vector just keep last line
+					prev_line = {
+						offset,
+						code_length,
+						lineno,
+						num_lines,
+						file_id,
+						kind,
+					};
+					has_prev_line = true;
+					
+					if (code_length > 0) {
+						emit_prev_line();
+					}
+
+					code_length = 0;
+				} break;
+			}
+		}
+
+		if (has_prev_line) {
+			//assert(prev_line.code_length > 0); // We expect see a code_length established at the end
+			// I see cases where we got BA_OP_ChangeCodeLength with length 0, which trips the assert, I don't know why the code was emitted like this
+			// since length 0 presumably means line info for a 0 byte range?
 		}
 		
-		intptr_t proc_raddr = (intptr_t)addr - (intptr_t)sym_addr;
-		if (proc_raddr >= (intptr_t)sym_size) {
-			// past symbol address range, no valid line number
-			return false;
-		}
+		*alloc.get<Lineinfo>(result_offs) = result;
+		return result_offs;
+	}
 
-		// handle case where line info is before symbol range but still overlaps
-		proc_raddr += src_offset;
+	bool find_line_for_addr (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
+		auto* ranges = get_ranges();
 
-		CodeRange* found_range = nullptr;
+		CodeRange const* found_range = nullptr;
 
 		for (u32 i=0; i<num_ranges; i++) {
 			// first line with addr==line is returned
 			// if addr in gap between lines, last seen line with addr>line is returned
-			if (proc_raddr < (intptr_t)ranges[i].start) {
+			if (rel_addr < ranges[i].start) {
 				break;
 			}
 
 			found_range = &ranges[i];
 
-			if (proc_raddr == (intptr_t)ranges[i].start) {
+			if (rel_addr == ranges[i].start) {
 				break;
 			}
 		}
 
 		if (found_range) {
+			*out_src_loc = {
+				pdb_names_table + found_range->sourcefile,
+				found_range->lineno
+			};
+			return true;
+		}
+		return false;
+	}
+
+	// TODO: due to lineinfo acting weird,
+	// for the moment develop a replacement for binary annotations first, then make it work with lineinfo afterwards
+	bool find_line_for_addr2 (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
+		auto* ranges = get_ranges();
+
+		CodeRange const* found_range = nullptr;
+
+		for (u32 i=0; i<num_ranges; i++) {
+			// first line with addr==line is returned
+			// if addr in gap between lines, last seen line with addr>line is returned
+			if (rel_addr < ranges[i].start) {
+				break;
+			}
+
+			found_range = &ranges[i];
+
+			if (rel_addr == ranges[i].start) {
+				break;
+			}
+		}
+
+		if (found_range) assert(rel_addr >= found_range->start);
+		if (found_range && rel_addr < found_range->end) {
 			*out_src_loc = {
 				pdb_names_table + found_range->sourcefile,
 				found_range->lineno
