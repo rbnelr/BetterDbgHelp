@@ -513,6 +513,8 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	//Sleep(1000);
 	
+	return;
+
 	try {
 		ZoneScopedN("Namespaces.exe");
 		SymTesting sym("Namespaces/Namespaces.exe", 0.5f);
@@ -793,10 +795,10 @@ void profiling_run_cachemiss () {
 
 int main(int argc, const char** argv) {
 	//print_timings = false;
-	//example_addresses(true, false, 0);
-	//sweep_tests();
+	example_addresses(true, false, 0);
+	sweep_tests();
 	
-	profiling_run_cachemiss();
+	//profiling_run_cachemiss();
 	
 	//try {
 	//	SymTesting sym("CityBuilderExample/city_builder_rel.exe");
@@ -811,6 +813,12 @@ int main(int argc, const char** argv) {
 	//	//sym.sweep_mod(".exe");
 	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
+	//try {
+	//	SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
+	//	char* exe = sym.get_addr(".exe");
+	//	sym.show_addr2sym(exe + 0x22a0);
+	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	//
 	//try {
 	//	ZoneScopedN("city_builder_rel.exe");
 	//	SymTesting sym("CityBuilderExample/city_builder_rel.exe");

@@ -255,6 +255,56 @@ struct StrAlloc {
 	}
 };
 
+struct BinAlloc {
+	typedef int32_t bid;
+	std::vector<char> buf;
+
+	BinAlloc () {
+		buf.reserve(1024*8);
+	}
+
+	static_assert(sizeof(bid) == sizeof(uint32_t));
+	__forceinline bid _grow_to_align (size_t size, size_t align) {
+		auto offset = buf.size();
+		offset = (offset + align-1) & ~(align-1);
+		buf.resize(offset + size);
+		
+		if (offset > 0xffffffff) {
+			assert(false);
+		}
+		return (bid)offset;
+	}
+
+	template <typename T>
+	bid push (T* data) {
+		//static_assert(std::is_trivial_v<T>);
+		static_assert(std::is_standard_layout_v<T>);
+
+		bid offset = _grow_to_align(sizeof(T), alignof(T));
+		auto* cur = buf.data() + offset;
+
+		//memcpy(cur, data, sizeof(T));
+		*(T*)cur = *data;
+
+		return offset;
+	}
+	bid push_bytes (void* data, size_t len) {
+		bid offset = _grow_to_align(len, 1);
+		auto* cur = buf.data() + offset;
+
+		memcpy(cur, data, len);
+
+		return offset;
+	}
+	
+	template <typename T>
+	T* get (bid offset) {
+		if (offset >= 0)
+			return (T*)(buf.data() + offset);
+		return nullptr;
+	}
+};
+
 // Small string allocator that uses a fixed amount of stack space before spilling to heap
 template <size_t STACK_BUF>
 struct SmallStringAlloc {
