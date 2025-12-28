@@ -206,6 +206,7 @@
     <ClInclude Include="..\ankerl\include\ankerl\stl.h" />
     <ClInclude Include="..\ankerl\include\ankerl\unordered_dense.h" />
     <ClInclude Include="dbghelp.hpp" />
+    <ClInclude Include="lineinfo.hpp" />
     <ClInclude Include="logger.hpp" />
     <ClInclude Include="module_lookup.hpp" />
     <ClInclude Include="pdb.hpp" />

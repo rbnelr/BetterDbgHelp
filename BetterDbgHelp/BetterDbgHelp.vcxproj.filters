@@ -21,6 +21,7 @@
       <Filter>ankerl</Filter>
     </ClInclude>
     <ClInclude Include="address_index.hpp" />
+    <ClInclude Include="lineinfo.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="codeview.hpp" />

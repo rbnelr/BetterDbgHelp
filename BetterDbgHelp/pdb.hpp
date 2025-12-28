@@ -3,21 +3,12 @@
 #include "codeview.hpp"
 #include "pdb_locator.hpp"
 #include "address_index.hpp"
+#include "lineinfo.hpp"
 #include <map>
 
 #define TRACK_ALL_SYMBOLS 0
 
 // https://github.com/PascalBeyer/PDB-Documentation
-
-struct SourceLoc {
-	const char* filepath;
-	uint32_t    lineno;
-};
-struct SourceLocAndFn {
-	const char* fnname = nullptr;
-	const char* filepath = nullptr;
-	uint32_t    lineno = 0;
-};
 
 /*
 typedef struct INLINESITESYM {
@@ -63,6 +54,7 @@ struct Symbol {
 	s16 module_index = -1;
 	uint8_t inline_depth = 0;
 
+	Lineinfo lineinfo = {};
 	BinAlloc::bid p_inlinesites = -1;
 
 	bool src_valid () const { return src_subsec != nullptr; }
@@ -1019,7 +1011,7 @@ class PDB_File {
 			
 			auto read_line_numbers = [&] (codeview_subsection_header* subsec) {
 				auto* ptr3 = ptr;
-
+				
 				// With usual compiler, this is once per function
 				auto* header = (codeview_line_header*)ptr;
 				ptr += sizeof(codeview_line_header);
@@ -1035,6 +1027,12 @@ class PDB_File {
 				// check if we ever double attribute lineinfo
 				// Actually we do, I've observed identical lineinfo appear twice
 				//assert(!sym->src.valid());
+				
+				// Line => Code range that has the same line number
+				// Block => Consecutive lines where all come from the same file
+				// Usually all of a functions code comes from one file, exceptions:
+				// c++ #include in the middle of functions (very rare)
+				// c++ constructors that have assignment of fields in the class in the header, and the actual ctor code in the source
 
 				while (ptr < ptr3 + subsec->length) {
 					auto* line_block = (codeview_line_block_header*)ptr;
@@ -1056,15 +1054,13 @@ class PDB_File {
 
 					ptr += line_block->amount_of_lines * sizeof(codeview_line);
 
-					// Actually, this case happens when there actually is sourceinfo from multiple files in one function
-					// This could happen through #include in the middle of functions (very rare)
-					// But apparently also with ctors that have assignment in the class in the header, and the actual ctor code in the source
-					//assert((ptr - ptr3) == subsec->length); // expect only one codeview_line_block per function
 				}
 				assert((ptr - ptr3) == subsec->length);
 
 				// TODO handle mutliple blocks by storing pointer to codeview_subsection_header instead and later walking the blocks
 				if (sym && !sym->src_valid()) {
+					sym->lineinfo = Lineinfo::encode_c13_lineinfo(subsec, mod.file_checksum_ptr, binalloc);
+
 					//assert(module_raddr == sym->base_addr); // lines section contribtion offset need to be procedure symbol offset
 
 					auto offset = (intptr_t)sym->base_addr - (intptr_t)module_raddr;
@@ -1540,7 +1536,7 @@ public:
 	#endif
 	}
 	
-	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
+	bool _find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
 		ZoneScoped;
 
 		intptr_t proc_raddr = (intptr_t)addr - (intptr_t)sym->base_addr;
@@ -1622,6 +1618,18 @@ public:
 			return true;
 		}
 		return false;
+	}
+	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
+		bool res = sym->lineinfo.find_source_loc_for_addr(sym->base_addr, sym->size, addr, sym->src_offset,
+			names, out_src_loc, binalloc);
+
+		//SourceLoc src_loc2 = {};
+		//bool res2 = _find_source_loc_for_addr(sym, addr, &src_loc2);
+		//
+		//assert(res == res2);
+		//if (res) assert(*out_src_loc == src_loc2);
+
+		return res;
 	}
 	
 #if 0

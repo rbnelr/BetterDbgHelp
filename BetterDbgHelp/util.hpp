@@ -274,6 +274,16 @@ struct BinAlloc {
 		}
 		return (bid)offset;
 	}
+	
+	// get offset returned by next push<T>
+	template <typename T>
+	bid prepare_push () {
+		//static_assert(std::is_trivial_v<T>);
+		static_assert(std::is_standard_layout_v<T>);
+
+		bid offset = _grow_to_align(0, alignof(T));
+		return offset;
+	}
 
 	template <typename T>
 	bid push (T* data) {
@@ -298,7 +308,7 @@ struct BinAlloc {
 	}
 	
 	template <typename T>
-	T* get (bid offset) {
+	T* get (bid offset) const {
 		if (offset >= 0)
 			return (T*)(buf.data() + offset);
 		return nullptr;
