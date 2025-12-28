@@ -758,6 +758,24 @@ void profiling_run () {
 }
 
 //
+void profiling_run_cached () {
+	int count = 2000000;
+	run_dbghelp = false;
+
+	try {
+		ZoneScopedN("city_builder (cached)");
+		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
+		sym.print_pdb_stats(".exe");
+		sym.fuzz_mod_measure(".exe", count, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	
+	try {
+		ZoneScopedN("bevy (cached)");
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
+		sym.print_pdb_stats(".exe");
+		sym.fuzz_mod_measure(".exe", count, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+}
 void profiling_run_cachemiss () {
 	int count = 10000;
 	run_dbghelp = false;
@@ -795,10 +813,11 @@ void profiling_run_cachemiss () {
 
 int main(int argc, const char** argv) {
 	//print_timings = false;
-	example_addresses(true, false, 0);
-	sweep_tests();
+	//example_addresses(true, false, 0);
+	//sweep_tests();
 	
-	//profiling_run_cachemiss();
+	profiling_run_cached();
+	//profiling_run_cachemiss
 	
 	//try {
 	//	SymTesting sym("CityBuilderExample/city_builder_rel.exe");

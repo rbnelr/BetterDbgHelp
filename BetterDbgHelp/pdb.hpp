@@ -48,6 +48,7 @@ struct Inlinesite {
 		return (PCompressedAnnotation)(this+1);
 	}
 };
+// TODO: come up custom alternative to CompressedAnnotation
 
 struct Symbol {
 	uintptr_t base_addr = 0; // relative to module
@@ -654,12 +655,81 @@ class PDB_File {
 		
 			//logf(">> symbol_information\n");
 			
-			//std::vector<INLINESITESYM*> stack;
-			std::vector<BinAlloc::bid> stack2;
-
 			int cur_symbol = -1;
 			int inline_depth = 0;
+
+		#define INLINE_TREE_DEPTH_FIRST 0
+		#if INLINE_TREE_DEPTH_FIRST // Depth-first inline tree
+			//std::vector<INLINESITESYM*> stack;
+
 			int max_inline_depth = 0;
+			std::vector<BinAlloc::bid> stack2;
+		#else
+			struct Site {
+				INLINESITESYM* inl;
+				BinAlloc::bid site_id = -1;
+			};
+			std::vector<std::vector<Site>> inlinesites;
+
+			auto push_inline_tree = [&] () {
+				for (auto& level : inlinesites) {
+					for (auto& site : level) {
+						auto it = module_inlinee_c13.find(site.inl->inlinee);
+						if (it == module_inlinee_c13.end())
+							continue;
+
+						auto name_it = IPI_id2name.find(site.inl->inlinee);
+						if (name_it == IPI_id2name.end())
+							continue;
+
+
+						auto* anno_end = (PCompressedAnnotation)((char*)site.inl + sizeof(u16) + site.inl->reclen); // length field of codeview_symbol_header not contained in length
+						size_t anno_len = anno_end - site.inl->binaryAnnotations;
+
+						Inlinesite s = {};
+						s.fnname = name_it->second;
+						s.fileId = it->second->fileId;
+						s.sourceLineNum = it->second->sourceLineNum;
+							
+						site.site_id = binalloc.push(&s);
+						binalloc.push_bytes(site.inl->binaryAnnotations, anno_len);
+
+						char terminator = -1;
+						binalloc.push_bytes(&terminator, 1);
+					}
+				}
+				
+				for (size_t l=0; l<inlinesites.size(); l++) {
+					auto& level = inlinesites[l];
+					auto* children_cur = l+1 < inlinesites.size() ? inlinesites[l+1].data() : nullptr;
+					auto* children_end = l+1 < inlinesites.size() ? inlinesites[l+1].data() + inlinesites[l+1].size() : nullptr;
+
+					for (size_t i=0; i<level.size(); i++) {
+						auto& site = level[i];
+						auto* right_sibling = i+1 < level.size() ? &level[i+1] : nullptr;
+
+						auto* s = binalloc.get<Inlinesite>(site.site_id);
+						if (right_sibling && right_sibling->inl->pParent == site.inl->pParent)
+							s->pSibling = right_sibling->site_id; // else leave at -1
+
+						// iterate children list to find first child of this parent
+						if (children_cur) {
+							size_t pParent = (char*)site.inl - sym_info;
+							while (children_cur < children_end && children_cur->inl->pParent < pParent)
+								children_cur++;
+
+							if (children_cur < children_end && children_cur->inl->pParent == pParent) {
+								s->pChildren = children_cur->site_id;
+							}
+						}
+					}
+				}
+				
+				symbols[cur_symbol].inline_depth = (uint8_t)std::min(inlinesites.size(), (size_t)255);
+				if (!inlinesites.empty() && !inlinesites.front().empty())
+					symbols[cur_symbol].p_inlinesites = inlinesites.front().front().site_id;
+			};
+		#endif
 
 			while (ptr < sym_info + mi->byte_size_of_symbol_information) {
 				auto sym = (codeview_symbol_header*)ptr;
@@ -752,6 +822,7 @@ class PDB_File {
 						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, stralloc[IPI_id2name.find(inl->inlinee)->second]);
 						//}
 
+					#if INLINE_TREE_DEPTH_FIRST
 						if (cur_symbol >= 0) {
 							auto it = module_inlinee_c13.find(inl->inlinee);
 							if (it == module_inlinee_c13.end())
@@ -800,29 +871,46 @@ class PDB_File {
 
 						inline_depth++;
 						max_inline_depth = std::max(max_inline_depth, inline_depth);
+					#else
+						if (inlinesites.size() <= inline_depth)
+							inlinesites.emplace_back();
+						inlinesites[inline_depth].push_back({ inl });
+
+						inline_depth++;
+					#endif
 					} break;
 					case S_INLINESITE_END: {
 						assert(inline_depth > 0);
 						inline_depth--;
-						
+
+					#if INLINE_TREE_DEPTH_FIRST
 						if (cur_symbol >= 0) {
 							// Awkward hack, S_INLINESITE_END, which ends an S_INLINESITE
 							// can't reset the current inlinesite, or else this pSibling can't be set in the next S_INLINESITE
 							// so instead reset one level up, so that on the next parent site, its children won't link to this child
 							stack2[inline_depth+1] = -1;
 						}
+					#endif
 					} break;
 					case S_END: {
+						assert(inline_depth == 0);
+
+					#if INLINE_TREE_DEPTH_FIRST
 						if (cur_symbol >= 0) {
-							assert(inline_depth == 0 && max_inline_depth >= 0);
 							if (max_inline_depth > 0) {
 								symbols[cur_symbol].inline_depth = (uint8_t)std::min(max_inline_depth, 255);
 							}
 						}
 						max_inline_depth = 0;
-						cur_symbol = -1;
-
 						stack2.clear();
+					#else
+						if (cur_symbol >= 0) {
+							push_inline_tree();
+						}
+						inlinesites.clear();
+					#endif
+
+						cur_symbol = -1;
 					} break;
 				}
 			}
@@ -1794,8 +1882,6 @@ public:
 #else
 	
 	bool _decode_and_scan_inlinee_lineinfo (Inlinesite* site, Module const& mod, uintptr_t proc_raddr, SourceLoc* out_loc) {
-		ZoneScopedN("INLINESITE");
-
 		// While BinaryAnnotationOpcode enum was released, the exact definition or code was apparently to released(?)
 		// Only possible thanks to these implementations:
 		// https://github.com/EpicGamesExt/raddebugger/blob/08642d2745da516387fa0f43639b7a8776a154b0/src/codeview/codeview_parse.c#L277
