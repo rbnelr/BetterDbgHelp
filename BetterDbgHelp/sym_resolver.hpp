@@ -51,23 +51,19 @@ struct SymResult {
 	int num_inlines;
 	SourceLocAndFn inlines[MAX_INLINES];
 	
+	// my own symbol resolver returns stable pointers but dbghelp needs to copy the strings
+	// I could have just resorted to using std::string everywhere
+	// but i REALLY want to avoid this as it would insert slow-ish heap allocations in the code I want to optimize and profile
+	// especially since in 90% of the cases we can get away without the heap, by using this string buffer
+	// and because if I mimic dbghelp's API later, i get passed user-allocated buffers I can write into (though only for some of the functions)
+	
 	// Source Filenames (path is included) and function names with C++ templates can be extremely long
 	// And 64 Inline sites cause huge string output amounts occasionally
 	// Use reasonably sized stack buffer first, then heap if it overflows
-	// Note that this struct can't be moved as it points to the internal string buffer,
-	// you probably also want to avoid copying it
+	// Note that this struct can't be moved or copied trivially anymore as it points to the internal string buffer
+	// Could write a working move and copy constructor but for now just use std::unique_ptr of SymResult
 	SmallStringAlloc<4096> str_alloc;
 	
-	// I could have just resorted to using std::string everywhere
-	// but i REALLY want to avoid this as it inserted slow-ish heap allocations in the code I want to optimize
-	// especially since in 90% of the cases we can get away without the heap
-	// and because if I mimic dbghelp's API later, i get passed user-allocated buffers (though only for some of the functions)
-	
-	// an alternative actually would be to make sym_name etc. getters and use offsets into a string buffer instead
-	// TODO: do this?
-	
-	// This cannot be moved without carefully adjusting the contained pointers
-	// instead use unique_ptr
 	SymResult (SymResult&& other) = delete;
 	SymResult& operator= (SymResult&& other) = delete;
 	SymResult (SymResult const& other) = delete;

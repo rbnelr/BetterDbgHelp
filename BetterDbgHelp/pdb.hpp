@@ -1880,7 +1880,6 @@ public:
 		}
 	}
 #else
-	
 	bool _decode_and_scan_inlinee_lineinfo (Inlinesite* site, Module const& mod, uintptr_t proc_raddr, SourceLoc* out_loc) {
 		// While BinaryAnnotationOpcode enum was released, the exact definition or code was apparently to released(?)
 		// Only possible thanks to these implementations:
