@@ -70,8 +70,8 @@ struct Inlinesite {
 	BinAlloc::bid pChildren = -1;
 	// followed by Lineinfo
 	
-	Lineinfo* get_lineinfo () {
-		return (Lineinfo*)(this+1);
+	void* get_lineinfo () {
+		return this+1;
 	}
 
 	Inlinesite () {};
@@ -156,6 +156,14 @@ class PDB_File {
 public:
 	BinAlloc binalloc;
 	StrAlloc stralloc;
+	
+	void print_stats () {
+		logf("@ PDB %s:\n", path.string().c_str());
+		symbols.print_stats("Symbols");
+
+		logf("binalloc: size: %.1f kB\n", binalloc.buf.size()/1000.0f);
+		logf("stralloc: size: %.1f kB\n", stralloc.buf.size()/1000.0f);
+	}
 private:
 
 	std::vector<Module> modules;
@@ -1472,10 +1480,10 @@ public:
 		}
 		uintptr_t rel_addr = addr - sym->lineinfo_base_addr;
 		
-		auto* lineinfo = binalloc.get<Lineinfo>(sym->p_lineinfo);
+		auto* lineinfo = binalloc.get<void>(sym->p_lineinfo);
 		if (!lineinfo)
 			return false;
-		return lineinfo->find_line_for_addr(rel_addr, names, out_src_loc);
+		return Lineinfo::find_line_for_addr(lineinfo, rel_addr, names, out_src_loc);
 	}
 	
 	int trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs) {
@@ -1491,7 +1499,7 @@ public:
 			auto* site = binalloc.get<Inlinesite>(site_id);
 			SourceLoc encoded_loc = {};
 
-			if (site->get_lineinfo()->find_line_for_addr2(proc_raddr, names, &encoded_loc)) {
+			if (Lineinfo::find_line_for_addr2(site->get_lineinfo(), proc_raddr, names, &encoded_loc)) {
 				// Matching Inlinesite
 
 				out_locs[depth].fnname = stralloc[site->fnname];
@@ -1512,10 +1520,5 @@ public:
 			}
 		}
 		return depth;
-	}
-
-	void print_stats_for_lookup () {
-		logf("@ PDB %s:\n", path.string().c_str());
-		symbols.print_stats("Symbols");
 	}
 };

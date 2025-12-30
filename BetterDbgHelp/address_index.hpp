@@ -51,7 +51,7 @@ public:
 	}
 
 	void print_stats (const char* name) {
-		logf("%s: vec #%llu log2: %f size: %.1f kB\n", name, vec.size(), log2f((float)vec.size()), sizeof(vec[0])*vec.size()/1000.0f);
+		logf("%s: symbol_lookup: #%llu log2: %f size: %.1f kB\n", name, vec.size(), log2f((float)vec.size()), sizeof(vec[0])*vec.size()/1000.0f);
 	}
 #else
 private:
@@ -81,12 +81,12 @@ private:
 	
 public:
 	void print_stats (const char* name) {
-		logf("%s: vec: #%llu log2: %f size: %.1f kB\n", name, vec.size(), log2f((float)vec.size()), sizeof(vec[0])*vec.size()/1000.0f);
+		logf("%s: symbol_table: #%llu lookup log2: %f size: %.1f kB\n", name, vec.size(), log2f((float)vec.size()), sizeof(vec[0])*vec.size()/1000.0f);
 		
 		auto used_slots = vec.size();
 		auto num_slots = blocks.size()*BLOCKSZ;
 
-		logf("%s: simd: #blocks %llu addresses: %.1f kB blocks: %.1f kB block_indices: %.1f kB\nwasted %.2f%%\n", name, blocks.size(),
+		logf("%s: simd blocks: #blocks %llu addresses: %.1f kB blocks: %.1f kB block_indices: %.1f kB\nwasted %.2f%%\n", name, blocks.size(),
 			addresses.size()*sizeof(addresses[0])/1000.0f,
 			blocks.size()*sizeof(blocks[0])/1000.0f,
 			block_indices.size()*sizeof(block_indices[0])/1000.0f,

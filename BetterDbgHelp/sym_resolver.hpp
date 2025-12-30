@@ -525,7 +525,7 @@ public:
 	
 	void print_pdb_stats (void* ptr) {
 		auto* mod = mod_cache.find_module_for_addr(inspectee, (uintptr_t)ptr);
-		if (mod->pdb) mod->pdb->print_stats_for_lookup();
+		if (mod->pdb) mod->pdb->print_stats();
 	}
 
 	void print_timings () {

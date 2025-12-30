@@ -291,7 +291,7 @@ public:
 		return result_offs;
 	}
 
-	bool find_line_for_addr (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
+	bool _find_line_for_addr (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
 		auto* ranges = get_ranges();
 
 		CodeRange const* found_range = nullptr;
@@ -319,10 +319,13 @@ public:
 		}
 		return false;
 	}
+	static bool find_line_for_addr (void* data, uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) {
+		return ((Lineinfo*)data)->_find_line_for_addr(rel_addr, pdb_names_table, out_src_loc);
+	}
 
 	// TODO: due to lineinfo acting weird,
 	// for the moment develop a replacement for binary annotations first, then make it work with lineinfo afterwards
-	bool find_line_for_addr2 (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
+	bool _find_line_for_addr2 (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
 		auto* ranges = get_ranges();
 
 		CodeRange const* found_range = nullptr;
@@ -351,166 +354,183 @@ public:
 		}
 		return false;
 	}
+	static bool find_line_for_addr2 (void* data, uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) {
+		return ((Lineinfo*)data)->_find_line_for_addr2(rel_addr, pdb_names_table, out_src_loc);
+	}
 };
 #else
-class Lineinfo {
+class alignas(4) Lineinfo {
 	// TODO: explain encoding
+	
+	uint8_t const* get_ranges () const { return (uint8_t*)(this+1); }
 
-	struct alignas(2) CodeRangeCompact {
-		uint8_t is_compact : 1;
-		uint8_t length : 6;
-		int8_t lineno_delta;
-
-		bool is_gap () const { return lineno_delta == INT8_MIN; }
+	struct alignas(2) DeltaCoded {
+		uint8_t length;
+		int8_t lineno_delta; // INT8_MIN => is_gap
+	};
+	struct alignas(4) Block {
+		uint32_t start_offset; // first range start
+		uint32_t first_length; // handle case of single range length > 255
+		uint32_t start_lineno : 31; // first range absolute lineno
+		uint32_t is_last : 1; // is this the last block?
+		uint32_t sourcefile; // offset in pdb /names string table for all ranges in block
+		uint16_t num_deltas; // number of DeltaCoded entires following
 	};
 
-	struct alignas(4) CodeRangeFull {
-		uint8_t is_compact : 1;
-		uint32_t length : 30;
-		uint32_t lineno;
-		uint32_t sourcefile;
-
-		bool is_gap () const { return lineno == UINT32_MAX; }
-	};
-
-	struct CodeRangeSource {
+	struct SourceRange {
 		uint32_t offset;
 		uint32_t length;
 		uint32_t lineno;
 		uint32_t sourcefile;
-
-		bool is_gap () const { return lineno == UINT32_MAX; }
 	};
 	
 	struct Encoder {
-		Lineinfo& lineinfo;
-		CodeRangeSource prev;
+		BinAlloc::bid result;
+
+		BinAlloc::bid pblock = -1;
+		SourceRange prev = {};
 		
-		inline static int _total_FULL = 0;
-		inline static int _total_COMPACT = 0;
-		inline static int _total_GAP = 0;
-		
-		Encoder (Lineinfo& lineinfo): lineinfo{lineinfo} {
-			prev.offset = 0;
-			prev.length = 0;
-			prev.lineno = lineinfo.init_lineno;
-			prev.sourcefile = lineinfo.init_sourcefile;
+		Encoder (BinAlloc& alloc) {
+			result = alloc.prepare_push<Lineinfo>();
 		}
-		
-		void push (BinAlloc& alloc, CodeRangeSource const& cur) {
+
+		void push (BinAlloc& alloc, SourceRange const& cur) {
 			assert(cur.offset >= prev.offset);
 			assert(cur.lineno < UINT32_MAX);
-			assert(cur.length < 0x3fffffff);
 
-			if (prev.offset + prev.length != cur.offset) {
-				uint32_t gap_length = cur.offset - (prev.offset + prev.length);
+			auto try_delta_code = [&] () {
+				if (pblock == -1)
+					return false;
 
-				CodeRangeCompact compact = {};
-				compact.is_compact = true;
-				compact.length = (uint8_t)gap_length;
-				compact.lineno_delta = INT8_MIN;
+				DeltaCoded gap = {};
+				bool push_gap;
 
-				bool is_compact = compact.length == gap_length;
-				if (is_compact) {
-					alloc.push(&compact);
+				// push a gap if we need to
+				push_gap = prev.offset + prev.length != cur.offset;
+				if (push_gap) {
+					uint32_t gap_length = cur.offset - (prev.offset + prev.length);
+					
+					gap.length = (uint8_t)gap_length;
+					gap.lineno_delta = INT8_MIN;
+			
+					bool can_delta_code = gap.length == gap_length;
+					if (!can_delta_code) {
+						return false;
+					}
 				}
-				else {
-					CodeRangeFull range = {};
-					compact.is_compact = false;
-					range.length = gap_length;
-					range.lineno = UINT32_MAX;
-					range.sourcefile = 0;
-					alloc.push(&range);
+				
+				DeltaCoded range = {};
+				range.length = (uint8_t)cur.length;
+				range.lineno_delta = (int8_t)(cur.lineno - prev.lineno);
+				bool can_delta_code =
+					range.length == cur.length &&
+					(prev.lineno + range.lineno_delta) == cur.lineno &&
+					prev.sourcefile == cur.sourcefile;
+
+				if (!can_delta_code) {
+					return false;
 				}
-				_total_GAP++;
-				lineinfo.num_ranges++;
-			}
+				
+				int num_push = 1 + (push_gap?1:0);
 
-			CodeRangeCompact compact = {};
-			compact.is_compact = true;
-			compact.length = (uint8_t)cur.length;
-			compact.lineno_delta = (int8_t)(cur.lineno - prev.lineno);
+				auto block = *alloc.get<Block>(pblock);
+				if ((uint32_t)block.num_deltas + num_push >= UINT32_MAX) {
+					return false;
+				}
 
-			bool is_compact =
-				compact.length == cur.length &&
-				(prev.lineno + compact.lineno_delta) == cur.lineno &&
-				prev.sourcefile == cur.sourcefile;
-			if (is_compact) {
-				alloc.push(&compact);
-				_total_COMPACT++;
-			}
-			else {
-				CodeRangeFull range = {};
-				compact.is_compact = false;
-				range.length = cur.length;
-				range.lineno = cur.lineno;
-				range.sourcefile = cur.sourcefile;
-				// HACK: push can end up aligning to 4 bytes, so if previous range was a compact one
-				// decode will read padding instead of actual type bits, but padding is 0
-				// and since FULL type is 0, this works out...
-				alloc.push(&range);
-				_total_FULL++;
-			}
-			lineinfo.num_ranges++;
+				if (push_gap) {
+					alloc.push(&gap);
+				}
+				alloc.push(range);
 
+				block.num_deltas += num_push;
+
+				*alloc.get<Block>(pblock) = block;
+				return true;
+			};
+
+			if (!try_delta_code()) {
+				Block block = {};
+				block.start_offset = cur.offset;
+				block.first_length = cur.length;
+				block.start_lineno = cur.lineno;
+				block.is_last = true;
+				block.sourcefile = cur.sourcefile;
+				block.num_deltas = 0;
+				
+				auto* prev_block = alloc.get<Block>(pblock);
+				if (prev_block) {
+					prev_block->is_last = false;
+				}
+				pblock = alloc.push(block);
+			}
+			
 			prev = cur;
 		}
 	};
-	struct Decoder {
-		uint8_t const* cur;
-		uint32_t offset;
-		uint32_t end_offset;
-		uint32_t lineno;
-		uint32_t sourcefile;
 
-		__forceinline Decoder (Lineinfo const* lineinfo) {
-			cur = lineinfo->get_ranges();
-			offset = 0;
-			end_offset = 0;
-			lineno = lineinfo->init_lineno;
-			sourcefile = lineinfo->init_sourcefile;
-		}
+	template <typename FUNC>
+	static void decode (void* data, FUNC test_range) {
+		char* cur = (char*)data;
+		Block* block;
+		do {
+			block = (Block*)cur;
+			cur += sizeof(Block);
 
-		__forceinline bool decode () {
-			offset = end_offset;
-			bool is_gap;
+			uint32_t offset = block->start_offset;
+			uint32_t length = block->first_length;
+			uint32_t lineno = block->start_lineno;
+			uint32_t sourcefile = block->sourcefile;
+			bool is_gap = false;
 
-			// Reading struct with bitfield has bad codegen, do it manually
-			uint16_t compact = *(uint16_t*)cur;
-			if (compact & 1) { // is_comapct
-				cur += sizeof(CodeRangeCompact);
+			uint32_t end_offset = offset + length;
+			
+			//if (test_range(offset, end_offset, lineno, sourcefile, is_gap))
+			//	return;
+			//
+			//for (uint32_t i=0; i<block->num_deltas; i++) {
+			//	offset = end_offset;
+			//
+			//	auto* delta = (DeltaCoded*)cur;
+			//	cur += sizeof(DeltaCoded);
+			//
+			//	length = delta->length;
+			//	end_offset = offset + length;
+			//
+			//	is_gap = delta->lineno_delta == INT8_MIN;
+			//	if (!is_gap)
+			//		lineno += delta->lineno_delta;
+			//
+			//	if (test_range(offset, end_offset, lineno, sourcefile, is_gap))
+			//		return;
+			//}
+			
+			char* end = cur + sizeof(DeltaCoded)*block->num_deltas;
+			DeltaCoded* delta;
+			goto Ltest;
+
+			do {
 				
-				auto length = ((uint8_t)compact) >> 1;
+				delta = (DeltaCoded*)cur;
+				cur += sizeof(DeltaCoded);
+			
+				offset = end_offset;
+				length = delta->length;
 				end_offset = offset + length;
-				int8_t line = (int8_t)(compact >> 8);
-
-				is_gap = line == INT8_MIN; //.is_gap();
-				if (!is_gap)
-					lineno += line;
-				return is_gap;
-			}
-			else {
-				// align up to 4 bytes
-				cur = (uint8_t const*)(((uintptr_t)cur + 0b11) & ~0b11);
-
-				auto* range = (CodeRangeFull const*)cur;
-				cur += sizeof(CodeRangeFull);
 				
-				is_gap = range->is_gap();
-				auto length = range->length;
-				end_offset = offset + length;
-				sourcefile = range->sourcefile;
+				is_gap = delta->lineno_delta == INT8_MIN;
 				if (!is_gap)
-					lineno = range->lineno;
-				return is_gap;
-			}
-		}
-	};
+					lineno += delta->lineno_delta;
+				
+			Ltest:
+				if (test_range(offset, end_offset, lineno, sourcefile, is_gap))
+					return;
+			} while (cur < end);
 
-	u32 num_ranges = 0;
-	u32 init_lineno;
-	u32 init_sourcefile; // offset in pdb /names string table
-	uint8_t const* get_ranges () const { return (uint8_t*)(this+1); }
+			// align up to 4 bytes
+			cur = (char*)(((uintptr_t)cur + 0b11) & ~0b11);
+		} while (!block->is_last);
+	}
 
 public:
 	static BinAlloc::bid encode_c13_lineinfo (
@@ -554,13 +574,7 @@ public:
 
 		// the algorithm seems to be simple, remember line on addr>=line, break if addr<line, last line is returned
 		
-		auto result_offs = alloc.push_default<Lineinfo>();
-		Lineinfo result = {};
-		result.num_ranges = 0;
-		result.init_lineno = 0;
-		result.init_sourcefile = 0;
-		
-		Encoder encoder(result);
+		Encoder encoder(alloc);
 
 		auto* ptr = (char*)subsec;
 		ptr += sizeof(codeview_subsection_header);
@@ -571,7 +585,7 @@ public:
 		assert(header->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
 		
 		bool has_prev_range = false;
-		CodeRangeSource prev_range = {};
+		SourceRange prev_range = {};
 
 		while (ptr < end) {
 			auto* line_block = (codeview_line_block_header*)ptr;
@@ -592,13 +606,6 @@ public:
 					prev_range.length = line.offset - prev_range.offset;
 
 					encoder.push(alloc, prev_range);
-				}
-				else {
-					// HACK: easiest way of getting first line in C13 data, and this avoid always pushing a full range as the first one
-					result.init_lineno = line.start_line_number;
-					result.init_sourcefile = sourcefile;
-					encoder.prev.lineno = line.start_line_number;
-					encoder.prev.sourcefile = sourcefile;
 				}
 
 				prev_range.offset = line.offset;
@@ -621,8 +628,7 @@ public:
 			encoder.push(alloc, prev_range);
 		}
 
-		*alloc.get<Lineinfo>(result_offs) = result;
-		return result_offs;
+		return encoder.result;
 	}
 	
 	static BinAlloc::bid encode_compressed_annotation (
@@ -640,19 +646,14 @@ public:
 			u32 kind;
 		};
 
-		auto result_offs = alloc.push_default<Lineinfo>();
-		Lineinfo result = {};
-		result.num_ranges = 0;
-		result.init_lineno = initialSourceLineNum;
-		result.init_sourcefile = initial_fileId;
-
-		Encoder encoder(result);
+		auto result_offs = alloc.prepare_push<Lineinfo>();
+		Encoder encoder(alloc);
 
 		auto emit_range = [&] (Line& line) {
 			auto* cksm = (codeview_file_checksum*)((char*)file_checksums + line.file_id);
 			auto sourcefile = cksm->offset_in_string_table;
 
-			CodeRangeSource range;
+			SourceRange range;
 			range.offset = line.code_offset;
 			range.length = line.code_length;
 			range.lineno = line.lineno;
@@ -786,33 +787,33 @@ public:
 			// since length 0 presumably means line info for a 0 byte range?
 		}
 		
-		*alloc.get<Lineinfo>(result_offs) = result;
 		return result_offs;
 	}
 
-	bool find_line_for_addr (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
-		Decoder decoder(this);
-
+	static bool find_line_for_addr (void* data, uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) {
+		
 		uint32_t found_sourcefile = 0;
 		uint32_t found_lineno = UINT32_MAX;
+		
+		decode(data, [&] (uint32_t offset, uint32_t end_offset, uint32_t lineno, uint32_t sourcefile, bool is_gap) {
+			if (is_gap) lineno = UINT32_MAX;
 
-		for (u32 i=0; i<num_ranges; i++) {
-			bool is_gap = decoder.decode();
-			
 			// first line with addr==line is returned
 			// if addr in gap between lines, last seen line with addr>line is returned
-			if (rel_addr < decoder.offset) {
-				break;
+			if (rel_addr < offset) {
+				return true; // stop iterating
+			}
+		
+			found_sourcefile = sourcefile;
+			found_lineno = lineno;
+		
+			if (rel_addr == offset) {
+				return true; // stop iterating
 			}
 
-			found_sourcefile = decoder.sourcefile;
-			found_lineno = is_gap ? UINT32_MAX : decoder.lineno;
-
-			if (rel_addr == decoder.offset) {
-				break;
-			}
-		}
-
+			return false;
+		});
+		
 		if (found_lineno != UINT32_MAX) {
 			*out_src_loc = {
 				pdb_names_table + found_sourcefile,
@@ -825,26 +826,26 @@ public:
 
 	// TODO: due to lineinfo acting weird,
 	// for the moment develop a replacement for binary annotations first, then make it work with lineinfo afterwards
-	bool find_line_for_addr2 (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
-		Decoder decoder(this);
+	static bool find_line_for_addr2 (void* data, uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) {
 		
-		for (u32 i=0; i<num_ranges; i++) {
-			bool is_gap = decoder.decode();
-
+		bool found = false;
+		decode(data, [&] (uint32_t offset, uint32_t end_offset, uint32_t lineno, uint32_t sourcefile, bool is_gap) {
 			// return addr>offset && addr<=offset+length if not gap
-			if (rel_addr < decoder.end_offset) {
-				if (!is_gap && rel_addr >= decoder.offset) {
+			if (rel_addr < end_offset) {
+				if (!is_gap && rel_addr >= offset) {
 					*out_src_loc = {
-						pdb_names_table + decoder.sourcefile,
-						decoder.lineno
+						pdb_names_table + sourcefile,
+						lineno
 					};
-					return true;
+					found = true;
+					return true; // stop iterating
 				}
 				// ranges are sorted, so any later ranges cannot match
-				return false;
+				return true; // stop iterating
 			}
-		}
-		return false;
+			return false;
+		});
+		return found;
 	}
 };
 #endif
