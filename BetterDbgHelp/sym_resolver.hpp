@@ -187,36 +187,43 @@ struct SymResult {
 			// dbghelp.dll not returning module name, assume it's correct
 			//if (my_strcmp(module_path, r.module_path) != 0) return false;
 			if (!my_strcmp(sym_name, r.sym_name)) {
-				if (counts)
+				if (counts) {
 					counts->symbol_mismatch_or_mangled(*this, r, c);
+				}
 				return false;
 			}
 
 			if (has_source() != r.has_source()) {
-				if (has_source())
-					if (counts)
+				if (has_source()) {
+					if (counts) {
 						counts->DH_no_source++;
-				else
-					if (counts)
+					}
+				} else {
+					if (counts) {
 						counts->source_mismatch++;
+					}
+				}
 				return false;
 			}
 			if (has_source()) {
 				if (!my_strcmp(src_filepath, r.src_filepath)) {
-					if (counts)
+					if (counts) {
 						counts->source_mismatch++;
+					}
 					return false;
 				}
 				if (src_lineno != r.src_lineno) {
-					if (counts)
+					if (counts) {
 						counts->source_mismatch++;
+					}
 					return false;
 				}
 			}
 				
 			if (num_inlines != r.num_inlines) {
-				if (counts)
+				if (counts) {
 					counts->inline_mimatch++;
+				}
 				return false;
 			}
 			for (int i=0; i<num_inlines; i++) {
@@ -225,8 +232,9 @@ struct SymResult {
 				if (    !my_strcmp(li.fnname, ri.fnname)
 					 || !my_strcmp(li.filepath, ri.filepath)
 					 || li.lineno != ri.lineno ) {
-					if (counts)
+					if (counts) {
 						counts->inline_mimatch++;
+					}
 					return false;
 				}
 			}

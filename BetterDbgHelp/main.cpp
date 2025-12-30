@@ -245,8 +245,8 @@ public:
 		assert(dbghelp); // need dbghelp to be able to compare
 
 		SymResult res={}, res_dbghelp={};
-		auto err_dbghelp = dbghelp->addr2sym(addr, &res_dbghelp);
-		auto err         = resolver->addr2sym(addr, &res);
+		dbghelp->addr2sym(addr, &res_dbghelp);
+		resolver->addr2sym(addr, &res);
 		
 		if (!res.equal(res_dbghelp, { &mismatch_counts, resolver.get(), addr })) {
 			auto& mod = get_mod(addr);
@@ -508,12 +508,12 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 			at_addr(exe + 0x2154); // malloc()
 			at_addr(exe + 0x16b0); // mainCRTStartup
 
+			at_addr(exe + 0x13c0); // __security_check_cookie
+
 			at_addr(ucrtbase + 0x1B370); // __stdio_common_vfprintf
 		});
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	//Sleep(1000);
-	
-	return;
 
 	try {
 		ZoneScopedN("Namespaces.exe");
@@ -548,7 +548,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		sym.print_pdb_stats(".exe");
 		sym.print_pdb_stats("assimp-vc143-mt.dll");
 		
-		sym.warmup(exe + 0x21FA0);
+		sym.warmup(exe + 0x121FA0);
 		sym.warmup(assimp + 0x23990); // assimp, no pdb! (for testing)
 		sym.warmup(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
 
@@ -556,7 +556,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
 
-			at_addr(exe + 0x21FA0); // main()  -  This one does not resolve correctly for some reason, with both dbghelp.dll and my code
+			at_addr(exe + 0x121FA0); // main()  -  This one does not resolve correctly for some reason, with both dbghelp.dll and my code
 	
 			at_addr(exe + 0x2C1E0); // json_load
 			at_addr(exe + 0x2C1F4); // json_load - save.load_graphics_settings
