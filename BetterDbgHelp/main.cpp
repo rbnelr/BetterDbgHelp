@@ -813,11 +813,11 @@ void profiling_run_cachemiss () {
 
 int main(int argc, const char** argv) {
 	//print_timings = false;
-	example_addresses(true, false, 0);
-	sweep_tests();
+	//example_addresses(true, false, 0);
+	//sweep_tests();
 	
 	//profiling_run_cached();
-	//profiling_run_cachemiss();
+	profiling_run_cachemiss();
 	
 	//try {
 	//	SymTesting sym("CityBuilderExample/city_builder_rel.exe");

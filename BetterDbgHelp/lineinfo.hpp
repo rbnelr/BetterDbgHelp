@@ -20,15 +20,107 @@ class Lineinfo {
 	// TODO: in normal c13 lineinfo there is no end, but inline opcodes do encode code size
 	// but maybe dbghelp does not use it? check if opcode scheme is always sorted and if it is,
 	// check if simply returning the first where offset==addr or next offset > addr gives correct results
-	struct CodeRange {
-		uint32_t start;
+
+	enum RangeType : uint8_t {
+		FULL=0,
+		COMPACT,
+	};
+
+	struct alignas(2) CodeRangeCompact {
+		RangeType type : 2;
+		uint8_t offset_delta : 6;
+		int8_t lineno_delta;
+	};
+	inline static constexpr uint32_t OFFSET_DELTA_MASK = 0x3f;
+
+	struct alignas(4) CodeRangeFull {
+		RangeType type : 2;
+		uint32_t offset : 30;
+		uint32_t lineno;
+		uint32_t sourcefile;
+	};
+
+	struct CodeRangeSource {
+		uint32_t offset;
 		uint32_t end;
 		uint32_t lineno;
-		uint32_t sourcefile; // offset in pdb /names string table
+		uint32_t sourcefile;
+	};
+
+	inline static int _total_FULL = 0;
+	inline static int _total_COMPACT = 0;
+
+	static void push_try_encode_compact (BinAlloc& alloc, CodeRangeSource const& prev, CodeRangeSource const& cur) {
+		assert(cur.offset >= prev.offset);
+		assert(cur.lineno < UINT32_MAX);
+
+		CodeRangeCompact compact = {};
+		compact.type = COMPACT;
+		compact.offset_delta = (uint8_t)(cur.offset - prev.offset);
+		compact.lineno_delta = (int8_t)(cur.lineno - prev.lineno);
+
+		bool is_compact =
+			(prev.offset + compact.offset_delta) == cur.offset &&
+			(prev.lineno + compact.lineno_delta) == cur.lineno &&
+			prev.sourcefile == cur.sourcefile;
+		if (is_compact) {
+			alloc.push(&compact);
+			_total_COMPACT++;
+			return;
+		}
+		
+		assert(cur.offset < 0x3fffffff);
+
+		CodeRangeFull range = {};
+		range.type = FULL;
+		range.offset = cur.offset & 0x3fffffff;
+		range.lineno = cur.lineno;
+		range.sourcefile = cur.sourcefile;
+		// HACK: push can end up aligning to 4 bytes, so if previous range was a compact one
+		// decode will read padding instead of actual type bits, but padding is 0
+		// and since FULL type is 0, this works out...
+		alloc.push(&range);
+		_total_FULL++;
+	}
+	struct Decoder {
+		uint8_t const* cur;
+		CodeRangeSource result = { 0, 0, 0, 0 };
+
+		Decoder (Lineinfo const* lineinfo) {
+			cur = lineinfo->get_ranges();
+			result.lineno = lineinfo->init_lineno;
+			result.sourcefile = lineinfo->init_sourcefile;
+		}
+
+		CodeRangeSource const& decode () {
+			uint8_t header = cur[0];
+			RangeType type = (RangeType)(header & 0b11);
+			if (type == COMPACT) {
+				cur += sizeof(CodeRangeCompact);
+
+				result.offset += header >> 2; // offset_delta;
+				result.lineno += cur[0]; // lineno_delta;
+			}
+			else {
+				// align up to 4 bytes
+				cur = (uint8_t const*)(((uintptr_t)cur + 0b11) & ~0b11);
+
+				auto* range = (CodeRangeFull const*)cur;
+				cur += sizeof(CodeRangeFull);
+
+				result.offset = range->offset;
+				result.lineno = range->lineno;
+				result.sourcefile = range->sourcefile;
+			}
+
+			return result;
+		}
 	};
 
 	u32 num_ranges = 0;
-	CodeRange const* get_ranges () const { return (CodeRange*)(this+1); }
+	u32 init_lineno;
+	u32 init_sourcefile; // offset in pdb /names string table
+	uint8_t const* get_ranges () const { return (uint8_t*)(this+1); }
 
 public:
 	static BinAlloc::bid encode_c13_lineinfo (
@@ -75,6 +167,29 @@ public:
 		auto result_offs = alloc.push_default<Lineinfo>();
 		Lineinfo result = {};
 		result.num_ranges = 0;
+		result.init_lineno = 0;
+		result.init_sourcefile = 0;
+		
+		bool initial = true;
+		CodeRangeSource prev_emit = {};
+		prev_emit.offset = 0;
+		prev_emit.end = 0;
+		prev_emit.lineno = 0;
+		prev_emit.sourcefile = 0;
+
+		auto emit_range = [&] (CodeRangeSource const& range) {
+			if (initial) {
+				prev_emit.lineno = range.lineno;
+				prev_emit.sourcefile = range.sourcefile;
+				result.init_lineno = range.lineno;
+				result.init_sourcefile = range.sourcefile;
+			}
+			initial = false;
+
+			push_try_encode_compact(alloc, prev_emit, range);
+			prev_emit = range;
+			result.num_ranges++;
+		};
 
 		auto* ptr = (char*)subsec;
 		ptr += sizeof(codeview_subsection_header);
@@ -84,8 +199,8 @@ public:
 		ptr += sizeof(codeview_line_header);
 		assert(header->flags == 0); // CV_LINES_HAVE_COLUMNS not implemented
 		
-		CodeRange prev_range = {};
 		bool has_prev_range = false;
+		CodeRangeSource prev_range = {};
 
 		while (ptr < end) {
 			auto* line_block = (codeview_line_block_header*)ptr;
@@ -100,26 +215,23 @@ public:
 				
 				if (i > 0) assert(line.offset >= lines[i-1].offset); // verify sorted
 
-				prev_range.end = line.offset;
-				CodeRange range{ line.offset, 0, line.start_line_number, sourcefile };
-
 				if (has_prev_range) {
-					alloc.push(prev_range);
-					result.num_ranges++;
+					emit_range(prev_range);
 				}
 
-				prev_range = range;
+				prev_range.offset = line.offset;
+				prev_range.end = 0;
+				prev_range.lineno = line.start_line_number;
+				prev_range.sourcefile = sourcefile;
 				has_prev_range = true;
 			}
 
 			ptr += line_block->amount_of_lines * sizeof(codeview_line);
-
 		}
 		assert(ptr == end);
 		
 		if (has_prev_range) {
-			alloc.push(prev_range);
-			result.num_ranges++;
+			emit_range(prev_range);
 		}
 
 		*alloc.get<Lineinfo>(result_offs) = result;
@@ -164,9 +276,9 @@ public:
 			auto* cksm = (codeview_file_checksum*)((char*)file_checksums + prev_line.file_id);
 			auto sourcefile = cksm->offset_in_string_table;
 
-			CodeRange range;
-			range.start = prev_line.code_offset;
-			range.end = range.start + prev_line.code_length;
+			CodeRangeSource range;
+			range.offset = prev_line.code_offset;
+			range.end = range.offset + prev_line.code_length;
 			range.lineno = prev_line.lineno;
 			range.sourcefile = sourcefile;
 
@@ -291,28 +403,32 @@ public:
 	}
 
 	bool find_line_for_addr (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
-		auto* ranges = get_ranges();
+		Decoder decoder(this);
 
-		CodeRange const* found_range = nullptr;
+		uint32_t found_sourcefile = 0;
+		uint32_t found_lineno = UINT32_MAX;
 
 		for (u32 i=0; i<num_ranges; i++) {
+			auto& range = decoder.decode();
+			
 			// first line with addr==line is returned
 			// if addr in gap between lines, last seen line with addr>line is returned
-			if (rel_addr < ranges[i].start) {
+			if (rel_addr < range.offset) {
 				break;
 			}
 
-			found_range = &ranges[i];
+			found_sourcefile = range.sourcefile;
+			found_lineno = range.lineno;
 
-			if (rel_addr == ranges[i].start) {
+			if (rel_addr == range.offset) {
 				break;
 			}
 		}
 
-		if (found_range) {
+		if (found_lineno != UINT32_MAX) {
 			*out_src_loc = {
-				pdb_names_table + found_range->sourcefile,
-				found_range->lineno
+				pdb_names_table + found_sourcefile,
+				found_lineno
 			};
 			return true;
 		}
@@ -322,25 +438,25 @@ public:
 	// TODO: due to lineinfo acting weird,
 	// for the moment develop a replacement for binary annotations first, then make it work with lineinfo afterwards
 	bool find_line_for_addr2 (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
-		auto* ranges = get_ranges();
+		auto* ranges = (CodeRangeSource*)get_ranges();
 
-		CodeRange const* found_range = nullptr;
+		CodeRangeSource const* found_range = nullptr;
 
 		for (u32 i=0; i<num_ranges; i++) {
 			// first line with addr==line is returned
 			// if addr in gap between lines, last seen line with addr>line is returned
-			if (rel_addr < ranges[i].start) {
+			if (rel_addr < ranges[i].offset) {
 				break;
 			}
 
 			found_range = &ranges[i];
 
-			if (rel_addr == ranges[i].start) {
+			if (rel_addr == ranges[i].offset) {
 				break;
 			}
 		}
 
-		if (found_range) assert(rel_addr >= found_range->start);
+		if (found_range) assert(rel_addr >= found_range->offset);
 		if (found_range && rel_addr < found_range->end) {
 			*out_src_loc = {
 				pdb_names_table + found_range->sourcefile,

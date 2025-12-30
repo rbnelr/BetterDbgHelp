@@ -266,13 +266,14 @@ struct BinAlloc {
 	static_assert(sizeof(bid) == sizeof(uint32_t));
 	__forceinline bid _grow_to_align (size_t size, size_t align) {
 		auto offset = buf.size();
-		offset = (offset + align-1) & ~(align-1);
-		buf.resize(offset + size);
+		auto padded_offset = (offset + align-1) & ~(align-1);
+		buf.resize(padded_offset + size);
+		memset(buf.data()+padded_offset, 0, padded_offset-offset); // Always pad with zeros
 		
-		if (offset > 0xffffffff) {
+		if (padded_offset > 0xffffffff) {
 			assert(false);
 		}
-		return (bid)offset;
+		return (bid)padded_offset;
 	}
 	
 	// get offset returned by next push<T>

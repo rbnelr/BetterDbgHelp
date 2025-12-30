@@ -70,8 +70,8 @@ no idea why actually, the data is less compact, is it just less branching, or ju
 
 @custom lineinfo: for symbol lineinfo and inlines, still unoptimized, note that this should be way less compact than compressed annotations
 and compressed annotations are still stored alongside, so inlines should be a lot more bloated and may cause more cache misses? unless prefetcher works well
--28% total
--60% trace inlines
+-24% total (compared to initial)
+-66% trace inlines (compared to initial)
 wtf, how? opcode did have lots of branching, so I figure this fixes that, but I had assumed the size bloat would counter this
 
 ========== load_pdb optimization ==============
