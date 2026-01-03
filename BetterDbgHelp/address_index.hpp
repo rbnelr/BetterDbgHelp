@@ -29,6 +29,9 @@ public:
 	T& operator[] (int idx) {
 		return vec[idx];
 	}
+	//T& get (BinAlloc& alloc, int idx) {
+	//	return *alloc.get<T>(vec[idx]);
+	//}
 
 	void sort_vec () {
 		// sort based on base_addr
@@ -44,6 +47,8 @@ public:
 	// 'Upoptimized' = Normal binary search on sorted vector
 	void sort_and_build_index () {
 		ZoneScoped;
+
+
 		sort_vec();
 	}
 	std::vector<T>::iterator upper_bound (uintptr_t addr) {

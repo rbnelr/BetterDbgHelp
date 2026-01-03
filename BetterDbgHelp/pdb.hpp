@@ -157,6 +157,14 @@ public:
 	BinAlloc binalloc;
 	StrAlloc stralloc;
 	
+	// TODO: huge memory use with rust_bevy
+	struct Stats {
+		int num_symbols;
+		int num_symbol_lookup;
+		int num_lineinfos;
+		int num_inlinesites;
+		int num_strings;
+	};
 	void print_stats () {
 		logf("@ PDB %s:\n", path.string().c_str());
 		symbols.print_stats("Symbols");
@@ -208,11 +216,12 @@ private:
 		header = (msf_header*)file.data();
 		assert(strncmp((const char*)header->signature, "Microsoft C/C++ MSF 7.00\r\n\032DS\0\0\0", 32) == 0);
 	}
+	
 	void read_stream_table () {
 
-		u32* _sts_ppages = (u32*)get_page(header->page_list_of_stream_table_stream_page_list[0]);
-		u32* _sts_pages = (u32*)get_page(_sts_ppages[0]);
-		char* _sts_start = (char*)read_sts(0);
+		//u32* _sts_ppages = (u32*)get_page(header->page_list_of_stream_table_stream_page_list[0]);
+		//u32* _sts_pages = (u32*)get_page(_sts_ppages[0]);
+		//char* _sts_start = (char*)read_sts(0);
 
 		u32 cur = 0;
 		u32 amount_of_streams = *(u32*)read_sts(cur);
@@ -336,10 +345,12 @@ private:
 		
 			u32 string_buffer_size = *(u32*)ptr;
 			ptr += sizeof(u32);
-		
+			
 			names = ptr;
 			ptr += string_buffer_size;
-		
+			
+			// There is somd kind of hashmap in here, is this is a hashmap from string -> type/symbol id?
+			// Presumably this is not useful to me in this project
 			u32 bucket_count = *(u32*)ptr;
 			ptr += sizeof(u32);
 
@@ -352,7 +363,7 @@ private:
 		else {
 			// signature == 0xFE
 			// this happens with pdbs downloaded from MS symbol servers, possibly because they are stripped
-			// Simply leaving names as null works as we later do not get source line info either
+			// Simply leave names as null works, as these files also don't contain references to it
 		}
 	}
 	
@@ -988,7 +999,7 @@ private:
 				// and even line numbers can differ for some bizzare reason
 				// I have no idea how to handle this case correctly, there might be one InlineeSourceLine per INLINESITE, but I can't confirm this
 				// I will have to see if my output matches dbghelp when taking the first or last entry instead of trying to match them by order
-				auto verify_duplicates = [&] (InlineeSourceLine* line) {
+				auto check_duplicates = [&] (InlineeSourceLine* line) {
 					auto it = module_inlinee_c13.find(line->inlinee);
 					if (it != module_inlinee_c13.end()) {
 						// duplicate entry, verify they are functionally identical
@@ -1010,7 +1021,7 @@ private:
 						
 						//logf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
-						verify_duplicates(line);
+						check_duplicates(line);
 						module_inlinee_c13.try_emplace(line->inlinee, line);
 					}
 				} else if (header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE_EX) {
@@ -1020,7 +1031,7 @@ private:
 						
 						//logf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
-						verify_duplicates((InlineeSourceLine*)line);
+						check_duplicates((InlineeSourceLine*)line);
 						module_inlinee_c13.try_emplace(line->inlinee, (InlineeSourceLine*)line);
 
 						ptr += line->countOfExtraFiles * sizeof(CV_off32_t);
@@ -1045,10 +1056,59 @@ private:
 				uintptr_t sec_offs = sections_sorted[header->contribution_section_id-1].base_addr;
 				uintptr_t module_raddr = header->contribution_offset + sec_offs;
 				
+				// Why are there always conflicting sets of data in PDBs?
+				// Even this basic C13 Data tends to exist for the same function multiple times (which tend to have conflicing contents as well)
+				// Picking the first one seems to have been working ok
+				auto check_duplicates = [=, &c13_lineinfo] () {
+					auto it = c13_lineinfo.find(module_raddr);
+					if (it != c13_lineinfo.end()) {
+						logf("> Conflicing C13 Lineinfo\n");
+
+						auto* ptr1 = ptr;
+						auto* ptr2 = (char*)it->second.header() + sizeof(codeview_line_header);
+
+						auto* end2 = (char*)it->second.subsec + sizeof(codeview_subsection_header) + it->second.subsec->length;
+
+						assert(subsec->length == it->second.subsec->length);
+
+						while (ptr1 < end && ptr2 < end2) {
+							auto* line_block = (codeview_line_block_header*)ptr1;
+							ptr1 += sizeof(codeview_line_block_header);
+							auto* line_block2 = (codeview_line_block_header*)ptr2;
+							ptr2 += sizeof(codeview_line_block_header);
+							
+							auto* cksm = (codeview_file_checksum*)((char*)mod.file_checksum_ptr + line_block->offset_in_file_checksums);
+							auto* sourcefile = names + cksm->offset_in_string_table;
+
+							assert(line_block->amount_of_lines == line_block2->amount_of_lines);
+							assert(line_block->block_size == line_block2->block_size);
+							assert(line_block->offset_in_file_checksums == line_block2->offset_in_file_checksums);
+							logf(">> Block %d %d %s\n", line_block->block_size, line_block->offset_in_file_checksums, sourcefile);
+							
+							auto* lines = (codeview_line*)ptr1;
+							auto* lines2 = (codeview_line*)ptr2;
+							for (u32 i=0; i<std::min(line_block->amount_of_lines, line_block2->amount_of_lines); i++) {
+								auto& line = lines[i];
+								auto& line2 = lines2[i];
+
+								assert(line.offset == line2.offset);
+								//assert(line.start_line_number == line2.start_line_number);
+								logf(">>  Line %d/%d %d/%d\n", line.start_line_number, line2.start_line_number, line.offset, line2.offset);
+							}
+
+							ptr1 += line_block->amount_of_lines * sizeof(codeview_line);
+							ptr2 += line_block2->amount_of_lines * sizeof(codeview_line);
+						}
+						assert(ptr1 == end);
+						assert(ptr2 == end2);
+					}
+				};
+
+				//check_duplicates();
 				c13_lineinfo.try_emplace(module_raddr, C13Lineinfo{ subsec });
 				
 				// Line => Code range that has the same line number
-				// Block => Consecutive lines where all come from the same file
+				// Block => Consecutive lines (in compiled binary) where all come from the same file
 				// Usually all of a functions code comes from one file, exceptions:
 				// c++ #include in the middle of functions (very rare)
 				// c++ constructors that have assignment of fields in the class in the header, and the actual ctor code in the source
@@ -1368,19 +1428,35 @@ public:
 
 		_reserve();
 		
+		// check PDB header signature
 		read_header();
+		// read STS, which contains list of pdb streams and list of page ids for these streams
 		read_stream_table();
+		// read pdb_information_stream, specifically the named streams hashmap
+		// some streams are fixed index, some are referenced via index from this file
+		// but some are indexed using a string->index lookup instead
 		read_pdb_info(rsds);
+		// copy '/names' string table for later use
 		read_names();
+		// read type information stream, extract names of class, struct, union (these seem to be already formatted as scope::Class)
 		read_TPI_stream();
+		// read IPI (not sure what is stands for, something with IDs)
+		// assemble and extract fully scoped names for functions and member functions, referencing the TPI
 		read_IPI_stream();
+		// read DBI, which contains list of all modules
+		// and "section contributions", which can be used for address -> module -> symbol lookups, but I am not using as I fully extract symbols from each module anyway
 		read_DBI();
 		
+		// read list of all sections
 		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
 		read_section_header_dump();
 
+		// read symbol record stream, which contains certain global symbols, including functions
+		// In practice any function symbol with code should appear in the modules with more information instead, functions will be appear duplicated here
+		// but dbghelp will return symbols from here, right now I return symbols from the modules first and use this as a fallback only
 		read_symbol_record_stream();
 
+		// read symbol stream for each module, this contains function symbols and all lineinfo
 		for (s16 module_index=0; module_index<(s16)modules.size(); module_index++) {
 			read_module_symbol_stream(module_index);
 		}
