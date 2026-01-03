@@ -180,7 +180,7 @@ public:
 };
 
 struct StrAlloc {
-	typedef uint32_t sid; // Strbuf index
+	typedef int32_t sid; // Strbuf index
 	std::vector<char> buf;
 
 	StrAlloc () {
@@ -194,19 +194,19 @@ struct StrAlloc {
 		return buf.data() + offset;
 	}
 	
-	static_assert(sizeof(sid) == sizeof(uint32_t));
+	static_assert(sizeof(sid) == sizeof(int32_t));
 	sid _grow (size_t len) {
 		auto offset = buf.size();
 		buf.resize(offset + len);
 		
-		if (offset > 0xffffffff) {
+		if (offset > INT_MAX) {
 			assert(false);
 		}
 		return (sid)offset;
 	}
 	sid get_offset () {
 		auto offset = buf.size();
-		if (offset > 0xffffffff) {
+		if (offset > INT_MAX) {
 			assert(false);
 		}
 		return (sid)offset;

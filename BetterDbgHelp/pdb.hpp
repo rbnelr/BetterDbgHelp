@@ -13,12 +13,11 @@
 struct Symbol {
 	uintptr_t base_addr = 0; // relative to module
 	uint32_t size = 0;
-	StrAlloc::sid name;
+	StrAlloc::sid name = -1;
 	
 	s16 module_index = -1;
 	uint8_t inline_depth = 0;
 
-	uintptr_t lineinfo_base_addr;
 	BinAlloc::bid p_lineinfo = -1;
 	BinAlloc::bid p_inlinesites = -1;
 
@@ -29,14 +28,6 @@ struct Symbol {
 		return Symbol { base_addr };
 	}
 };
-
-//struct Module {
-//	pdb_module_information* mi;
-//	std::string_view name;
-//	std::string_view file_name;
-//
-//	std::vector<char> symbol_stream_data;
-//};
 
 /*
 typedef struct INLINESITESYM {
@@ -104,7 +95,6 @@ class PDB_File {
 		return (char*)get_page(sts_pages[page_idx_page_idx]) + ptr_in_page;
 	}
 	
-	
 	msf_header* header;
 
 	struct Stream {
@@ -136,7 +126,6 @@ class PDB_File {
 	// Func and MemberFunc names from IPI (IDs will overlap with typeid2name!)
 	ankerl::unordered_dense::map<CV_ItemId, StrAlloc::sid> IPI_id2name;
 
-	//// Final needed data
 	struct Section {
 		std::string name;
 
@@ -144,11 +133,7 @@ class PDB_File {
 		size_t size;
 	};
 	std::vector<Section> sections_sorted;
-
-public:
-	BinAlloc binalloc;
-	StrAlloc stralloc;
-
+	
 	struct cstr_hash {
 		using is_transparent = void;
 		using is_avalanching = void;
@@ -162,7 +147,7 @@ public:
 	};
 	ankerl::unordered_dense::map<u32, StrAlloc::sid> names_extracted;
 	ankerl::unordered_dense::map<const char*, StrAlloc::sid, cstr_hash> names_dedup;
-	
+
 	// copy string from /names entry to stralloc, also deduplicate just in case
 	StrAlloc::sid extract_name (u32 names_offset) {
 		auto it = names_extracted.find(names_offset);
@@ -201,38 +186,6 @@ public:
 		}
 		return stralloc.push(name);
 	}
-	
-
-	// TODO: huge memory use with rust_bevy
-	struct Stats {
-		int num_symbols;
-		int num_symbol_lookup;
-		int num_lineinfos;
-		int num_inlinesites;
-		int num_strings;
-	};
-	void print_stats () {
-		logf("@ PDB %s:\n", path.string().c_str());
-		symbols.print_stats("Symbols");
-
-		logf("binalloc: size: %.1f kB\n", binalloc.buf.size()/1000.0f);
-		logf("stralloc: size: %.1f kB\n", stralloc.buf.size()/1000.0f);
-	}
-private:
-
-	//std::vector<Module> modules;
-
-	AddressIndex<Symbol> symbols;
-
-#if TRACK_ALL_SYMBOLS
-	AddressIndex<Symbol> sym_unfiltered; // to support has_symbol_for_addr
-
-	void print_all_symbols () {
-		for (auto& s : sym_unfiltered) {
-			logf(">> %4llx %4x mod=%d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
-		}
-	}
-#endif
 
 	void* read_stream (u32 stream, u32 ptr) {
 		u32 page_idx    = ptr / header->page_size;
@@ -902,9 +855,11 @@ private:
 						// this lookup, which is used to attach lineinfo to the symbols so we don't have to search the address space twice (like dbghelp does?)
 						// in case of overlapping symbols, only keep first occurance
 						if (module_symbols.find(module_raddr) == module_symbols.end()) {
-							auto* lineinfo = find_single_overlapping_lineinfo(s, &s.lineinfo_base_addr);
+							uintptr_t lineinfo_base_addr;
+							auto* lineinfo = find_single_overlapping_lineinfo(s, &lineinfo_base_addr);
 							if (lineinfo) {
-								s.p_lineinfo = Lineinfo::encode_c13_lineinfo(lineinfo, extract_checksums_str, binalloc);
+								int32_t symbol_offset = (int32_t)((intptr_t)module_raddr - (intptr_t)lineinfo_base_addr);
+								s.p_lineinfo = Lineinfo::encode_c13_lineinfo(lineinfo, symbol_offset, extract_checksums_str, binalloc);
 							}
 
 							int idx = (int)symbols.size();
@@ -1496,7 +1451,6 @@ private:
 	}
 
 	void _reserve () {
-		//modules.reserve(128);
 		sections_sorted.reserve(32);
 
 		typeid2name.reserve(128);
@@ -1507,7 +1461,24 @@ private:
 		sym_unfiltered.reserve(1024);
 	#endif
 	}
+
 public:
+//// Final needed data
+	BinAlloc binalloc;
+	StrAlloc stralloc;
+	
+	AddressIndex<Symbol> symbols;
+	
+#if TRACK_ALL_SYMBOLS
+	AddressIndex<Symbol> sym_unfiltered; // to support has_symbol_for_addr
+
+	void print_all_symbols () {
+		for (auto& s : sym_unfiltered) {
+			logf(">> %4llx %4x mod=%d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
+		}
+	}
+#endif
+
 	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& exe_path) {
 		try {
 			PDB_Locator locator(exe_path);
@@ -1572,7 +1543,6 @@ public:
 
 		//logf("PDB read.\n");
 	}
-
 
 	Symbol* find_symbol_for_addr (uintptr_t addr) {
 		ZoneScoped;
@@ -1655,12 +1625,12 @@ public:
 			// past symbol address range, no valid line number
 			return false;
 		}
-		uintptr_t rel_addr = addr - sym->lineinfo_base_addr;
+		uintptr_t sym_raddr = addr - sym->base_addr;
 		
 		auto* lineinfo = binalloc.get<void>(sym->p_lineinfo);
 		if (!lineinfo)
 			return false;
-		return Lineinfo::find_line_for_addr(lineinfo, rel_addr, stralloc, out_src_loc);
+		return Lineinfo::find_line_for_addr(lineinfo, sym_raddr, stralloc, out_src_loc);
 	}
 	
 	int trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs) {
@@ -1697,5 +1667,22 @@ public:
 			}
 		}
 		return depth;
+	}
+
+	
+	// TODO: figure out why there's huge memory use with rust_bevy
+	struct Stats {
+		int num_symbols;
+		int num_symbol_lookup;
+		int num_lineinfos;
+		int num_inlinesites;
+		int num_strings;
+	};
+	void print_stats () {
+		logf("@ PDB %s:\n", path.string().c_str());
+		symbols.print_stats("Symbols");
+
+		logf("binalloc: size: %.1f kB\n", binalloc.buf.size()/1000.0f);
+		logf("stralloc: size: %.1f kB\n", stralloc.buf.size()/1000.0f);
 	}
 };

@@ -370,7 +370,7 @@ class alignas(4) Lineinfo {
 		int8_t lineno_delta; // INT8_MIN => is_gap
 	};
 	struct alignas(4) Block {
-		uint32_t start_offset; // first range start
+		int32_t start_offset; // first range start
 		uint32_t first_length; // handle case of single range length > 255
 		uint32_t start_lineno : 31; // first range absolute lineno
 		uint32_t is_last : 1; // is this the last block?
@@ -379,7 +379,7 @@ class alignas(4) Lineinfo {
 	};
 
 	struct SourceRange {
-		uint32_t offset;
+		int32_t offset;
 		uint32_t length;
 		uint32_t lineno;
 		uint32_t sourcefile;
@@ -389,7 +389,7 @@ class alignas(4) Lineinfo {
 		BinAlloc::bid result;
 
 		BinAlloc::bid pblock = -1;
-		SourceRange prev = {};
+		SourceRange prev = { INT_MIN, 0, 0, 0 };
 		
 		Encoder (BinAlloc& alloc) {
 			result = alloc.prepare_push<Lineinfo>();
@@ -409,7 +409,7 @@ class alignas(4) Lineinfo {
 				// push a gap if we need to
 				push_gap = prev.offset + prev.length != cur.offset;
 				if (push_gap) {
-					uint32_t gap_length = cur.offset - (prev.offset + prev.length);
+					int32_t gap_length = cur.offset - (prev.offset + prev.length);
 					
 					gap.length = (uint8_t)gap_length;
 					gap.lineno_delta = INT8_MIN;
@@ -478,13 +478,13 @@ class alignas(4) Lineinfo {
 			block = (Block*)cur;
 			cur += sizeof(Block);
 
-			uint32_t offset = block->start_offset;
+			int32_t offset = block->start_offset;
 			uint32_t length = block->first_length;
 			uint32_t lineno = block->start_lineno;
 			uint32_t sourcefile = block->sourcefile;
 			bool is_gap = false;
 
-			uint32_t end_offset = offset + length;
+			int32_t end_offset = offset + length;
 			
 			//if (test_range(offset, end_offset, lineno, sourcefile, is_gap))
 			//	return;
@@ -537,9 +537,8 @@ public:
 	// use template for lambda to avoid header source due to circular dep PDB_File <-> Lineinfo
 	template <typename FUNC>
 	static BinAlloc::bid encode_c13_lineinfo (
-			codeview_subsection_header* subsec,
-			FUNC extract_checksums_str,
-			BinAlloc& alloc
+			codeview_subsection_header* subsec, int32_t symbol_offset,
+			FUNC extract_checksums_str, BinAlloc& alloc
 		) {
 		// Normally one Line header exists per function
 		// with the section and offset being equal, ie. the resulting module_raddr being equal
@@ -602,15 +601,17 @@ public:
 				
 				if (i > 0) assert(line.offset >= lines[i-1].offset); // verify sorted
 
+				int32_t offset = (int32_t)line.offset - symbol_offset;
+
 				// Since I'm not using the end field at all here, we don't need to overcomplicate via this prev_range thing
 				// TODO: see how compressed annotations work and if we can get rid of the end field
 				if (has_prev_range) {
-					prev_range.length = line.offset - prev_range.offset;
+					prev_range.length = offset - prev_range.offset;
 
 					encoder.push(alloc, prev_range);
 				}
 
-				prev_range.offset = line.offset;
+				prev_range.offset = offset;
 				prev_range.length = 0;
 				prev_range.lineno = line.start_line_number;
 				prev_range.sourcefile = sourcefile;
@@ -656,7 +657,7 @@ public:
 			auto sourcefile = extract_checksums_str(line.file_id);
 
 			SourceRange range;
-			range.offset = line.code_offset;
+			range.offset = (int32_t)line.code_offset;
 			range.length = line.code_length;
 			range.lineno = line.lineno;
 			range.sourcefile = sourcefile;
