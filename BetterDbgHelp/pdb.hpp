@@ -30,22 +30,13 @@ struct Symbol {
 	}
 };
 
-struct Module {
-	pdb_module_information* mi;
-	std::string_view name;
-	std::string_view file_name;
-
-	std::vector<char> symbol_stream_data;
-	char* sym_info;
-		
-	// It seems like we can get duplicate entries of the same inlinee id across different modules via InlineeSourceLine
-	// So in every module with a INLINESITE, the corresponding InlineeSourceLine and filename in DEBUG_S_FILECHKSMS exist in the same module
-	// but the same inlinee file id can exist in multiple modules
-	// this could be because due to link time optimization (the same function being inlined into different translation lines)
-	// but actually, sometimes the filepath differs (same header, paths, compiled on different machines?)
-	// so functions compiled from different copies of a header can get the same id
-	char* file_checksum_ptr = nullptr;
-};
+//struct Module {
+//	pdb_module_information* mi;
+//	std::string_view name;
+//	std::string_view file_name;
+//
+//	std::vector<char> symbol_stream_data;
+//};
 
 /*
 typedef struct INLINESITESYM {
@@ -136,6 +127,7 @@ class PDB_File {
 
 	// contains function names for source line info (both normal and inline stack)
 	const char* names = nullptr;
+	size_t names_size = 0;
 
 	optional_debug_header_substream* opt_streams;
 
@@ -156,7 +148,61 @@ class PDB_File {
 public:
 	BinAlloc binalloc;
 	StrAlloc stralloc;
+
+	struct cstr_hash {
+		using is_transparent = void;
+		using is_avalanching = void;
+
+		[[nodiscard]] auto operator()(std::string_view str) const noexcept -> uint64_t {
+			return ankerl::unordered_dense::hash<std::string_view>{}(str);
+		}
+		[[nodiscard]] auto operator()(const char* str) const noexcept -> uint64_t {
+			return ankerl::unordered_dense::hash<std::string_view>{}(str);
+		}
+	};
+	ankerl::unordered_dense::map<u32, StrAlloc::sid> names_extracted;
+	ankerl::unordered_dense::map<const char*, StrAlloc::sid, cstr_hash> names_dedup;
 	
+	// copy string from /names entry to stralloc, also deduplicate just in case
+	StrAlloc::sid extract_name (u32 names_offset) {
+		auto it = names_extracted.find(names_offset);
+		if (it != names_extracted.end())
+			return it->second;
+		
+		auto* str = names + names_offset;
+
+		// deduplicate identical strings
+		auto it2 = names_dedup.find(str);
+		if (it2 != names_dedup.end()) {
+			// names entry not yet copied, but identical string was, just use that one instead
+		}
+		else {
+			// names entry not yet copied, and unique string, copy it
+			auto sid = stralloc.push(str);
+			it2 = names_dedup.emplace(str, sid).first;
+		}
+
+		names_extracted.emplace(names_offset, it2->second);
+		return it2->second;
+	}
+	
+	// Turns "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@4_KA" into "_OptionsStorage"
+	// like dbghelp does (it does this even without SYMOPT_UNDNAME, ie demangling)
+	// dbghelp seems to only process "?..." not "??..." names
+	// This is inconsistent however, it does not seem to happen for import symbol names
+	// (whenever pdbs are missing dbghelp looks for the name in the import of the dll instead)
+	StrAlloc::sid trim_mangled_name (const char* name) {
+		if (name[0] == '?' && name[1] != '?') {
+			const char* begin = name+1;
+			const char* end = strchr(begin, '@');
+			if (end && begin != end) {
+				return stralloc.push(begin, end - begin);
+			}
+		}
+		return stralloc.push(name);
+	}
+	
+
 	// TODO: huge memory use with rust_bevy
 	struct Stats {
 		int num_symbols;
@@ -174,7 +220,7 @@ public:
 	}
 private:
 
-	std::vector<Module> modules;
+	//std::vector<Module> modules;
 
 	AddressIndex<Symbol> symbols;
 
@@ -347,6 +393,7 @@ private:
 			ptr += sizeof(u32);
 			
 			names = ptr;
+			names_size = string_buffer_size;
 			ptr += string_buffer_size;
 			
 			// There is somd kind of hashmap in here, is this is a hashmap from string -> type/symbol id?
@@ -367,6 +414,17 @@ private:
 		}
 	}
 	
+	void print_dump_names () const {
+		printf("PDB /names string buffer:\n");
+		char const* cur = names;
+		char const* end = cur + names_size;
+
+		while (cur < end) {
+			printf("> [%8llx] %s\n", cur - names, cur);
+			cur += strlen(cur)+1;
+		}
+	}
+
 	void read_DBI () {
 		DBI_data = copy_into_consecutive(3);
 		char* ptr = DBI_data.data();
@@ -377,8 +435,10 @@ private:
 		//// module_information_substream
 		auto* ptr2 = ptr;
 
+		/*
 		while (ptr < ptr2+header->byte_size_of_the_module_information_substream) {
 			auto* mi = (pdb_module_information*)ptr;
+			
 			ptr += sizeof(pdb_module_information);
 
 			const char* mod_name = ptr;
@@ -397,10 +457,10 @@ private:
 			m.mi = mi;
 			m.name = std::string_view(mod_name, mod_name_len);
 			m.file_name = std::string_view(file_name, file_name_len);
-
-			modules.push_back(m);
+			//modules.push_back(m);
 		}
 		assert((ptr - ptr2) == header->byte_size_of_the_module_information_substream);
+		*/
 		ptr = ptr2 + header->byte_size_of_the_module_information_substream;
 		
 		//// section_contribution_substream
@@ -488,6 +548,34 @@ private:
 		
 		//byte_size_of_the_optional_debug_header_substream
 	}
+	void read_module_symbol_streams () {
+		char* ptr = DBI_data.data();
+
+		auto* header = (dbi_stream_header*)ptr;
+		ptr += sizeof(dbi_stream_header);
+		auto* end = ptr + header->byte_size_of_the_module_information_substream;
+		
+		s16 module_index = 0;
+		while (ptr < end) {
+			auto* mi = (pdb_module_information*)ptr;
+			ptr += sizeof(pdb_module_information);
+
+			const char* mod_name = ptr;
+			size_t mod_name_len = strlen(mod_name);
+			ptr += mod_name_len+1;
+
+			const char* file_name = ptr;
+			size_t file_name_len = strlen(file_name);
+			ptr += file_name_len+1;
+
+			ptr = align_up(ptr, 4);
+
+			// read symbol stream for each module, this contains function symbols and all lineinfo
+			read_module_symbol_stream(module_index, mi);
+			module_index++;
+		}
+		assert(ptr == end);
+	}
 
 	void read_section_header_dump () {
 		section_header_dump_data = copy_into_consecutive(opt_streams->stream_index_of_section_header_dump);
@@ -511,23 +599,6 @@ private:
 			assert(sections_sorted[i].base_addr > sections_sorted[i-1].base_addr + sections_sorted[i-1].size);
 		}
 	}
-	
-	// Turns "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@4_KA" into "_OptionsStorage"
-	// like dbghelp does (it does this even without SYMOPT_UNDNAME, ie demangling)
-	// dbghelp seems to only process "?..." not "??..." names
-	// This is inconsistent however, it does not seem to happen for import symbol names
-	// (whenever pdbs are missing dbghelp looks for the name in the import of the dll instead)
-	StrAlloc::sid trim_mangled_name (const char* name) {
-		if (name[0] == '?' && name[1] != '?') {
-			const char* begin = name+1;
-			const char* end = strchr(begin, '@');
-			if (end && begin != end) {
-				return stralloc.push(begin, end - begin);
-			}
-		}
-		return stralloc.push(name);
-	}
-	
 	[[msvc::forceinline]] bool resolve_rva (u32 offs, u16 seg, uintptr_t* out_addr) {
 		if (seg > 0) {
 			// Sometimes global symbols have section ids to invalid sections, no idea why this happens
@@ -547,6 +618,7 @@ private:
 		}
 		return true;
 	}
+
 	void read_symbol_record_stream () {
 		auto* dbi = (dbi_stream_header*)DBI_data.data();
 		symbol_record_stream_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
@@ -618,21 +690,38 @@ private:
 		}
 		assert((ptr - ptr2) == symbol_record_stream_data.size());
 	}
-	void read_module_symbol_stream (s16 module_index) {
-		auto& mod = modules[module_index];
-		auto* mi = mod.mi;
-		
+	void read_module_symbol_stream (s16 module_index, pdb_module_information* mi) {
+		if (mi->stream_index_of_module_symbol_stream == 0xffff)
+			return; // no symbol data
+
+		auto symbol_stream_data = copy_into_consecutive(mi->stream_index_of_module_symbol_stream);
+		char* ptr = symbol_stream_data.data();
+
+		char* file_checksum_ptr = nullptr;
+
+		auto extract_checksums_str = [this, &file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
+			auto* cksm = (codeview_file_checksum*)((char*)file_checksum_ptr + offset_in_file_checksums);
+			return extract_name(cksm->offset_in_string_table);
+		};
+
+		// Did I not comment this 3 times already?
+		// Anyway, there are cases where lineinfo exists with a different address then the functions it covers:
+		// ex: __security_check_cookie: src\vctools\crt\vcstartup\src\gs\amd64\amdsecgs.asm
+		// likely here this is because while the c++ compiler generates one lineinfo entry per function with identical address
+		// the assembler for asm files generates just one lineinfo but the asm can contain multiple functions (and other symbols at arbitrary offsets?)
+		// In this case the function is 16 bytes after the lineinfo
+		// dbghelp likely does an entire second lookup, if you already did a symbol lookup for the lineinfo, which is slow
+		// instead my model is that while the addresses may not match, for each function there is likely only one lineinfo it overlaps
+		// so instead I lookup the lineinfo range the symbol touches at its base address and link that one to it
+		// in fact lineinfo will currently be duplicated in the resultling memory to simplify things, but this could be changed,
+		// but if its just asm files this is likely irrelevant
 		struct C13Lineinfo {
 			codeview_subsection_header* subsec;
 			codeview_line_header* header () { return (codeview_line_header*)(subsec+1); }
 		};
 		std::map<uintptr_t, C13Lineinfo> c13_lineinfo;
 		
-		// deduplicate symbols with identical addresses TODO: should instead just push all symbols here and then later keep the relevant ones?
-		ankerl::unordered_dense::map<uintptr_t, int> module_symbols;
-		ankerl::unordered_dense::map<CV_ItemId, InlineeSourceLine*> module_inlinee_c13;
-
-		auto find_first_overlapping_lineinfo = [&] (Symbol const& sym, uintptr_t* out_lineinfo_addr) -> codeview_subsection_header* {
+		auto find_single_overlapping_lineinfo = [&] (Symbol const& sym, uintptr_t* out_lineinfo_addr) -> codeview_subsection_header* {
 			if (c13_lineinfo.empty()) return nullptr;
 
 			// upper_bound returns first item larger than input (usually one past end of the range of equal items)
@@ -665,13 +754,17 @@ private:
 			return nullptr;
 		};
 
-		if (mi->stream_index_of_module_symbol_stream == 0xffff)
-			return; // no symbol data
-		mod.symbol_stream_data = copy_into_consecutive(mi->stream_index_of_module_symbol_stream);
-		char* ptr = mod.symbol_stream_data.data();
+		// deduplicate symbols with identical addresses, as functions can be merged, pick first one
+		// currently in these cases I still regularily pick different symbols compared to dbghelp, I kinda gave up for the moment
+		// per-module I pick the first one, I remember seeing no apparent pattern (first one, last one etc.)
+		// and did take into accound the section contribution list as well) TODO: check again
+		ankerl::unordered_dense::map<uintptr_t, int> module_symbols;
+		// inlinee ID (function ID from IPI) -> first matching InlineeSourceLine entry
+		// yes another case of conflicting info, quite a lot of it in rust executables as well, afaik this makes no logical sense
+		ankerl::unordered_dense::map<CV_ItemId, InlineeSourceLine*> module_inlinee_c13;
+
 
 		char* sym_info = ptr;
-		mod.sym_info = sym_info;
 		ptr += mi->byte_size_of_symbol_information;
 		
 		//auto* c11_line_information = (u8*)ptr;
@@ -687,7 +780,7 @@ private:
 		auto* global_references = (u32*)ptr;
 		ptr += global_references_bytes_size;
 		
-		assert((ptr - mod.symbol_stream_data.data()) == streams[mi->stream_index_of_module_symbol_stream].size);
+		assert((ptr - symbol_stream_data.data()) == streams[mi->stream_index_of_module_symbol_stream].size);
 		
 		//logf("> Module %d\n", module_index);
 
@@ -739,7 +832,7 @@ private:
 						Lineinfo::encode_compressed_annotation(
 							site.inl->binaryAnnotations, anno_end,
 							it->second->fileId, it->second->sourceLineNum,
-							mod.file_checksum_ptr, binalloc);
+							extract_checksums_str, binalloc);
 					}
 				}
 				
@@ -809,9 +902,9 @@ private:
 						// this lookup, which is used to attach lineinfo to the symbols so we don't have to search the address space twice (like dbghelp does?)
 						// in case of overlapping symbols, only keep first occurance
 						if (module_symbols.find(module_raddr) == module_symbols.end()) {
-							auto* lineinfo = find_first_overlapping_lineinfo(s, &s.lineinfo_base_addr);
+							auto* lineinfo = find_single_overlapping_lineinfo(s, &s.lineinfo_base_addr);
 							if (lineinfo) {
-								s.p_lineinfo = Lineinfo::encode_c13_lineinfo(lineinfo, mod.file_checksum_ptr, binalloc);
+								s.p_lineinfo = Lineinfo::encode_c13_lineinfo(lineinfo, extract_checksums_str, binalloc);
 							}
 
 							int idx = (int)symbols.size();
@@ -977,13 +1070,20 @@ private:
 					ptr += sizeof(codeview_subsection_header);
 
 					if (header->type == DEBUG_S_FILECHKSMS) {
-						mod.file_checksum_ptr = ptr;
+						file_checksum_ptr = ptr;
 						break;
 					}
 					ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
 				}
 			}
 			
+			// It seems like we can get duplicate entries of the same inlinee id across different modules via InlineeSourceLine
+			// So in every module with a INLINESITE, the corresponding InlineeSourceLine and filename in DEBUG_S_FILECHKSMS exist in the same module
+			// but the same inlinee file id can exist in multiple modules
+			// this could be because due to link time optimization (the same function being inlined into different translation lines)
+			// but actually, sometimes the filepath differs (same header, paths, compiled on different machines?)
+			// so functions compiled from different copies of a header can get the same id
+		
 			auto read_inlinee_line_numbers = [&] (codeview_subsection_header* subsec) {
 				auto* ptr = (char*)subsec;
 				ptr += sizeof(codeview_subsection_header);
@@ -1077,7 +1177,7 @@ private:
 							auto* line_block2 = (codeview_line_block_header*)ptr2;
 							ptr2 += sizeof(codeview_line_block_header);
 							
-							auto* cksm = (codeview_file_checksum*)((char*)mod.file_checksum_ptr + line_block->offset_in_file_checksums);
+							auto* cksm = (codeview_file_checksum*)((char*)file_checksum_ptr + line_block->offset_in_file_checksums);
 							auto* sourcefile = names + cksm->offset_in_string_table;
 
 							assert(line_block->amount_of_lines == line_block2->amount_of_lines);
@@ -1396,7 +1496,7 @@ private:
 	}
 
 	void _reserve () {
-		modules.reserve(128);
+		//modules.reserve(128);
 		sections_sorted.reserve(32);
 
 		typeid2name.reserve(128);
@@ -1443,23 +1543,22 @@ public:
 		// read IPI (not sure what is stands for, something with IDs)
 		// assemble and extract fully scoped names for functions and member functions, referencing the TPI
 		read_IPI_stream();
+		
 		// read DBI, which contains list of all modules
 		// and "section contributions", which can be used for address -> module -> symbol lookups, but I am not using as I fully extract symbols from each module anyway
+		// also extracts section dump stream id
 		read_DBI();
-		
-		// read list of all sections
+
+		// read list of all sections, needed to map section-relative offsets to rva
 		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
 		read_section_header_dump();
-
+		
 		// read symbol record stream, which contains certain global symbols, including functions
 		// In practice any function symbol with code should appear in the modules with more information instead, functions will be appear duplicated here
 		// but dbghelp will return symbols from here, right now I return symbols from the modules first and use this as a fallback only
 		read_symbol_record_stream();
-
-		// read symbol stream for each module, this contains function symbols and all lineinfo
-		for (s16 module_index=0; module_index<(s16)modules.size(); module_index++) {
-			read_module_symbol_stream(module_index);
-		}
+		// read all module symbols streams via DBI, which contain function symbol data and all lineinfo
+		read_module_symbol_streams();
 		
 		symbols.sort_and_build_index();
 
@@ -1468,6 +1567,8 @@ public:
 
 		//print_all_symbols();
 	#endif
+		//print_dump_names();
+		//stralloc.print_dump();
 
 		//logf("PDB read.\n");
 	}
@@ -1559,7 +1660,7 @@ public:
 		auto* lineinfo = binalloc.get<void>(sym->p_lineinfo);
 		if (!lineinfo)
 			return false;
-		return Lineinfo::find_line_for_addr(lineinfo, rel_addr, names, out_src_loc);
+		return Lineinfo::find_line_for_addr(lineinfo, rel_addr, stralloc, out_src_loc);
 	}
 	
 	int trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs) {
@@ -1575,7 +1676,7 @@ public:
 			auto* site = binalloc.get<Inlinesite>(site_id);
 			SourceLoc encoded_loc = {};
 
-			if (Lineinfo::find_line_for_addr2(site->get_lineinfo(), proc_raddr, names, &encoded_loc)) {
+			if (Lineinfo::find_line_for_addr2(site->get_lineinfo(), proc_raddr, stralloc, &encoded_loc)) {
 				// Matching Inlinesite
 
 				out_locs[depth].fnname = stralloc[site->fnname];

@@ -186,8 +186,11 @@ struct StrAlloc {
 	StrAlloc () {
 		buf.reserve(1024*8);
 	}
-
-	const char* operator[] (sid offset) {
+	
+	char* operator[] (sid offset) {
+		return buf.data() + offset;
+	}
+	const char* operator[] (sid offset) const {
 		return buf.data() + offset;
 	}
 	
@@ -252,6 +255,18 @@ struct StrAlloc {
 		*cur++ = ':';
 
 		return offset;
+	}
+
+	void print_dump () const {
+		printf("StrAlloc:\n");
+
+		char const* cur = buf.data();
+		char const* end = cur + buf.size();
+
+		while (cur < end) {
+			printf("> [%8llx] %s\n", cur - buf.data(), cur);
+			cur += strlen(cur)+1;
+		}
 	}
 };
 

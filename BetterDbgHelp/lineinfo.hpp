@@ -32,9 +32,11 @@ class Lineinfo {
 	CodeRange const* get_ranges () const { return (CodeRange*)(this+1); }
 
 public:
+	// use template for lambda to avoid header source due to circular dep PDB_File <-> Lineinfo
+	template <typename FUNC>
 	static BinAlloc::bid encode_c13_lineinfo (
 			codeview_subsection_header* subsec,
-			void* file_checksums,
+			FUNC extract_checksums_str,
 			BinAlloc& alloc
 		) {
 		// Normally one Line header exists per function
@@ -92,8 +94,7 @@ public:
 			auto* line_block = (codeview_line_block_header*)ptr;
 			ptr += sizeof(codeview_line_block_header);
 			
-			auto* cksm = (codeview_file_checksum*)((char*)file_checksums + line_block->offset_in_file_checksums);
-			auto sourcefile = cksm->offset_in_string_table;
+			auto sourcefile = extract_checksums_str(line_block->offset_in_file_checksums);
 
 			auto* lines = (codeview_line*)ptr;
 			for (u32 i=0; i<line_block->amount_of_lines; i++) {
@@ -127,10 +128,11 @@ public:
 		return result_offs;
 	}
 	
+	template <typename FUNC>
 	static BinAlloc::bid encode_compressed_annotation (
 			PCompressedAnnotation annotations, PCompressedAnnotation anno_end,
 			u32 initial_fileId, u32 initialSourceLineNum,
-			void* file_checksums,
+			FUNC extract_checksums_str,
 			BinAlloc& alloc
 		) {
 		auto result_offs = alloc.push_default<Lineinfo>();
@@ -162,8 +164,7 @@ public:
 		
 
 		auto emit_prev_line = [&] () {
-			auto* cksm = (codeview_file_checksum*)((char*)file_checksums + prev_line.file_id);
-			auto sourcefile = cksm->offset_in_string_table;
+			auto sourcefile = extract_checksums_str(prev_line.file_id);
 
 			CodeRange range;
 			range.start = prev_line.code_offset;
@@ -291,7 +292,7 @@ public:
 		return result_offs;
 	}
 
-	bool _find_line_for_addr (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
+	bool _find_line_for_addr (uintptr_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) const {
 		auto* ranges = get_ranges();
 
 		CodeRange const* found_range = nullptr;
@@ -312,20 +313,20 @@ public:
 
 		if (found_range) {
 			*out_src_loc = {
-				pdb_names_table + found_range->sourcefile,
+				stralloc[found_range->sourcefile],
 				found_range->lineno
 			};
 			return true;
 		}
 		return false;
 	}
-	static bool find_line_for_addr (void* data, uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) {
-		return ((Lineinfo*)data)->_find_line_for_addr(rel_addr, pdb_names_table, out_src_loc);
+	static bool find_line_for_addr (void* data, uintptr_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
+		return ((Lineinfo*)data)->_find_line_for_addr(rel_addr, stralloc, out_src_loc);
 	}
 
 	// TODO: due to lineinfo acting weird,
 	// for the moment develop a replacement for binary annotations first, then make it work with lineinfo afterwards
-	bool _find_line_for_addr2 (uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) const {
+	bool _find_line_for_addr2 (uintptr_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) const {
 		auto* ranges = get_ranges();
 
 		CodeRange const* found_range = nullptr;
@@ -347,15 +348,15 @@ public:
 		if (found_range) assert(rel_addr >= found_range->start);
 		if (found_range && rel_addr < found_range->end) {
 			*out_src_loc = {
-				pdb_names_table + found_range->sourcefile,
+				stralloc[found_range->sourcefile],
 				found_range->lineno
 			};
 			return true;
 		}
 		return false;
 	}
-	static bool find_line_for_addr2 (void* data, uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) {
-		return ((Lineinfo*)data)->_find_line_for_addr2(rel_addr, pdb_names_table, out_src_loc);
+	static bool find_line_for_addr2 (void* data, uintptr_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
+		return ((Lineinfo*)data)->_find_line_for_addr2(rel_addr, stralloc, out_src_loc);
 	}
 };
 #else
@@ -533,9 +534,11 @@ class alignas(4) Lineinfo {
 	}
 
 public:
+	// use template for lambda to avoid header source due to circular dep PDB_File <-> Lineinfo
+	template <typename FUNC>
 	static BinAlloc::bid encode_c13_lineinfo (
 			codeview_subsection_header* subsec,
-			void* file_checksums,
+			FUNC extract_checksums_str,
 			BinAlloc& alloc
 		) {
 		// Normally one Line header exists per function
@@ -591,8 +594,7 @@ public:
 			auto* line_block = (codeview_line_block_header*)ptr;
 			ptr += sizeof(codeview_line_block_header);
 			
-			auto* cksm = (codeview_file_checksum*)((char*)file_checksums + line_block->offset_in_file_checksums);
-			auto sourcefile = cksm->offset_in_string_table;
+			auto sourcefile = extract_checksums_str(line_block->offset_in_file_checksums);
 
 			auto* lines = (codeview_line*)ptr;
 			for (u32 i=0; i<line_block->amount_of_lines; i++) {
@@ -631,10 +633,11 @@ public:
 		return encoder.result;
 	}
 	
+	template <typename FUNC>
 	static BinAlloc::bid encode_compressed_annotation (
 			PCompressedAnnotation annotations, PCompressedAnnotation anno_end,
 			u32 initial_fileId, u32 initialSourceLineNum,
-			void* file_checksums,
+			FUNC extract_checksums_str,
 			BinAlloc& alloc
 		) {
 		struct Line {
@@ -650,8 +653,7 @@ public:
 		Encoder encoder(alloc);
 
 		auto emit_range = [&] (Line& line) {
-			auto* cksm = (codeview_file_checksum*)((char*)file_checksums + line.file_id);
-			auto sourcefile = cksm->offset_in_string_table;
+			auto sourcefile = extract_checksums_str(line.file_id);
 
 			SourceRange range;
 			range.offset = line.code_offset;
@@ -790,7 +792,7 @@ public:
 		return result_offs;
 	}
 
-	static bool find_line_for_addr (void* data, uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) {
+	static bool find_line_for_addr (void* data, uintptr_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
 		
 		uint32_t found_sourcefile = 0;
 		uint32_t found_lineno = UINT32_MAX;
@@ -816,7 +818,7 @@ public:
 		
 		if (found_lineno != UINT32_MAX) {
 			*out_src_loc = {
-				pdb_names_table + found_sourcefile,
+				stralloc[found_sourcefile],
 				found_lineno
 			};
 			return true;
@@ -826,7 +828,7 @@ public:
 
 	// TODO: due to lineinfo acting weird,
 	// for the moment develop a replacement for binary annotations first, then make it work with lineinfo afterwards
-	static bool find_line_for_addr2 (void* data, uintptr_t rel_addr, const char* pdb_names_table, SourceLoc* out_src_loc) {
+	static bool find_line_for_addr2 (void* data, uintptr_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
 		
 		bool found = false;
 		decode(data, [&] (uint32_t offset, uint32_t end_offset, uint32_t lineno, uint32_t sourcefile, bool is_gap) {
@@ -834,7 +836,7 @@ public:
 			if (rel_addr < end_offset) {
 				if (!is_gap && rel_addr >= offset) {
 					*out_src_loc = {
-						pdb_names_table + sourcefile,
+						stralloc[sourcefile],
 						lineno
 					};
 					found = true;
