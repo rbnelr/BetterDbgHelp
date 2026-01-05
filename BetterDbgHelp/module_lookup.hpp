@@ -60,7 +60,7 @@ struct ModuleCache {
 	}
 
 	LoadedModule* find_module_for_addr (HANDLE inspectee, uintptr_t addr) {
-		ZoneScoped;
+		//ZoneScoped;
 
 		// Linear search shoule be fast enough for the moment
 		for (auto& m : sorted) {

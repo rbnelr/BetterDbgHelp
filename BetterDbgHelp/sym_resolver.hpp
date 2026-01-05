@@ -457,8 +457,9 @@ public:
 		mod_cache.clear(); // clear cache so this can be called repeatedly
 	}
 
-	__declspec(noinline) bool _measure_addr2sym (uintptr_t addr, LoadedModule* mod, SymResult* res) {
-		ZoneScoped;
+	//__declspec(noinline)
+	bool _measure_addr2sym (uintptr_t addr, LoadedModule* mod, SymResult* res) {
+		//ZoneScoped;
 
 		uintptr_t mod_raddr = addr - mod->base_addr;
 		res->module_path = mod->ansi_path.c_str();
@@ -509,7 +510,7 @@ public:
 	}
 	__declspec(noinline) bool measure_addr2sym (void* ptr, SymResult* res) {
 		auto _tCombinedAddr2sym = kiss::TimerMeasureZone::started(&tCombinedAddr2sym);
-		//ZoneScoped;
+		ZoneScoped;
 		
 		res->clear();
 		uintptr_t addr = (uintptr_t)ptr;

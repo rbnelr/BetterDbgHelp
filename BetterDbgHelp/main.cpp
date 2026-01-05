@@ -746,7 +746,7 @@ void profiling_pdb_parse (int iterations) {
 // so just try to find a good balance that is not to quick to get bad sampling results in tracy, nor too long to have to sit around waiting
 // that's why I play with the iteration counts so much
 void profiling_run () {
-	run_dbghelp = false;
+	run_dbghelp = true;
 	int mult = run_dbghelp ? 1 : 20;
 
 	example_addresses(false, false, 4000 * mult);
@@ -815,9 +815,12 @@ int main(int argc, const char** argv) {
 	//print_timings = false;
 	//example_addresses(true, false, 0);
 	//sweep_tests();
-	
+
+	//profiling_run();
 	//profiling_run_cached();
-	profiling_run_cachemiss();
+	//profiling_run_cachemiss();
+
+	profiling_pdb_parse(100);
 	
 	//try {
 	//	SymTesting sym("CityBuilderExample/city_builder_rel.exe");

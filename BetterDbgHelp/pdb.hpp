@@ -143,13 +143,14 @@ class PDB_File {
 	};
 	std::vector<Section> sections_sorted;
 	
-	hashmap<std::string_view, StrAlloc::sid> names_extracted;
-	
 	// deduplicate symbols with identical addresses, as functions can be merged, pick first one
 	// currently in these cases I still regularily pick different symbols compared to dbghelp, I kinda gave up for the moment
 	// I pick the first one, I remember seeing no apparent pattern (first one, last one etc.), but I may have messed up TODO:
 	hashmap<uintptr_t, int> extracted_symbol_addresses;
 	
+#if 0
+	hashmap<std::string_view, StrAlloc::sid> names_extracted;
+
 	// copy string from /names entry to stralloc, also deduplicate just in case
 	StrAlloc::sid extract_name (u32 names_offset) {
 		auto* str = names + names_offset;
@@ -163,6 +164,24 @@ class PDB_File {
 		names_extracted.emplace(strv, sid);
 		return sid;
 	}
+#else
+	// deduplicating with hashmap turns out to be a big bottleneck, actually, file names are not really duplicated in practice afaik
+	hashmap<u32, StrAlloc::sid> names_extracted;
+
+	// copy string from /names entry to stralloc
+	StrAlloc::sid extract_name (u32 names_offset) {
+
+		auto it = names_extracted.find(names_offset);
+		if (it != names_extracted.end())
+			return it->second;
+		
+		auto* str = names + names_offset;
+
+		auto sid = stralloc.push(str);
+		names_extracted.emplace(names_offset, sid);
+		return sid;
+	}
+#endif
 	
 	// Turns "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@4_KA" into "_OptionsStorage"
 	// like dbghelp does (it does this even without SYMOPT_UNDNAME, ie demangling)
@@ -565,6 +584,127 @@ class PDB_File {
 		}
 		return true;
 	}
+	
+	
+	// Did I not comment this 3 times already?
+	// Anyway, there are cases where lineinfo exists with a different address then the functions it covers:
+	// ex: __security_check_cookie: src\vctools\crt\vcstartup\src\gs\amd64\amdsecgs.asm
+	// likely here this is because while the c++ compiler generates one lineinfo entry per function with identical address
+	// the assembler for asm files generates just one lineinfo but the asm can contain multiple functions (and other symbols at arbitrary offsets?)
+	// In this case the function is 16 bytes after the lineinfo
+	// dbghelp likely does an entire second lookup, if you already did a symbol lookup for the lineinfo, which is slow
+	// instead my model is that while the addresses may not match, for each function there is likely only one lineinfo it overlaps
+	// so instead I lookup the lineinfo range the symbol touches at its base address and link that one to it
+	// in fact lineinfo will currently be duplicated in the resultling memory to simplify things, but this could be changed,
+	// but if its just asm files this is likely irrelevant
+	struct C13Lineinfo {
+		codeview_subsection_header* subsec;
+		codeview_line_header* header () { return (codeview_line_header*)(subsec+1); }
+	};
+	std::map<uintptr_t, C13Lineinfo> module_c13_lineinfo;
+	
+	codeview_subsection_header* find_single_overlapping_lineinfo (Symbol const& sym, uintptr_t* out_lineinfo_addr) {
+		if (module_c13_lineinfo.empty()) return nullptr;
+
+		// upper_bound returns first item larger than input (usually one past end of the range of equal items)
+			
+		// lineinfo to right, higher base address, or null if all lineinfos lower
+		auto upper = module_c13_lineinfo.upper_bound(sym.base_addr);
+			
+		// lineinfo to left, lower or equal base address, or null if all lineinfos higher
+		auto lower = upper; // awkward code with --lower because it-1 is not allowed for std::map
+		lower = upper != module_c13_lineinfo.begin() ? --lower : module_c13_lineinfo.end();
+
+		// return lower address lineinfo if range overlaps
+		if (lower != module_c13_lineinfo.end()) {
+			auto lineinfo_contrib_end = lower->first + lower->second.header()->contribution_size;
+			if (sym.base_addr < lineinfo_contrib_end) {
+				*out_lineinfo_addr = lower->first;
+				return lower->second.subsec;
+			}
+		}
+		// else test higher address lineinfo to handle weird cases of lineinfo having base address before symbol
+		// (__security_check_cookie : src\vctools\crt\vcstartup\src\gs\amd64\amdsecgs.asm)
+		if (upper != module_c13_lineinfo.end()) {
+			auto lineinfo_contrib_start = upper->first;
+			if (sym.base_addr + sym.size > lineinfo_contrib_start) {
+				*out_lineinfo_addr = upper->first;
+				return upper->second.subsec;
+			}
+		}
+		
+		return nullptr;
+	}
+
+	// inlinee ID (function ID from IPI) -> first matching InlineeSourceLine entry
+	// yes another case of conflicting info, quite a lot of it in rust executables as well, afaik this makes no logical sense
+	ankerl::unordered_dense::map<CV_ItemId, InlineeSourceLine*> module_inlinee_c13;
+
+	struct Site {
+		INLINESITESYM* inl;
+		BinAlloc::bid site_id = -1;
+	};
+	// TODO: should really optimize this
+	std::vector<std::vector<Site>> _inlinesites;
+
+	void push_inline_tree (char* sym_info, char* file_checksum_ptr, int cur_symbol) {
+		for (auto& level : _inlinesites) {
+			for (auto& site : level) {
+				auto it = module_inlinee_c13.find(site.inl->inlinee);
+				if (it == module_inlinee_c13.end())
+					continue;
+
+				auto name_it = IPI_id2name.find(site.inl->inlinee);
+				if (name_it == IPI_id2name.end())
+					continue;
+
+				auto* anno_end = (PCompressedAnnotation)((char*)site.inl + sizeof(u16) + site.inl->reclen); // length field of codeview_symbol_header not contained in length
+						
+				Inlinesite s = {};
+				s.fnname = name_it->second;
+				site.site_id = binalloc.push(s);
+
+				lineinfo::encode_compressed_annotation(
+					site.inl->binaryAnnotations, anno_end,
+					it->second->fileId, it->second->sourceLineNum,
+					[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
+						auto* cksm = (codeview_file_checksum*)((char*)file_checksum_ptr + offset_in_file_checksums);
+						return extract_name(cksm->offset_in_string_table);
+					}, binalloc);
+			}
+		}
+		
+		for (size_t l=0; l<_inlinesites.size(); l++) {
+			auto& level = _inlinesites[l];
+			auto* children_cur = l+1 < _inlinesites.size() ? _inlinesites[l+1].data() : nullptr;
+			auto* children_end = l+1 < _inlinesites.size() ? _inlinesites[l+1].data() + _inlinesites[l+1].size() : nullptr;
+
+			for (size_t i=0; i<level.size(); i++) {
+				auto& site = level[i];
+				auto* right_sibling = i+1 < level.size() ? &level[i+1] : nullptr;
+
+				auto* s = binalloc.get<Inlinesite>(site.site_id);
+				if (right_sibling && right_sibling->inl->pParent == site.inl->pParent)
+					s->pSibling = right_sibling->site_id; // else leave at -1
+
+				// iterate children list to find first child of this parent
+				if (children_cur) {
+					size_t pParent = (char*)site.inl - sym_info;
+					while (children_cur < children_end && children_cur->inl->pParent < pParent)
+						children_cur++;
+
+					if (children_cur < children_end && children_cur->inl->pParent == pParent) {
+						s->pChildren = children_cur->site_id;
+					}
+				}
+			}
+		}
+				
+		get_sym(cur_symbol).inline_depth = (uint8_t)std::min(_inlinesites.size(), (size_t)255);
+		if (!_inlinesites.empty() && !_inlinesites.front().empty())
+			get_sym(cur_symbol).p_inlinesites = _inlinesites.front().front().site_id;
+	}
+
 
 	void read_module_symbol_stream (s16 module_index, pdb_module_information* mi) {
 		if (mi->stream_index_of_module_symbol_stream == 0xffff)
@@ -574,66 +714,6 @@ class PDB_File {
 		char* ptr = symbol_stream_data.data();
 
 		char* file_checksum_ptr = nullptr;
-
-		auto extract_checksums_str = [this, &file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
-			auto* cksm = (codeview_file_checksum*)((char*)file_checksum_ptr + offset_in_file_checksums);
-			return extract_name(cksm->offset_in_string_table);
-		};
-
-		// Did I not comment this 3 times already?
-		// Anyway, there are cases where lineinfo exists with a different address then the functions it covers:
-		// ex: __security_check_cookie: src\vctools\crt\vcstartup\src\gs\amd64\amdsecgs.asm
-		// likely here this is because while the c++ compiler generates one lineinfo entry per function with identical address
-		// the assembler for asm files generates just one lineinfo but the asm can contain multiple functions (and other symbols at arbitrary offsets?)
-		// In this case the function is 16 bytes after the lineinfo
-		// dbghelp likely does an entire second lookup, if you already did a symbol lookup for the lineinfo, which is slow
-		// instead my model is that while the addresses may not match, for each function there is likely only one lineinfo it overlaps
-		// so instead I lookup the lineinfo range the symbol touches at its base address and link that one to it
-		// in fact lineinfo will currently be duplicated in the resultling memory to simplify things, but this could be changed,
-		// but if its just asm files this is likely irrelevant
-		struct C13Lineinfo {
-			codeview_subsection_header* subsec;
-			codeview_line_header* header () { return (codeview_line_header*)(subsec+1); }
-		};
-		std::map<uintptr_t, C13Lineinfo> c13_lineinfo;
-		
-		auto find_single_overlapping_lineinfo = [&] (Symbol const& sym, uintptr_t* out_lineinfo_addr) -> codeview_subsection_header* {
-			if (c13_lineinfo.empty()) return nullptr;
-
-			// upper_bound returns first item larger than input (usually one past end of the range of equal items)
-			
-			// lineinfo to right, higher base address, or null if all lineinfos lower
-			auto upper = c13_lineinfo.upper_bound(sym.base_addr);
-			
-			// lineinfo to left, lower or equal base address, or null if all lineinfos higher
-			auto lower = upper; // awkward code with --lower because it-1 is not allowed for std::map
-			lower = upper != c13_lineinfo.begin() ? --lower : c13_lineinfo.end();
-
-			// return lower address lineinfo if range overlaps
-			if (lower != c13_lineinfo.end()) {
-				auto lineinfo_contrib_end = lower->first + lower->second.header()->contribution_size;
-				if (sym.base_addr < lineinfo_contrib_end) {
-					*out_lineinfo_addr = lower->first;
-					return lower->second.subsec;
-				}
-			}
-			// else test higher address lineinfo to handle weird cases of lineinfo having base address before symbol
-			// (__security_check_cookie : src\vctools\crt\vcstartup\src\gs\amd64\amdsecgs.asm)
-			if (upper != c13_lineinfo.end()) {
-				auto lineinfo_contrib_start = upper->first;
-				if (sym.base_addr + sym.size > lineinfo_contrib_start) {
-					*out_lineinfo_addr = upper->first;
-					return upper->second.subsec;
-				}
-			}
-			
-			return nullptr;
-		};
-
-		// inlinee ID (function ID from IPI) -> first matching InlineeSourceLine entry
-		// yes another case of conflicting info, quite a lot of it in rust executables as well, afaik this makes no logical sense
-		ankerl::unordered_dense::map<CV_ItemId, InlineeSourceLine*> module_inlinee_c13;
-
 
 		char* sym_info = ptr;
 		ptr += mi->byte_size_of_symbol_information;
@@ -655,189 +735,8 @@ class PDB_File {
 		
 		//logf("> Module %d\n", module_index);
 
-		//// Symbol info
-		auto parse_symbol_info = [&] () {
-			char* ptr = sym_info;
-
-			u32 signature = *(u32*)ptr;
-			ptr += sizeof(u32);
-			assert(signature == 4); // CV_SIGNATURE_C13
-		
-			//logf(">> symbol_information\n");
-			
-			int cur_symbol = -1;
-			int inline_depth = 0;
-
-			struct Site {
-				INLINESITESYM* inl;
-				BinAlloc::bid site_id = -1;
-			};
-			std::vector<std::vector<Site>> inlinesites;
-
-			auto push_inline_tree = [&] () {
-				for (auto& level : inlinesites) {
-					for (auto& site : level) {
-						auto it = module_inlinee_c13.find(site.inl->inlinee);
-						if (it == module_inlinee_c13.end())
-							continue;
-
-						auto name_it = IPI_id2name.find(site.inl->inlinee);
-						if (name_it == IPI_id2name.end())
-							continue;
-
-						auto* anno_end = (PCompressedAnnotation)((char*)site.inl + sizeof(u16) + site.inl->reclen); // length field of codeview_symbol_header not contained in length
-						
-						Inlinesite s = {};
-						s.fnname = name_it->second;
-						site.site_id = binalloc.push(s);
-
-						lineinfo::encode_compressed_annotation(
-							site.inl->binaryAnnotations, anno_end,
-							it->second->fileId, it->second->sourceLineNum,
-							extract_checksums_str, binalloc);
-					}
-				}
-				
-				for (size_t l=0; l<inlinesites.size(); l++) {
-					auto& level = inlinesites[l];
-					auto* children_cur = l+1 < inlinesites.size() ? inlinesites[l+1].data() : nullptr;
-					auto* children_end = l+1 < inlinesites.size() ? inlinesites[l+1].data() + inlinesites[l+1].size() : nullptr;
-
-					for (size_t i=0; i<level.size(); i++) {
-						auto& site = level[i];
-						auto* right_sibling = i+1 < level.size() ? &level[i+1] : nullptr;
-
-						auto* s = binalloc.get<Inlinesite>(site.site_id);
-						if (right_sibling && right_sibling->inl->pParent == site.inl->pParent)
-							s->pSibling = right_sibling->site_id; // else leave at -1
-
-						// iterate children list to find first child of this parent
-						if (children_cur) {
-							size_t pParent = (char*)site.inl - sym_info;
-							while (children_cur < children_end && children_cur->inl->pParent < pParent)
-								children_cur++;
-
-							if (children_cur < children_end && children_cur->inl->pParent == pParent) {
-								s->pChildren = children_cur->site_id;
-							}
-						}
-					}
-				}
-				
-				get_sym(cur_symbol).inline_depth = (uint8_t)std::min(inlinesites.size(), (size_t)255);
-				if (!inlinesites.empty() && !inlinesites.front().empty())
-					get_sym(cur_symbol).p_inlinesites = inlinesites.front().front().site_id;
-			};
-
-			while (ptr < sym_info + mi->byte_size_of_symbol_information) {
-				auto sym = (codeview_symbol_header*)ptr;
-			
-				ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
-				ptr = align_up(ptr, 4);
-
-				//int entry_offs = (int)((char*)sym - sym_info);
-				//logf("> %7d [%4x] %d %s\n", entry_offs, sym->kind, sym->length, SYM_ENUM_e_str(sym->kind));
-
-				switch (sym->kind) {
-					case S_GPROC32: case S_LPROC32:
-					case S_GPROC32_ID: case S_LPROC32_ID: {
-						auto* proc = (PROCSYM32*)sym;
-						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
-						
-						//logf(">> %s %4d|%8x => %4llx, %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, module_raddr, proc->len, proc->name);
-
-						if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
-							auto bid = binalloc.push<Symbol>({});
-
-							Symbol s;
-							s.base_addr = module_raddr;
-							s.size = proc->len;
-							s.name = stralloc.push( (const char*)proc->name ); // TODO: make sure to not do this for unused symbols improve string buffer cache hit rate
-							s.module_index = module_index;
-
-							uintptr_t lineinfo_base_addr;
-							auto* lineinfo = find_single_overlapping_lineinfo(s, &lineinfo_base_addr);
-							if (lineinfo) {
-								int32_t symbol_offset = (int32_t)((intptr_t)module_raddr - (intptr_t)lineinfo_base_addr);
-								s.p_lineinfo = lineinfo::encode_c13_lineinfo(lineinfo, symbol_offset, extract_checksums_str, binalloc);
-							}
-
-							*binalloc.get<Symbol>(bid) = s;
-
-							int idx = (int)symbols.size();
-							symbols.push_back(bid);
-
-							extracted_symbol_addresses.emplace(module_raddr, idx);
-							cur_symbol = idx;
-						}
-					} break;
-					case S_INLINESITE: {
-						auto* inl = (INLINESITESYM*)sym;
-
-						// There is a weird test case I found where both dbghelp and my code return wrong results in a different way
-						// In my case one function name in the inlinee stack is wrong, yet the source line is correct
-						// I tried hard to find a bug in my code yet all seems to point to an inlinee id simply being wrong
-						// (INLINESITE and InlineeSourceLine match correctly, but inlinee id in IPI points to wrong name, correct name is at different id)
-						// This could suggest that I misunderstnad the way IDs work, yet all the other test cases work as expected
-						// I am 99% sure that the inlinee stack I return is correct other than the single wrong function name
-						// but the interesting bit is that dbghelp actually has the inlinee stack stop at this the level where I have the wrong function name
-						// this likely means that it detects something is wrong, but I can't seem to figure out how it does that
-						// so I have to assume a bug in LLVM, ideally I could also detect this error, but afaik there is no way of checking the correct callstack other than what I'm already doing
-						
-						//auto* parent = stack.empty() ? nullptr : stack.back();
-						//stack.push_back(inl);
-
-						auto* parent_entry = (codeview_symbol_header*)(sym_info + inl->pParent);
-						auto* end_entry = (codeview_symbol_header*)(sym_info + inl->pEnd);
-						assert(parent_entry->kind == S_INLINESITE
-							|| parent_entry->kind == S_GPROC32
-							|| parent_entry->kind == S_LPROC32
-							|| parent_entry->kind == S_GPROC32_ID
-							|| parent_entry->kind == S_LPROC32_ID
-						);
-						//if (parent_entry->kind == S_INLINESITE) {
-						//	assert(parent && parent == (INLINESITESYM*)parent_entry);
-						//}
-						assert(end_entry->kind == S_INLINESITE_END);
-
-						//inl->pParent // byte offs from symbol_information start of prev PROCSYM32 or INLINESITESYM, ie caller
-						//inl->pEnd // byte offs of INLINESITE_END
-						// inl->inlinee seems to be some kind of id that lets us look up line info, but not sure where that is and if that lineinfo is encoded horribly
-						// no idea what inl->binaryAnnotations is
-						
-						//if (cur_symbol >= 0 && symbols[cur_symbol].base_addr == 8864) {
-						//for (int i=0; i<inline_depth; i++) logf("  ");
-						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, stralloc[IPI_id2name.find(inl->inlinee)->second]);
-						//}
-
-						if (inlinesites.size() <= inline_depth)
-							inlinesites.emplace_back();
-						inlinesites[inline_depth].push_back({ inl });
-
-						inline_depth++;
-					} break;
-					case S_INLINESITE_END: {
-						assert(inline_depth > 0);
-						inline_depth--;
-					} break;
-					case S_END: {
-						assert(inline_depth == 0);
-
-						if (cur_symbol >= 0) {
-							push_inline_tree();
-						}
-						inlinesites.clear();
-
-						cur_symbol = -1;
-					} break;
-				}
-			}
-			assert((ptr - sym_info) == mi->byte_size_of_symbol_information);
-		};
-
 		//// C13 line info
-		
-		auto parse_c13 = [&] () {
+		{
 			{
 				//logf("> c13_line_information\n");
 				char* ptr = c13_line_information;
@@ -937,9 +836,9 @@ class PDB_File {
 				// Why are there always conflicting sets of data in PDBs?
 				// Even this basic C13 Data tends to exist for the same function multiple times (which tend to have conflicing contents as well)
 				// Picking the first one seems to have been working ok
-				auto check_duplicates = [=, &c13_lineinfo] () {
-					auto it = c13_lineinfo.find(module_raddr);
-					if (it != c13_lineinfo.end()) {
+				auto check_duplicates = [&] () {
+					auto it = module_c13_lineinfo.find(module_raddr);
+					if (it != module_c13_lineinfo.end()) {
 						logf("> Conflicing C13 Lineinfo\n");
 
 						auto* ptr1 = ptr;
@@ -983,7 +882,7 @@ class PDB_File {
 				};
 
 				//check_duplicates();
-				c13_lineinfo.try_emplace(module_raddr, C13Lineinfo{ subsec });
+				module_c13_lineinfo.try_emplace(module_raddr, C13Lineinfo{ subsec });
 				
 				// Line => Code range that has the same line number
 				// Block => Consecutive lines (in compiled binary) where all come from the same file
@@ -1037,15 +936,141 @@ class PDB_File {
 						case DEBUG_S_INLINEELINES: {
 							read_inlinee_line_numbers(header);
 						} break;
+						//case DEBUG_S_FILECHKSMS: {
+						//	file_checksum_ptr = ptr;
+						//} break;
 					}
 				}
 				ptr = (char*)header + sizeof(codeview_subsection_header) + header->length;
 			}
 			assert((ptr - c13_line_information) == mi->byte_size_of_c13_line_information);
-		};
+		}
 		
-		parse_c13();
-		parse_symbol_info();
+		//// Symbol info
+		{
+			char* ptr = sym_info;
+
+			u32 signature = *(u32*)ptr;
+			ptr += sizeof(u32);
+			assert(signature == 4); // CV_SIGNATURE_C13
+		
+			//logf(">> symbol_information\n");
+			
+			int cur_symbol = -1;
+			int inline_depth = 0;
+			
+			while (ptr < sym_info + mi->byte_size_of_symbol_information) {
+				auto sym = (codeview_symbol_header*)ptr;
+			
+				ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
+				ptr = align_up(ptr, 4);
+
+				//int entry_offs = (int)((char*)sym - sym_info);
+				//logf("> %7d [%4x] %d %s\n", entry_offs, sym->kind, sym->length, SYM_ENUM_e_str(sym->kind));
+
+				switch (sym->kind) {
+					case S_GPROC32: case S_LPROC32:
+					case S_GPROC32_ID: case S_LPROC32_ID: {
+						auto* proc = (PROCSYM32*)sym;
+						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
+						
+						//logf(">> %s %4d|%8x => %4llx, %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, module_raddr, proc->len, proc->name);
+
+						if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
+							auto bid = binalloc.push<Symbol>({});
+
+							Symbol s;
+							s.base_addr = module_raddr;
+							s.size = proc->len;
+							s.name = stralloc.push( (const char*)proc->name ); // TODO: make sure to not do this for unused symbols improve string buffer cache hit rate
+							s.module_index = module_index;
+
+							uintptr_t lineinfo_base_addr;
+							auto* lineinfo = find_single_overlapping_lineinfo(s, &lineinfo_base_addr);
+							if (lineinfo) {
+								int32_t symbol_offset = (int32_t)((intptr_t)module_raddr - (intptr_t)lineinfo_base_addr);
+								s.p_lineinfo = lineinfo::encode_c13_lineinfo(lineinfo, symbol_offset,
+								[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
+									auto* cksm = (codeview_file_checksum*)(file_checksum_ptr + offset_in_file_checksums);
+									return extract_name(cksm->offset_in_string_table);
+								}, binalloc);
+							}
+
+							*binalloc.get<Symbol>(bid) = s;
+
+							int idx = (int)symbols.size();
+							symbols.push_back(bid);
+
+							extracted_symbol_addresses.emplace(module_raddr, idx);
+							cur_symbol = idx;
+						}
+					} break;
+					case S_INLINESITE: {
+						auto* inl = (INLINESITESYM*)sym;
+
+						// There is a weird test case I found where both dbghelp and my code return wrong results in a different way
+						// In my case one function name in the inlinee stack is wrong, yet the source line is correct
+						// I tried hard to find a bug in my code yet all seems to point to an inlinee id simply being wrong
+						// (INLINESITE and InlineeSourceLine match correctly, but inlinee id in IPI points to wrong name, correct name is at different id)
+						// This could suggest that I misunderstnad the way IDs work, yet all the other test cases work as expected
+						// I am 99% sure that the inlinee stack I return is correct other than the single wrong function name
+						// but the interesting bit is that dbghelp actually has the inlinee stack stop at this the level where I have the wrong function name
+						// this likely means that it detects something is wrong, but I can't seem to figure out how it does that
+						// so I have to assume a bug in LLVM, ideally I could also detect this error, but afaik there is no way of checking the correct callstack other than what I'm already doing
+						
+						//auto* parent = stack.empty() ? nullptr : stack.back();
+						//stack.push_back(inl);
+
+						auto* parent_entry = (codeview_symbol_header*)(sym_info + inl->pParent);
+						auto* end_entry = (codeview_symbol_header*)(sym_info + inl->pEnd);
+						assert(parent_entry->kind == S_INLINESITE
+							|| parent_entry->kind == S_GPROC32
+							|| parent_entry->kind == S_LPROC32
+							|| parent_entry->kind == S_GPROC32_ID
+							|| parent_entry->kind == S_LPROC32_ID
+						);
+						//if (parent_entry->kind == S_INLINESITE) {
+						//	assert(parent && parent == (INLINESITESYM*)parent_entry);
+						//}
+						assert(end_entry->kind == S_INLINESITE_END);
+
+						//inl->pParent // byte offs from symbol_information start of prev PROCSYM32 or INLINESITESYM, ie caller
+						//inl->pEnd // byte offs of INLINESITE_END
+						// inl->inlinee seems to be some kind of id that lets us look up line info, but not sure where that is and if that lineinfo is encoded horribly
+						// no idea what inl->binaryAnnotations is
+						
+						//if (cur_symbol >= 0 && symbols[cur_symbol].base_addr == 8864) {
+						//for (int i=0; i<inline_depth; i++) logf("  ");
+						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, stralloc[IPI_id2name.find(inl->inlinee)->second]);
+						//}
+
+						if (_inlinesites.size() <= inline_depth)
+							_inlinesites.emplace_back();
+						_inlinesites[inline_depth].push_back({ inl });
+
+						inline_depth++;
+					} break;
+					case S_INLINESITE_END: {
+						assert(inline_depth > 0);
+						inline_depth--;
+					} break;
+					case S_END: {
+						assert(inline_depth == 0);
+
+						if (cur_symbol >= 0) {
+							push_inline_tree(sym_info, file_checksum_ptr, cur_symbol);
+						}
+						_inlinesites.clear();
+
+						cur_symbol = -1;
+					} break;
+				}
+			}
+			assert((ptr - sym_info) == mi->byte_size_of_symbol_information);
+		}
+
+		module_c13_lineinfo.clear();
+		module_inlinee_c13.clear();
 	}
 	
 	void read_symbol_record_stream () {

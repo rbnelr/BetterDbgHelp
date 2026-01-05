@@ -77,7 +77,7 @@ public:
 		constexpr size_t MaxNameSize = 8192;
 		char buf[sizeof(SYMBOL_INFO) + MaxNameSize] = {};
 
-		TimerMeasZone(tCombinedAddr2sym);
+		//TimerMeasZone(tCombinedAddr2sym);
 
 		auto* si = (SYMBOL_INFO*)buf;
 		si->SizeOfStruct = sizeof(SYMBOL_INFO);
@@ -87,7 +87,7 @@ public:
 
 		BOOL res1;
 		{
-			TimerMeasZone(tSymFromAddr);
+			//TimerMeasZone(tSymFromAddr);
 			res1 = SymFromAddr(inspectee, (DWORD64)addr, nullptr, si);
 		}
 		if (!res1) {
@@ -96,7 +96,7 @@ public:
 		
 		BOOL res2;
 		{
-			TimerMeasZone(tSymGetLineFromAddr64);
+			//TimerMeasZone(tSymGetLineFromAddr64);
 
 			IMAGEHLP_LINE64 line = {};
 			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
@@ -104,20 +104,20 @@ public:
 		}
 		
 		{
-			ZoneScopedNC("inlining", 0xAC563E);
+			//ZoneScopedNC("inlining", 0xAC563E);
 		
 			BOOL doInline = FALSE;
 			DWORD ctx = 0;
 			DWORD inlineNum = 0;
 			if (_SymAddrIncludeInlineTrace) {
 				{
-					TimerMeasZone(tSymAddrIncludeInlineTrace);
+					//TimerMeasZone(tSymAddrIncludeInlineTrace);
 					inlineNum = _SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
 				}
 
 				DWORD idx;
 				if (inlineNum != 0) {
-					TimerMeasZone(tSymQueryInlineTrace);
+					//TimerMeasZone(tSymQueryInlineTrace);
 					doInline = _SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
 				}
 			}
@@ -125,12 +125,12 @@ public:
 			if (doInline) {
 				for (DWORD i=0; i<inlineNum; i++) {
 					{
-						TimerMeasZone(tSymFromInlineContext);
+						//TimerMeasZone(tSymFromInlineContext);
 						res1 = _SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, si);
 					}
 				
 					if (res1) {
-						TimerMeasZone(tSymGetLineFromInlineContext);
+						//TimerMeasZone(tSymGetLineFromInlineContext);
 
 						IMAGEHLP_LINE64 line = {};
 						line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
