@@ -498,7 +498,7 @@ class PDB_File {
 
 		//// optional_debug_header_substream
 		opt_streams = (optional_debug_header_substream*)ptr;
-		
+
 		//byte_size_of_the_optional_debug_header_substream
 	}
 	void read_module_symbol_streams () {
@@ -1521,7 +1521,13 @@ public:
 		read_DBI();
 
 		// read list of all sections, needed to map section-relative offsets to rva
-		assert(opt_streams->stream_index_of_section_header_dump != 0xFFFF);
+		if (opt_streams->stream_index_of_section_header_dump == 0xFFFF)
+			throw std::runtime_error("Section dump not found!");
+
+		if (opt_streams->stream_index_of_omap_from_src_data != 0xFFFF ||
+			opt_streams->stream_index_of_omap_to_src_data != 0xFFFF)
+			throw std::runtime_error("PDB contains OMAP data, which invalidates some addresses, this is currently not implemented!");
+
 		read_section_header_dump();
 		
 		// read symbol record stream, which contains certain global symbols, including functions
