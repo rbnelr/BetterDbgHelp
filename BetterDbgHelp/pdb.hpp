@@ -1493,7 +1493,7 @@ public:
 	}
 
 	Symbol* find_symbol_for_addr (uintptr_t addr) {
-		ZoneScoped;
+		//ZoneScoped;
 		
 		auto idx = symbol_index.upper_bound((intptr_t)addr);
 		if (idx <= 0) {
@@ -1545,7 +1545,7 @@ public:
 	}
 	
 	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
-		ZoneScoped;
+		//ZoneScoped;
 		
 		assert(addr >= sym->base_addr);
 		if (addr >= sym->base_addr + sym->size) {
@@ -1561,7 +1561,7 @@ public:
 	}
 	
 	int trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs) {
-		ZoneScoped;
+		//ZoneScoped;
 		assert(sym->inline_depth > 0); // only call when actually needed!
 
 		uintptr_t proc_raddr = addr - sym->base_addr;

@@ -457,22 +457,8 @@ public:
 		mod_cache.clear(); // clear cache so this can be called repeatedly
 	}
 
-	// Hopefully noinline will ensure the compiler never optimized away unused SymResult, thus invalidating measurement!
-	// if observed will need to fix this at the callsite
-	__declspec(noinline) bool measure_addr2sym (void* ptr, SymResult* res) {
-		auto _tCombinedAddr2sym = kiss::TimerMeasureZone::started(&tCombinedAddr2sym);
+	__declspec(noinline) bool _measure_addr2sym (uintptr_t addr, LoadedModule* mod, SymResult* res) {
 		ZoneScoped;
-		
-		res->clear();
-		uintptr_t addr = (uintptr_t)ptr;
-
-		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
-		if (!mod) {
-			res->err = "Module not found";
-			return false;
-		}
-
-		{ ZoneScopedN("without pdb load");
 
 		uintptr_t mod_raddr = addr - mod->base_addr;
 		res->module_path = mod->ansi_path.c_str();
@@ -493,7 +479,7 @@ public:
 		
 		Symbol* sym;
 		{
-			TimerMeasZone(tfind_symbol_for_addr);
+			//TimerMeasZone(tfind_symbol_for_addr);
 			sym = mod->pdb->find_symbol_for_addr(mod_raddr);
 			if (!sym) {
 				res->err = "Symbol not found";
@@ -507,7 +493,7 @@ public:
 
 		SourceLoc src_loc = {};
 		{
-			TimerMeasZone(tfind_source_loc_for_addr);
+			//TimerMeasZone(tfind_source_loc_for_addr);
 			if (mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
 				res->src_filepath = src_loc.filepath;
 				res->src_lineno = src_loc.lineno;
@@ -515,12 +501,26 @@ public:
 		}
 
 		if (sym->inline_depth > 0) {
-			TimerMeasZone(ttrace_inlinesites);
+			//TimerMeasZone(ttrace_inlinesites);
 			res->num_inlines = mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES);
 		}
 
 		return res->valid();
+	}
+	__declspec(noinline) bool measure_addr2sym (void* ptr, SymResult* res) {
+		auto _tCombinedAddr2sym = kiss::TimerMeasureZone::started(&tCombinedAddr2sym);
+		//ZoneScoped;
+		
+		res->clear();
+		uintptr_t addr = (uintptr_t)ptr;
+
+		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
+		if (!mod) {
+			res->err = "Module not found";
+			return false;
 		}
+
+		return _measure_addr2sym(addr, mod, res);
 	}
 	
 	void print_pdb_stats (void* ptr) {

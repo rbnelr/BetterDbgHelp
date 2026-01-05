@@ -91,12 +91,16 @@ public:
 		it--;
 		assert(addr >= *it);
 		int block_idx = (int)(it - addresses.begin());
-
-		// TODO: profile
-		// Could also reorder loads instead
-		//_mm_prefetch(&blocks[block_idx], _MM_HINT_T0);
-		//_mm_prefetch(&block_indices[block_idx], _MM_HINT_T0);
 		
+		static_assert(BLOCKSZ == (16*2));
+
+		// do memory loads early to hide latency (?)
+		auto* pvalues = (__m256i const*)blocks[block_idx].offsets;
+		__m256i values0 = _mm256_load_si256(pvalues);
+		__m256i values1 = _mm256_load_si256(pvalues+1);
+
+		int upper_bound_idx = block_indices[block_idx];
+
 		intptr_t block_addr = *it;
 		intptr_t local_addr64 = addr - block_addr;
 
@@ -107,30 +111,6 @@ public:
 		int16_t local_addr = (int16_t)std::min(local_addr64, (intptr_t)(MAX_OFFSET-1));
 		__m256i simd_addr = _mm256_set1_epi16(local_addr);
 		
-		auto* ptr = (__m256i const*)blocks[block_idx].offsets;
-	#if 0
-		unsigned idx = 0;
-		for (int i=0; i<BLOCKSZ/16; i++) {
-			__m256i values = _mm256_load_si256(ptr + i);
-			// there are only two comparison ops available as AVX, > and ==
-			// val > addr => addr < val = !(addr >= val)
-			// 16x 2 bytes: 0x0000 => addr>=val, 0xffff => addr<val
-			__m256i mask = _mm256_cmpgt_epi16(values, simd_addr);
-			// turn 16 bit masks into 2 bit masks (1 bit mask version does not exist)
-			int bitmask = _mm256_movemask_epi8(mask);
-			// count lsb zero bits, ie find index of first 1
-			unsigned tzc = (unsigned)_tzcnt_u32(bitmask);
-			idx += tzc;
-			if (tzc < 32) break;
-		}
-		unsigned upper_bound_idx = idx / 2;
-	#else
-		// Unrolled
-		static_assert(BLOCKSZ == (16*2));
-
-		__m256i values0 = _mm256_load_si256(ptr);
-		__m256i values1 = _mm256_load_si256(ptr+1);
-		
 		__m256i mask0 = _mm256_cmpgt_epi16(values0, simd_addr);
 		__m256i mask1 = _mm256_cmpgt_epi16(values1, simd_addr);
 		
@@ -139,10 +119,8 @@ public:
 		
 		unsigned idx = (unsigned)_tzcnt_u64((bitmask1 << 32llu) | bitmask0);
 		assert(idx <= 64);
-		int upper_bound_idx = idx>>1;
-	#endif
+		upper_bound_idx += idx>>1;
 
-		upper_bound_idx += block_indices[block_idx];
 		return upper_bound_idx;
 	}
 };
