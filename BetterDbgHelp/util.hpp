@@ -292,6 +292,8 @@ struct BinAlloc {
 	}
 	
 	// get offset returned by next push<T>
+	// so aligned offset for T
+	// does not actually push yet!
 	template <typename T>
 	bid prepare_push () {
 		//static_assert(std::is_trivial_v<T>);
@@ -320,7 +322,7 @@ struct BinAlloc {
 	}
 
 	template <typename T>
-	bid push (T* data) {
+	bid push (T const& data) {
 		//static_assert(std::is_trivial_v<T>);
 		static_assert(std::is_standard_layout_v<T>);
 
@@ -328,7 +330,7 @@ struct BinAlloc {
 		auto* cur = buf.data() + offset;
 
 		//memcpy(cur, data, sizeof(T));
-		*(T*)cur = *data;
+		*(T*)cur = data;
 
 		return offset;
 	}
@@ -343,9 +345,17 @@ struct BinAlloc {
 	
 	template <typename T>
 	T* get (bid offset) const {
-		if (offset >= 0)
+		if (offset >= 0) {
+			assert(offset % alignof(T) == 0);
 			return (T*)(buf.data() + offset);
+		}
 		return nullptr;
+	}
+	template <typename T>
+	T* get_unchecked (bid offset) const {
+		assert(offset >= 0);
+		assert(offset % alignof(T) == 0);
+		return (T*)(buf.data() + offset);
 	}
 };
 

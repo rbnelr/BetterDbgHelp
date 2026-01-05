@@ -10,6 +10,9 @@
 
 // https://github.com/PascalBeyer/PDB-Documentation
 
+template <typename K, typename V>
+using hashmap = ankerl::unordered_dense::map<K, V>;
+
 struct Symbol {
 	uintptr_t base_addr = 0; // relative to module
 	uint32_t size = 0;
@@ -18,6 +21,8 @@ struct Symbol {
 	s16 module_index = -1;
 	uint8_t inline_depth = 0;
 
+	// Could eliminate now that allocated consecutive
+	// possibly via single inlinesites offset
 	BinAlloc::bid p_lineinfo = -1;
 	BinAlloc::bid p_inlinesites = -1;
 
@@ -46,18 +51,22 @@ typedef struct tagInlineeSourceLine {
 */
 struct Inlinesite {
 	StrAlloc::sid fnname;
-	CV_off32_t fileId;
-	CV_off32_t sourceLineNum;
 	BinAlloc::bid pSibling = -1;
 	BinAlloc::bid pChildren = -1;
 	// followed by Lineinfo
-	
-	void* get_lineinfo () {
-		return this+1;
+
+	char* get_lineinfo () {
+		return (char*)(this+1);
 	}
 
 	Inlinesite () {};
 };
+static_assert(alignof(Inlinesite) >= lineinfo::ALIGN);
+static_assert(sizeof(Inlinesite) % lineinfo::ALIGN == 0);
+
+static_assert(alignof(Symbol) == 8);
+static_assert(alignof(Inlinesite) == 4);
+static_assert(lineinfo::ALIGN == 4);
 
 // TODO: eventually extract pdb parsing code and have it output symbol resolver with all custom data structure
 class PDB_File {
@@ -113,7 +122,7 @@ class PDB_File {
 
 	//pdb_information_stream_header* info;
 
-	std::unordered_map<std::string_view, u32> named_streams;
+	hashmap<std::string_view, u32> named_streams;
 
 	// contains function names for source line info (both normal and inline stack)
 	const char* names = nullptr;
@@ -122,9 +131,9 @@ class PDB_File {
 	optional_debug_header_substream* opt_streams;
 
 	// Struct, Class and Union names from TPI, these are already fully formatted
-	ankerl::unordered_dense::map<CV_typ_t, const char*> typeid2name;
+	hashmap<CV_typ_t, const char*> typeid2name;
 	// Func and MemberFunc names from IPI (IDs will overlap with typeid2name!)
-	ankerl::unordered_dense::map<CV_ItemId, StrAlloc::sid> IPI_id2name;
+	hashmap<CV_ItemId, StrAlloc::sid> IPI_id2name;
 
 	struct Section {
 		std::string name;
@@ -134,41 +143,25 @@ class PDB_File {
 	};
 	std::vector<Section> sections_sorted;
 	
-	struct cstr_hash {
-		using is_transparent = void;
-		using is_avalanching = void;
-
-		[[nodiscard]] auto operator()(std::string_view str) const noexcept -> uint64_t {
-			return ankerl::unordered_dense::hash<std::string_view>{}(str);
-		}
-		[[nodiscard]] auto operator()(const char* str) const noexcept -> uint64_t {
-			return ankerl::unordered_dense::hash<std::string_view>{}(str);
-		}
-	};
-	ankerl::unordered_dense::map<u32, StrAlloc::sid> names_extracted;
-	ankerl::unordered_dense::map<const char*, StrAlloc::sid, cstr_hash> names_dedup;
-
+	hashmap<std::string_view, StrAlloc::sid> names_extracted;
+	
+	// deduplicate symbols with identical addresses, as functions can be merged, pick first one
+	// currently in these cases I still regularily pick different symbols compared to dbghelp, I kinda gave up for the moment
+	// I pick the first one, I remember seeing no apparent pattern (first one, last one etc.), but I may have messed up TODO:
+	hashmap<uintptr_t, int> extracted_symbol_addresses;
+	
 	// copy string from /names entry to stralloc, also deduplicate just in case
 	StrAlloc::sid extract_name (u32 names_offset) {
-		auto it = names_extracted.find(names_offset);
+		auto* str = names + names_offset;
+		auto strv = std::string_view(str);
+
+		auto it = names_extracted.find(strv);
 		if (it != names_extracted.end())
 			return it->second;
 		
-		auto* str = names + names_offset;
-
-		// deduplicate identical strings
-		auto it2 = names_dedup.find(str);
-		if (it2 != names_dedup.end()) {
-			// names entry not yet copied, but identical string was, just use that one instead
-		}
-		else {
-			// names entry not yet copied, and unique string, copy it
-			auto sid = stralloc.push(str);
-			it2 = names_dedup.emplace(str, sid).first;
-		}
-
-		names_extracted.emplace(names_offset, it2->second);
-		return it2->second;
+		auto sid = stralloc.push(str);
+		names_extracted.emplace(strv, sid);
+		return sid;
 	}
 	
 	// Turns "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@4_KA" into "_OptionsStorage"
@@ -325,14 +318,20 @@ class PDB_File {
 				//named_streams[std::move(key)] = kv.value;
 				std::string key = std::string(&string_buffer[kv.key]);
 				//logf("> %s: %d\n", &string_buffer[kv.key], kv.value);
-				named_streams[std::string_view(&string_buffer[kv.key])] = kv.value;
+				named_streams[&string_buffer[kv.key]] = kv.value;
 				continue;
 			}
 		}
 	}
 
 	void read_names () {
-		names_data = copy_into_consecutive(named_streams["/names"]);
+		if (!named_streams.contains("/names")) {
+			// this happens with pdbs downloaded from MS symbol servers, possibly because they are stripped
+			// Simply leave names as null works, as these files also don't contain references to it
+			return;
+		}
+
+		names_data = copy_into_consecutive(named_streams.at("/names"));
 		char* ptr = names_data.data();
 		
 		u32 signature = *(u32*)ptr;
@@ -359,11 +358,6 @@ class PDB_File {
 
 			u32* amount_of_strings = (u32*)ptr;
 			ptr += sizeof(u32);
-		}
-		else {
-			// signature == 0xFE
-			// this happens with pdbs downloaded from MS symbol servers, possibly because they are stripped
-			// Simply leave names as null works, as these files also don't contain references to it
 		}
 	}
 	
@@ -572,77 +566,6 @@ class PDB_File {
 		return true;
 	}
 
-	void read_symbol_record_stream () {
-		auto* dbi = (dbi_stream_header*)DBI_data.data();
-		symbol_record_stream_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
-		char* ptr = symbol_record_stream_data.data();
-
-		char* ptr2 = ptr;
-		
-		auto push_symbol = [this] (u32 offs, u32 size, u16 seg, const char* name, const char* _sym_type) [[msvc::forceinline]] {
-			//if (strstr(name, "__scrt_ucrt_dll_is_in_use")) {
-			//	printf("");
-			//}
-
-			uintptr_t addr;
-			if (!resolve_rva(offs, seg, &addr))
-				return;
-
-			auto trimmed_name = trim_mangled_name(name);
-			symbols.push_unsorted(Symbol{ addr, size, trimmed_name });
-		#if TRACK_ALL_SYMBOLS
-			sym_unfiltered.push_unsorted(Symbol{ addr, size, trimmed_name });
-		#endif
-
-			//logf("%s: %4d|%8x => %4llx, %s\n", _sym_type, seg, offs, addr, stralloc[trimmed_name]);
-		};
-		
-		while (ptr < ptr2 + symbol_record_stream_data.size()) {
-			auto sym = (codeview_symbol_header*)ptr;
-			
-			ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
-			ptr = align_up(ptr, 4);
-
-			switch (sym->kind) {
-				case S_PROCREF: case S_DATAREF: case S_LPROCREF: {
-					auto* s = (REFSYM2*)sym;
-					//logf("REFSYM2: %s\n", s->name);
-				} break;
-				case S_CONSTANT: case S_MANCONSTANT: { // mostly works, but weirdness with the name? maybe using 1 for zero length array is wrong
-					auto* s = (CONSTSYM*)sym;
-					//logf("CONSTSYM: %s\n", s->name);
-				} break;
-				case S_UDT: case S_COBOLUDT: {
-					auto* s = (UDTSYM*)sym;
-					//logf("UDTSYM: %s\n", s->name);
-				} break;
-				case S_LDATA32: case S_GDATA32: case S_LMANDATA: case S_GMANDATA: {
-					auto* s = (DATASYM32*)sym;
-					push_symbol(
-						s->off,
-						0, // TODO: these symbols don't have a size, possibly becasue the size is implicit based on the data type?,
-						s->seg,
-						(const char*)s->name,
-						"DATASYM32"
-					);
-				} break;
-				case S_PUB32: {
-					auto* s = (PUBSYM32*)sym;
-					push_symbol(
-						s->off,
-						0,
-						s->seg,
-						(const char*)s->name,
-						"PUBSYM32"
-					);
-				} break;
-				default: {
-					//logf("?: %x\n", sym->kind);
-				}
-			}
-		}
-		assert((ptr - ptr2) == symbol_record_stream_data.size());
-	}
 	void read_module_symbol_stream (s16 module_index, pdb_module_information* mi) {
 		if (mi->stream_index_of_module_symbol_stream == 0xffff)
 			return; // no symbol data
@@ -707,11 +630,6 @@ class PDB_File {
 			return nullptr;
 		};
 
-		// deduplicate symbols with identical addresses, as functions can be merged, pick first one
-		// currently in these cases I still regularily pick different symbols compared to dbghelp, I kinda gave up for the moment
-		// per-module I pick the first one, I remember seeing no apparent pattern (first one, last one etc.)
-		// and did take into accound the section contribution list as well) TODO: check again
-		ankerl::unordered_dense::map<uintptr_t, int> module_symbols;
 		// inlinee ID (function ID from IPI) -> first matching InlineeSourceLine entry
 		// yes another case of conflicting info, quite a lot of it in rust executables as well, afaik this makes no logical sense
 		ankerl::unordered_dense::map<CV_ItemId, InlineeSourceLine*> module_inlinee_c13;
@@ -750,13 +668,6 @@ class PDB_File {
 			int cur_symbol = -1;
 			int inline_depth = 0;
 
-		#define INLINE_TREE_DEPTH_FIRST 0
-		#if INLINE_TREE_DEPTH_FIRST // Depth-first inline tree
-			//std::vector<INLINESITESYM*> stack;
-
-			int max_inline_depth = 0;
-			std::vector<BinAlloc::bid> stack2;
-		#else
 			struct Site {
 				INLINESITESYM* inl;
 				BinAlloc::bid site_id = -1;
@@ -778,11 +689,9 @@ class PDB_File {
 						
 						Inlinesite s = {};
 						s.fnname = name_it->second;
-						s.fileId = it->second->fileId;
-						s.sourceLineNum = it->second->sourceLineNum;
-						site.site_id = binalloc.push(&s);
+						site.site_id = binalloc.push(s);
 
-						Lineinfo::encode_compressed_annotation(
+						lineinfo::encode_compressed_annotation(
 							site.inl->binaryAnnotations, anno_end,
 							it->second->fileId, it->second->sourceLineNum,
 							extract_checksums_str, binalloc);
@@ -815,11 +724,10 @@ class PDB_File {
 					}
 				}
 				
-				symbols[cur_symbol].inline_depth = (uint8_t)std::min(inlinesites.size(), (size_t)255);
+				get_sym(cur_symbol).inline_depth = (uint8_t)std::min(inlinesites.size(), (size_t)255);
 				if (!inlinesites.empty() && !inlinesites.front().empty())
-					symbols[cur_symbol].p_inlinesites = inlinesites.front().front().site_id;
+					get_sym(cur_symbol).p_inlinesites = inlinesites.front().front().site_id;
 			};
-		#endif
 
 			while (ptr < sym_info + mi->byte_size_of_symbol_information) {
 				auto sym = (codeview_symbol_header*)ptr;
@@ -836,47 +744,32 @@ class PDB_File {
 						auto* proc = (PROCSYM32*)sym;
 						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
 						
-						//if (strcmp((const char*)proc->name, "ext_ms_win_hyperv_hvemulation_l1_1_0_WHvEmulatorCreateEmulator")==0) {
-						//	printf("");
-						//}
 						//logf(">> %s %4d|%8x => %4llx, %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, module_raddr, proc->len, proc->name);
 
-						Symbol s;
-						s.base_addr = module_raddr;
-						s.size = proc->len;
-						s.name = stralloc.push( (const char*)proc->name ); // TODO: make sure to not do this for unused symbols improve string buffer cache hit rate
-						s.module_index = module_index;
+						if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
+							auto bid = binalloc.push<Symbol>({});
 
-					#if TRACK_ALL_SYMBOLS
-						sym_unfiltered.push_unsorted(Symbol(s));
-					#endif
+							Symbol s;
+							s.base_addr = module_raddr;
+							s.size = proc->len;
+							s.name = stralloc.push( (const char*)proc->name ); // TODO: make sure to not do this for unused symbols improve string buffer cache hit rate
+							s.module_index = module_index;
 
-						// Functions with identical binary can be merged, in which dbghelp seems to output the symbol of the first entry which is what we will do as well
-						// this lookup, which is used to attach lineinfo to the symbols so we don't have to search the address space twice (like dbghelp does?)
-						// in case of overlapping symbols, only keep first occurance
-						if (module_symbols.find(module_raddr) == module_symbols.end()) {
 							uintptr_t lineinfo_base_addr;
 							auto* lineinfo = find_single_overlapping_lineinfo(s, &lineinfo_base_addr);
 							if (lineinfo) {
 								int32_t symbol_offset = (int32_t)((intptr_t)module_raddr - (intptr_t)lineinfo_base_addr);
-								s.p_lineinfo = Lineinfo::encode_c13_lineinfo(lineinfo, symbol_offset, extract_checksums_str, binalloc);
+								s.p_lineinfo = lineinfo::encode_c13_lineinfo(lineinfo, symbol_offset, extract_checksums_str, binalloc);
 							}
 
-							int idx = (int)symbols.size();
-							symbols.push_unsorted(std::move(s));
+							*binalloc.get<Symbol>(bid) = s;
 
-							module_symbols.emplace(module_raddr, idx);
+							int idx = (int)symbols.size();
+							symbols.push_back(bid);
+
+							extracted_symbol_addresses.emplace(module_raddr, idx);
 							cur_symbol = idx;
 						}
-						//else {
-						//	// experimental, use last occurance
-						//
-						//	auto it = sym_map.find(module_raddr);
-						//	assert(it != sym_map.end());
-						//	if (it != sym_map.end()) {
-						//		sym_sorted[it->second] = std::move(s);
-						//	}
-						//}
 					} break;
 					case S_INLINESITE: {
 						auto* inl = (INLINESITESYM*)sym;
@@ -917,93 +810,23 @@ class PDB_File {
 						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, stralloc[IPI_id2name.find(inl->inlinee)->second]);
 						//}
 
-					#if INLINE_TREE_DEPTH_FIRST
-						if (cur_symbol >= 0) {
-							auto it = module_inlinee_c13.find(inl->inlinee);
-							if (it == module_inlinee_c13.end())
-								break;
-
-							auto name_it = IPI_id2name.find(inl->inlinee);
-							if (name_it == IPI_id2name.end())
-								break;
-
-							auto* anno_end = (PCompressedAnnotation)((char*)inl + sizeof(u16) + inl->reclen); // length field of codeview_symbol_header not contained in length
-							size_t anno_len = anno_end - inl->binaryAnnotations;
-
-							Inlinesite site = {};
-							site.fnname = name_it->second;
-							site.fileId = it->second->fileId;
-							site.sourceLineNum = it->second->sourceLineNum;
-							
-							auto site_id = binalloc.push(&site);
-							binalloc.push_bytes(inl->binaryAnnotations, anno_len);
-
-							char terminator = -1;
-							binalloc.push_bytes(&terminator, 1);
-
-							// why +2? see S_INLINESITE_END
-							stack2.resize(inline_depth+2, -1);
-
-							auto* left_sibling = binalloc.get<Inlinesite>(stack2[inline_depth]);
-							if (left_sibling) {
-								// If we are not the first sibling, set the previous siblings's next pointer
-								left_sibling->pSibling = site_id;
-							}
-							else if (inline_depth > 0) {
-								// Find parent site and set it's children pointer
-								auto* parent = binalloc.get<Inlinesite>(stack2[inline_depth-1]);
-								assert(parent->pChildren < 0);
-								parent->pChildren = site_id;
-							}
-							else {
-								// symbol gets pointer to first site
-								assert(symbols[cur_symbol].p_inlinesites == -1);
-								symbols[cur_symbol].p_inlinesites = site_id;
-							}
-
-							stack2[inline_depth] = site_id;
-						}
-
-						inline_depth++;
-						max_inline_depth = std::max(max_inline_depth, inline_depth);
-					#else
 						if (inlinesites.size() <= inline_depth)
 							inlinesites.emplace_back();
 						inlinesites[inline_depth].push_back({ inl });
 
 						inline_depth++;
-					#endif
 					} break;
 					case S_INLINESITE_END: {
 						assert(inline_depth > 0);
 						inline_depth--;
-
-					#if INLINE_TREE_DEPTH_FIRST
-						if (cur_symbol >= 0) {
-							// Awkward hack, S_INLINESITE_END, which ends an S_INLINESITE
-							// can't reset the current inlinesite, or else this pSibling can't be set in the next S_INLINESITE
-							// so instead reset one level up, so that on the next parent site, its children won't link to this child
-							stack2[inline_depth+1] = -1;
-						}
-					#endif
 					} break;
 					case S_END: {
 						assert(inline_depth == 0);
 
-					#if INLINE_TREE_DEPTH_FIRST
-						if (cur_symbol >= 0) {
-							if (max_inline_depth > 0) {
-								symbols[cur_symbol].inline_depth = (uint8_t)std::min(max_inline_depth, 255);
-							}
-						}
-						max_inline_depth = 0;
-						stack2.clear();
-					#else
 						if (cur_symbol >= 0) {
 							push_inline_tree();
 						}
 						inlinesites.clear();
-					#endif
 
 						cur_symbol = -1;
 					} break;
@@ -1223,6 +1046,79 @@ class PDB_File {
 		
 		parse_c13();
 		parse_symbol_info();
+	}
+	
+	void read_symbol_record_stream () {
+		auto* dbi = (dbi_stream_header*)DBI_data.data();
+		symbol_record_stream_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
+		char* ptr = symbol_record_stream_data.data();
+
+		char* ptr2 = ptr;
+		
+		auto push_symbol = [this] (u32 offs, u32 size, u16 seg, const char* name, const char* _sym_type) [[msvc::forceinline]] {
+			uintptr_t module_raddr;
+			if (!resolve_rva(offs, seg, &module_raddr))
+				return;
+
+			if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
+				
+				Symbol s = {};
+				s.base_addr = module_raddr;
+				s.size = size;
+				s.name = trim_mangled_name(name);
+
+				auto bid = binalloc.push(s);
+				symbols.push_back(bid);
+
+				//logf("%s: %4d|%8x => %4llx, %s\n", _sym_type, seg, offs, addr, stralloc[trimmed_name]);
+			}
+		};
+		
+		while (ptr < ptr2 + symbol_record_stream_data.size()) {
+			auto sym = (codeview_symbol_header*)ptr;
+			
+			ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
+			ptr = align_up(ptr, 4);
+
+			switch (sym->kind) {
+				case S_PROCREF: case S_DATAREF: case S_LPROCREF: {
+					auto* s = (REFSYM2*)sym;
+					//logf("REFSYM2: %s\n", s->name);
+				} break;
+				case S_CONSTANT: case S_MANCONSTANT: { // mostly works, but weirdness with the name? maybe using 1 for zero length array is wrong
+					auto* s = (CONSTSYM*)sym;
+					//logf("CONSTSYM: %s\n", s->name);
+				} break;
+				case S_UDT: case S_COBOLUDT: {
+					auto* s = (UDTSYM*)sym;
+					//logf("UDTSYM: %s\n", s->name);
+				} break;
+				case S_LDATA32: case S_GDATA32: case S_LMANDATA: case S_GMANDATA: {
+					auto* s = (DATASYM32*)sym;
+					push_symbol(
+						s->off,
+						0, // TODO: these symbols don't have a size, possibly becasue the size is implicit based on the data type?,
+						s->seg,
+						(const char*)s->name,
+						"DATASYM32"
+					);
+				} break;
+				case S_PUB32: {
+					auto* s = (PUBSYM32*)sym;
+					push_symbol(
+						s->off,
+						0,
+						s->seg,
+						(const char*)s->name,
+						"PUBSYM32"
+					);
+				} break;
+				default: {
+					//logf("?: %x\n", sym->kind);
+				}
+			}
+		}
+		assert((ptr - ptr2) == symbol_record_stream_data.size());
 	}
 	
 	void read_TPI_stream () {
@@ -1449,6 +1345,36 @@ class PDB_File {
 		}
 		assert((ptr - type_info) == header->byte_count_of_type_record_data_following_the_header);
 	}
+	
+	// Symbols as encountered in the symbol record stream and in each of the module streams are not sorted by address
+	// I will need to sort symbols for the address to symbol lookup however
+	// I want the custom extracted symbol data + lineinfo + inline lineinfo data to be consecutive in memory to achieve best performance on lookup
+	// There are two choices: keep this entire piece of memory sorted by symbol address or
+	// keep it in the originally encountered order and have the address lookup at the start be a random access
+	// to achieve the sorted version, I'd need to either:
+	// find symbols first, then sort them, then extract all their data out of order
+	//  this is complicated as I need to store data temporarily per symbol or per module, which is complex
+	// or extract data first, then somehow copy it into the correct order later
+	//  but due to how my data structures work, this may be harder or error prone than it appears, eg. a memcpy might violate alignment
+	// So instead I simply choose to keep symbols out of order and order just their indices instead
+
+	void finalize_symbols () {
+		typedef BinAlloc::bid Id;
+		auto _cmp = [&] (Id l, Id r) -> int {
+			return std::less<uintptr_t>()(binalloc.get_unchecked<Symbol>(l)->get_addr(), binalloc.get_unchecked<Symbol>(r)->get_addr());
+		};
+		//auto _less = [&] (Id l, Id r) -> bool {
+		//	return binalloc.get<Symbol>(l)->get_addr() < binalloc.get<Symbol>(r)->get_addr();
+		//};
+
+		// sort based on base_addr
+		// use stable sorts as symbol can and will overlap, so preserve insertion order
+		std::stable_sort(symbols.begin(), symbols.end(), _cmp);
+
+		symbol_index.build_index(symbols.size(), [&] (unsigned idx) {
+			return get_sym(idx).get_addr();
+		});
+	}
 
 	void _reserve () {
 		sections_sorted.reserve(32);
@@ -1467,7 +1393,20 @@ public:
 	BinAlloc binalloc;
 	StrAlloc stralloc;
 	
-	AddressIndex<Symbol> symbols;
+	AddressIndex symbol_index;
+
+	std::vector<BinAlloc::bid> symbols;
+
+	Symbol& get_sym (size_t idx) {
+		return *binalloc.get<Symbol>(symbols[idx]);
+	}
+	
+	void print_symbols () {
+		for (size_t i=0; i<symbols.size(); i++) {
+			auto& s = get_sym(i);
+			logf(">> %4llx %4x mod=%d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
+		}
+	}
 	
 #if TRACK_ALL_SYMBOLS
 	AddressIndex<Symbol> sym_unfiltered; // to support has_symbol_for_addr
@@ -1530,14 +1469,15 @@ public:
 
 		read_section_header_dump();
 		
+		// read all module symbols streams via DBI, which contain function symbol data and all lineinfo
+		read_module_symbol_streams();
+		
 		// read symbol record stream, which contains certain global symbols, including functions
 		// In practice any function symbol with code should appear in the modules with more information instead, functions will be appear duplicated here
 		// but dbghelp will return symbols from here, right now I return symbols from the modules first and use this as a fallback only
 		read_symbol_record_stream();
-		// read all module symbols streams via DBI, which contain function symbol data and all lineinfo
-		read_module_symbol_streams();
-		
-		symbols.sort_and_build_index();
+
+		finalize_symbols();
 
 	#if TRACK_ALL_SYMBOLS
 		sym_unfiltered.sort_and_build_index();
@@ -1547,41 +1487,22 @@ public:
 		//print_dump_names();
 		//stralloc.print_dump();
 
+		//print_symbols();
+
 		//logf("PDB read.\n");
 	}
 
 	Symbol* find_symbol_for_addr (uintptr_t addr) {
 		ZoneScoped;
 		
-		// TODO: This comment is confusing, also in case of multiple symbols with same offset, which one do we return (last?)
-		// This seems to work currently, but should take another look at this
-
-		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
-		// so use upper bound instead (returns first item bigger than addr), then use previous
-		auto it = symbols.upper_bound((intptr_t)addr);
-		if (it <= symbols.begin()) {
+		auto idx = symbol_index.upper_bound((intptr_t)addr);
+		if (idx <= 0) {
 			// first symbol after addr is first symbol, search failed
 			return nullptr;
 		}
-		it--;
+		idx--;
 		
-		uintptr_t sym_addr = it->base_addr;
-		Symbol* result = &*it;
-
-		// iterate backwards through any symbols with equal address to find first one
-		// but ignore ones in the global symbol_record_stream, as they contain mangled version of the symbol without size, but we sometimes want those if there is no real symbol
-		// like __ImageBase
-		// use raw ptr instead of iterator as we cannot seek before begin, which is annoying
-		for (auto cur=(&*it)-1; cur >= &*symbols.begin() && cur->base_addr == sym_addr; --cur) {
-			bool cur_from_module = cur->module_index != -1;
-			bool result_from_module = result->module_index != -1;
-			// earlier one always replaces, unless cur is not from module but previously written one was
-			if (cur_from_module || !result_from_module) {
-				result = cur;
-			}
-		}
-
-		return &*result;
+		return binalloc.get_unchecked<Symbol>(symbols[idx]);
 	}
 
 	// try diagnosing us returning different symbols from dbghelp by being able to check if overlapping symbol existed but we chose the "wrong" one
@@ -1633,10 +1554,10 @@ public:
 		}
 		uintptr_t sym_raddr = addr - sym->base_addr;
 		
-		auto* lineinfo = binalloc.get<void>(sym->p_lineinfo);
+		auto* lineinfo = binalloc.get<char>(sym->p_lineinfo);
 		if (!lineinfo)
 			return false;
-		return Lineinfo::find_line_for_addr(lineinfo, sym_raddr, stralloc, out_src_loc);
+		return lineinfo::find_line_for_addr(lineinfo, sym_raddr, stralloc, out_src_loc);
 	}
 	
 	int trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs) {
@@ -1652,7 +1573,7 @@ public:
 			auto* site = binalloc.get<Inlinesite>(site_id);
 			SourceLoc encoded_loc = {};
 
-			if (Lineinfo::find_line_for_addr2(site->get_lineinfo(), proc_raddr, stralloc, &encoded_loc)) {
+			if (lineinfo::find_line_for_addr_for_inline(site->get_lineinfo(), proc_raddr, stralloc, &encoded_loc)) {
 				// Matching Inlinesite
 
 				out_locs[depth].fnname = stralloc[site->fnname];
@@ -1686,7 +1607,7 @@ public:
 	};
 	void print_stats () {
 		logf("@ PDB %s:\n", path.string().c_str());
-		symbols.print_stats("Symbols");
+		symbol_index.print_stats(symbols.size(), "Symbols");
 
 		logf("binalloc: size: %.1f kB\n", binalloc.buf.size()/1000.0f);
 		logf("stralloc: size: %.1f kB\n", stralloc.buf.size()/1000.0f);

@@ -3,66 +3,10 @@
 
 #include <immintrin.h>
 
-template <typename T>
 class AddressIndex {
-public:
-	std::vector<T> vec;
-
-	void reserve (size_t size) {
-		vec.reserve(size);
-	}
-	void push_unsorted (T&& val) {
-		vec.push_back(val);
-	}
-
-	static __forceinline int _cmp (T const& l, T const& r) {
-		return std::less<uintptr_t>()(l.get_addr(), r.get_addr());
-	}
-	static __forceinline bool _less (T const& l, T const& r) {
-		return l.get_addr() < r.get_addr();
-	}
-
-	auto begin () { return vec.begin(); }
-	auto end () { return vec.end(); }
-	auto size () { return vec.size(); }
-
-	T& operator[] (int idx) {
-		return vec[idx];
-	}
-	//T& get (BinAlloc& alloc, int idx) {
-	//	return *alloc.get<T>(vec[idx]);
-	//}
-
-	void sort_vec () {
-		// sort based on base_addr
-		// use stable sorts as symbol can and will overlap, so try and preserve insertion order
-		// TODO: insertion order may not always actually replicate dbghelp.dll behavior though(?)
-		std::stable_sort(vec.begin(), vec.end(), _cmp);
-	}
-	std::vector<T>::iterator _upper_bound_on_vec (uintptr_t addr) {
-		auto dummy = T::dummy(addr);
-		return std::upper_bound(vec.begin(), vec.end(), dummy, _less);
-	}
-#if 0
-	// 'Upoptimized' = Normal binary search on sorted vector
-	void sort_and_build_index () {
-		ZoneScoped;
-
-
-		sort_vec();
-	}
-	std::vector<T>::iterator upper_bound (uintptr_t addr) {
-		return std::upper_bound(vec.begin(), vec.end(), T::dummy(addr), _less);
-	}
-
-	void print_stats (const char* name) {
-		logf("%s: symbol_lookup: #%llu log2: %f size: %.1f kB\n", name, vec.size(), log2f((float)vec.size()), sizeof(vec[0])*vec.size()/1000.0f);
-	}
-#else
-private:
 	template <typename T> using align_alloc = AlignedAllocator<T, 64>; // cache line alignment
 
-	static inline constexpr int BLOCKSZ = 16*2;
+	static inline constexpr int BLOCKSZ = 16*2; // Two AVX regs
 	static_assert(BLOCKSZ*sizeof(int16_t) % 32 == 0); // 16*u16 fits in AVX reg
 	
 	// TODO: only use 15 bits as avx comparison is only signed, could fix this by offsetting
@@ -85,10 +29,8 @@ private:
 	std::vector<unsigned, align_alloc<unsigned>> block_indices;
 	
 public:
-	void print_stats (const char* name) {
-		logf("%s: symbol_table: #%llu lookup log2: %f size: %.1f kB\n", name, vec.size(), log2f((float)vec.size()), sizeof(vec[0])*vec.size()/1000.0f);
-		
-		auto used_slots = vec.size();
+	void print_stats (size_t count, const char* name) {
+		auto used_slots = count;
 		auto num_slots = blocks.size()*BLOCKSZ;
 
 		logf("%s: simd blocks: #blocks %llu addresses: %.1f kB blocks: %.1f kB block_indices: %.1f kB\nwasted %.2f%%\n", name, blocks.size(),
@@ -97,17 +39,17 @@ public:
 			block_indices.size()*sizeof(block_indices[0])/1000.0f,
 			(1.0f - (float)used_slots / num_slots) * 100.0f);
 	}
-
-	void sort_and_build_index () {
+	
+	template <typename FUNC>
+	void build_index (size_t count, FUNC get_addr) {
 		ZoneScoped;
-		sort_vec();
 
-		if (vec.empty()) return;
-		assert(vec.size() <= INT_MAX);
+		if (count <= 0) return;
+		assert(count <= INT_MAX);
 
-		//addresses.reserve(vec.size()/BLOCKSZ);
-		blocks.reserve(vec.size()/BLOCKSZ);
-		block_indices.reserve(vec.size()/BLOCKSZ);
+		addresses.reserve(count/BLOCKSZ);
+		blocks.reserve(count/BLOCKSZ);
+		block_indices.reserve(count/BLOCKSZ);
 
 		// use signed 64 bit addresses as they are more convenient, should never overflow
 		Block* cur_block = nullptr;
@@ -116,8 +58,8 @@ public:
 		unsigned block_elem_index;
 		unsigned idx_in_block = BLOCKSZ; // causes initial block push
 		
-		for (unsigned i=0; i<(unsigned)vec.size(); i++) {
-			intptr_t addr = (intptr_t)vec[i].get_addr();
+		for (unsigned i=0; i<(unsigned)count; i++) {
+			intptr_t addr = (intptr_t)get_addr(i);
 
 			// if all slots are filled (or initial case)
 			// or if offset would be ==MAX_OFFSET, start new block
@@ -140,15 +82,20 @@ public:
 		}
 	}
 
-	__forceinline std::vector<T>::iterator upper_bound (intptr_t addr) {
+	__forceinline int upper_bound (intptr_t addr) {
 		auto it = std::upper_bound(addresses.begin(), addresses.end(), addr);
 		if (it <= addresses.begin()) // addr before first item
-			return vec.begin();
+			return 0;
 		
 		assert(it == addresses.end() || addr < *it);
 		it--;
 		assert(addr >= *it);
 		int block_idx = (int)(it - addresses.begin());
+
+		// TODO: profile
+		// Could also reorder loads instead
+		//_mm_prefetch(&blocks[block_idx], _MM_HINT_T0);
+		//_mm_prefetch(&block_indices[block_idx], _MM_HINT_T0);
 		
 		intptr_t block_addr = *it;
 		intptr_t local_addr64 = addr - block_addr;
@@ -196,11 +143,6 @@ public:
 	#endif
 
 		upper_bound_idx += block_indices[block_idx];
-		assert(upper_bound_idx > 0 && upper_bound_idx <= vec.size());
-		
-		auto res = vec.begin() + upper_bound_idx;
-		assert(res == _upper_bound_on_vec(addr));
-		return res;
+		return upper_bound_idx;
 	}
-#endif
 };

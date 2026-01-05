@@ -414,7 +414,7 @@ public:
 			return false;
 		}
 
-		auto sym = mod->pdb->find_symbol_for_addr(mod_raddr);
+		auto* sym = mod->pdb->find_symbol_for_addr(mod_raddr);
 		if (!sym) {
 			res->err = "Symbol not found";
 			return false;
