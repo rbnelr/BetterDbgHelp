@@ -225,7 +225,8 @@ struct StrAlloc {
 		sid offset = _grow(len+1);
 		auto* cur = buf.data() + offset;
 
-		memcpy(cur, str, len); cur += len;
+		memcpy(cur, str, len);
+		cur += len;
 		*cur++ = '\0';
 
 		return offset;
@@ -257,6 +258,16 @@ struct StrAlloc {
 		memcpy(cur, scope, len); cur += len;
 		*cur++ = ':';
 		*cur++ = ':';
+
+		return offset;
+	}
+
+	sid push_bytes (const void* ptr, size_t len) {
+		sid offset = _grow(len);
+		auto* cur = buf.data() + offset;
+
+		memcpy(cur, ptr, len);
+		cur += len;
 
 		return offset;
 	}
@@ -497,7 +508,7 @@ struct BinAlloc {
 		return offset;
 	}
 
-	bid push_bytes (void* ptr, size_t len) {
+	bid push_bytes (const void* ptr, size_t len) {
 		bid offset = _grow_to_align(len, 1);
 		auto* cur = _data + offset;
 

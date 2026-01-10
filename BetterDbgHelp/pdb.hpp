@@ -146,9 +146,20 @@ class PDB_File {
 	// I pick the first one, I remember seeing no apparent pattern (first one, last one etc.), but I may have messed up
 	hashmap<uintptr_t, int> extracted_symbol_addresses;
 
+#define EXTRACT_ALL_NAMES 1
+#if !EXTRACT_ALL_NAMES
 	hashmap<u32, StrAlloc::sid> names_extracted;
 	// copy string from /names entry to stralloc on first reference
-	// TODO: this is a big bottleneck in reading the pdb, could simply copy the names buffer 1 to 1 and simply translate the offsets
+	
+	// copy names buffer 1 to 1 simply offset pointers to extract as an optimziation
+	// NOTE: /names contains many many filepaths, it does not appear that these are duplicated
+	// which is why I removed the string-hashmap based deduplication I did previously
+	// but it does contain many strings that are unused by us, for instance it appears that every single included header is referenced, even if it contained no generated code or perhaps only dead code
+	// also in just the city builder executable lots of type names is in there (no idea why just in that one)
+	
+	// TODO: this is a big bottleneck in reading the pdb
+	// so the EXTRACT_ALL_NAMES optimization trades memory use for faster pdb reading speed
+	// if I created my own file format to be cached after conversion this would be worth it to do
 	StrAlloc::sid extract_name (u32 names_offset) {
 
 		auto it = names_extracted.find(names_offset);
@@ -161,7 +172,19 @@ class PDB_File {
 		names_extracted.emplace(names_offset, sid);
 		return sid;
 	}
-	
+#else
+	// despite the names_extracted lookup showing up in the profiler this only speeds things up by a few percent, probably not worth it
+	StrAlloc::sid names_base;
+	void copy_names_strings () {
+		names_base = stralloc.push_bytes(names, names_size);
+	}
+
+	StrAlloc::sid extract_name (u32 names_offset) {
+		auto sid = names_base + names_offset;
+		return sid;
+	}
+#endif
+
 	// Turns "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@4_KA" into "_OptionsStorage"
 	// like dbghelp does (it does this even without SYMOPT_UNDNAME, ie demangling)
 	// dbghelp seems to only process "?..." not "??..." names
@@ -334,7 +357,7 @@ class PDB_File {
 
 		names_data = copy_into_consecutive(named_streams.at("/names"));
 		char* ptr = names_data.data();
-		
+
 		u32 signature = *(u32*)ptr;
 		ptr += sizeof(u32);
 		if (signature == 0xEFFEEFFE) {
@@ -348,6 +371,10 @@ class PDB_File {
 			names = ptr;
 			names_size = string_buffer_size;
 			ptr += string_buffer_size;
+
+		#if EXTRACT_ALL_NAMES
+			copy_names_strings();
+		#endif
 			
 			// There is somd kind of hashmap in here, is this is a hashmap from string -> type/symbol id?
 			// Presumably this is not useful to me in this project
@@ -363,12 +390,19 @@ class PDB_File {
 	}
 	
 	void print_dump_names () const {
-		printf("PDB /names string buffer:\n");
+		logf("PDB /names string buffer:\n");
 		char const* cur = names;
 		char const* end = cur + names_size;
 
 		while (cur < end) {
-			printf("> [%8llx] %s\n", cur - names, cur);
+			auto offset = cur - names;
+		#if !EXTRACT_ALL_NAMES
+			char const* used = names_extracted.contains((uint32_t)offset) ? "U":" ";
+		#else
+			char const* used = "U";
+		#endif
+
+			logf("> [%8llx] %s %s\n", offset, used, cur);
 			cur += strlen(cur)+1;
 		}
 	}
