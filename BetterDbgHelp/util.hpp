@@ -179,32 +179,40 @@ public:
 	}
 };
 
-struct VirtualMemoryVector {
+#if 1
+class VirtualMemoryVector {
 	char* _data = nullptr;
 	int32_t _size = 0;
 	int32_t _capacity = 0;
+public:
 
 	static inline constexpr size_t MAX_CAPACITY = 1llu << 31;
 	static inline constexpr size_t GROW_BLOCK_SIZE = 1024*32;
+
+	const char* data () const { return _data; }
+	char* data () { return _data; }
+	int32_t size () const { return _size; }
 	
 	VirtualMemoryVector () {
 		_data = (char*)VirtualAlloc(nullptr, MAX_CAPACITY, MEM_RESERVE, PAGE_NOACCESS);
 		_realloc(GROW_BLOCK_SIZE);
 	}
 	~VirtualMemoryVector () {
+	#if TRACY_MEMORY_PROFILING
 		//if (_capacity > 0) { TracyFree(_data); }
 		size_t offs = 0;
 		while (offs < _capacity) {
 			TracyFree(_data + offs);
 			offs += GROW_BLOCK_SIZE;
 		}
-
+	#endif
 		VirtualFree(_data, 0, MEM_RELEASE);
 	}
 
 	__declspec(noinline) void _realloc (int32_t min_capacity) {
 		auto new_capacity = (min_capacity + GROW_BLOCK_SIZE-1) & ~(GROW_BLOCK_SIZE-1);
 		
+	#if TRACY_MEMORY_PROFILING
 		//if (_capacity > 0) { TracyFree(_data); }
 		//TracyAlloc(_data, new_capacity);
 		size_t offs = _capacity;
@@ -212,6 +220,7 @@ struct VirtualMemoryVector {
 			TracyAlloc(_data + offs, GROW_BLOCK_SIZE);
 			offs += GROW_BLOCK_SIZE;
 		}
+	#endif
 
 		VirtualAlloc(_data + _capacity, new_capacity-_capacity, MEM_COMMIT, PAGE_READWRITE);
 		_capacity = (int32_t)new_capacity;
@@ -253,127 +262,68 @@ struct VirtualMemoryVector {
 		return (int32_t)offset;
 	}
 };
+typedef VirtualMemoryVector MemoryVector;
+#else
+class MemoryVector {
+	std::vector<char> vec;
+public:
+	static inline constexpr size_t MAX_CAPACITY = 1llu << 31;
 
-#if 0
-struct StrAlloc {
-	typedef int32_t sid; // Strbuf index
-	std::vector<char> buf;
+	const char* data () const { return vec.data(); }
+	char* data () { return vec.data(); }
+	int32_t size () const { return (int32_t)vec.size(); }
+	
+	MemoryVector () {
+		vec.reserve(1024*32);
+	}
 
-	StrAlloc () {
-		buf.reserve(1024*8);
+	__declspec(noinline) void _realloc (int32_t min_capacity) {
+		vec.reserve(min_capacity);
 	}
 	
-	size_t size () const {
-		return buf.size();
-	}
-	
-	char* operator[] (sid offset) {
-		return buf.data() + offset;
-	}
-	const char* operator[] (sid offset) const {
-		return buf.data() + offset;
-	}
-	
-	static_assert(sizeof(sid) == sizeof(int32_t));
-	sid _grow (size_t len) {
-		auto offset = buf.size();
-		buf.resize(offset + len);
+	__forceinline int32_t _grow_to_align (size_t size, size_t align) {
+		auto offset = vec.size();
+		auto padded_offset = (offset + align-1) & ~(align-1);
+		auto padding_size = padded_offset - offset;
+
+		auto new_size = padded_offset + size;
+		assert(new_size <= MAX_CAPACITY);
+
+		vec.resize((int32_t)new_size);
+
+		if (padding_size > 0)
+			memset(vec.data() + padded_offset, 0, padding_size); // Always pad with zeros
 		
-		if (offset > INT_MAX) {
-			assert(false);
-		}
-		return (sid)offset;
+		return (int32_t)padded_offset;
 	}
-	sid get_offset () {
-		auto offset = buf.size();
-		if (offset > INT_MAX) {
-			assert(false);
-		}
-		return (sid)offset;
-	}
-	
-	// push null-terminated
-	sid push (const char* str) {
-		return push(str, strlen(str));
-	}
-	// push substr (non-null-terminated substr, will be null-terminated on write)
-	sid push (const char* str, size_t len) {
-		sid offset = _grow(len+1);
-		auto* cur = buf.data() + offset;
 
-		memcpy(cur, str, len);
-		cur += len;
-		*cur++ = '\0';
+	__forceinline int32_t _grow_noalign (size_t size, size_t align) {
+		auto offset = vec.size();
+		assert((offset % align) == 0);
 
-		return offset;
-	}
-	
-	// concat null-terminated strings
-	sid push_concat (const char* a, const char* b, const char* c) {
-		auto la = strlen(a);
-		auto lb = strlen(b);
-		auto lc = strlen(c);
+		auto new_size = offset + size;
+		assert(new_size <= MAX_CAPACITY);
+
+		vec.resize((int32_t)new_size);
 		
-		sid offset = _grow(la+lb+lc+1);
-		auto* cur = buf.data() + offset;
-
-		memcpy(cur, a, la); cur += la;
-		memcpy(cur, b, lb); cur += lb;
-		memcpy(cur, c, lc+1);
-
-		return offset;
-	}
-	// push null terminated string + "::" but omit null-terminator to allow easy concatination
-	// (followed by a normal push to terminate)
-	sid push_concat_scope_no_terminate (const char* scope) {
-		auto len = strlen(scope);
-		
-		sid offset = _grow(len + 2);
-		auto* cur = buf.data() + offset;
-
-		memcpy(cur, scope, len); cur += len;
-		*cur++ = ':';
-		*cur++ = ':';
-
-		return offset;
-	}
-
-	sid push_bytes (const void* ptr, size_t len) {
-		sid offset = _grow(len);
-		auto* cur = buf.data() + offset;
-
-		memcpy(cur, ptr, len);
-		cur += len;
-
-		return offset;
-	}
-
-	void print_dump () const {
-		printf("StrAlloc:\n");
-
-		char const* cur = buf.data();
-		char const* end = cur + buf.size();
-
-		while (cur < end) {
-			printf("> [%8llx] %s\n", cur - buf.data(), cur);
-			cur += strlen(cur)+1;
-		}
+		return (int32_t)offset;
 	}
 };
-#else
+#endif
+
 struct StrAlloc {
 	typedef int32_t sid; // Strbuf index
-	VirtualMemoryVector v;
+	MemoryVector v;
 	
 	size_t size () const {
-		return v._size;
+		return v.size();
 	}
 	
 	char* operator[] (sid offset) {
-		return v._data + offset;
+		return v.data() + offset;
 	}
 	const char* operator[] (sid offset) const {
-		return v._data + offset;
+		return v.data() + offset;
 	}
 	
 	static_assert(sizeof(sid) == sizeof(int32_t));
@@ -381,7 +331,7 @@ struct StrAlloc {
 		return (sid)v._grow_noalign(len, 1);
 	}
 	sid get_offset () {
-		return (sid)v._size;
+		return (sid)v.size();
 	}
 	
 	// push null-terminated
@@ -391,7 +341,7 @@ struct StrAlloc {
 	// push substr (non-null-terminated substr, will be null-terminated on write)
 	sid push (const char* str, size_t len) {
 		sid offset = _grow(len+1);
-		auto* cur = v._data + offset;
+		auto* cur = v.data() + offset;
 
 		memcpy(cur, str, len);
 		cur += len;
@@ -407,7 +357,7 @@ struct StrAlloc {
 		auto lc = strlen(c);
 		
 		sid offset = _grow(la+lb+lc+1);
-		auto* cur = v._data + offset;
+		auto* cur = v.data() + offset;
 
 		memcpy(cur, a, la); cur += la;
 		memcpy(cur, b, lb); cur += lb;
@@ -421,7 +371,7 @@ struct StrAlloc {
 		auto len = strlen(scope);
 		
 		sid offset = _grow(len + 2);
-		auto* cur = v._data + offset;
+		auto* cur = v.data() + offset;
 
 		memcpy(cur, scope, len); cur += len;
 		*cur++ = ':';
@@ -432,7 +382,7 @@ struct StrAlloc {
 
 	sid push_bytes (const void* ptr, size_t len) {
 		sid offset = _grow(len);
-		auto* cur = v._data + offset;
+		auto* cur = v.data() + offset;
 
 		memcpy(cur, ptr, len);
 		cur += len;
@@ -443,26 +393,25 @@ struct StrAlloc {
 	void print_dump () const {
 		printf("StrAlloc:\n");
 
-		char const* cur = v._data;
-		char const* end = cur + v._size;
+		char const* cur = v.data();
+		char const* end = cur + v.size();
 
 		while (cur < end) {
-			printf("> [%8llx] %s\n", cur - v._data, cur);
+			printf("> [%8llx] %s\n", cur - v.data(), cur);
 			cur += strlen(cur)+1;
 		}
 	}
 };
-#endif
 
 // Use memory reservation to push data with having to copy on grow
 // gives a very good pdb parsing speedup, added benefit of stable pointers, but I'm not sure is smart to utilize that
 struct BinAlloc {
 	typedef int32_t bid;
 	
-	VirtualMemoryVector v;
+	MemoryVector v;
 
 	size_t size () const {
-		return v._size;
+		return v.size();
 	}
 	
 	template <typename T>
@@ -471,7 +420,7 @@ struct BinAlloc {
 		static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>);
 
 		bid offset = v._grow_to_align(sizeof(T), alignof(T));
-		T* ptr = (T*)(v._data + offset);
+		T* ptr = (T*)(v.data() + offset);
 
 		*out_offset = offset;
 		return ptr;
@@ -479,7 +428,7 @@ struct BinAlloc {
 	
 	template <typename T>
 	__forceinline bool is_aliged () {
-		return ((size_t)v._size % alignof(T)) == 0;
+		return ((size_t)v.size() % alignof(T)) == 0;
 	}
 	template <typename T>
 	__forceinline T* _push_noalign (bid* out_offset) {
@@ -487,7 +436,7 @@ struct BinAlloc {
 		static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>);
 
 		bid offset = v._grow_noalign(sizeof(T), alignof(T));
-		T* ptr = (T*)(v._data + offset);
+		T* ptr = (T*)(v.data() + offset);
 
 		*out_offset = offset;
 		return ptr;
@@ -535,7 +484,7 @@ struct BinAlloc {
 
 	bid push_bytes (const void* ptr, size_t len) {
 		bid offset = v._grow_to_align(len, 1);
-		auto* cur = v._data + offset;
+		auto* cur = v.data() + offset;
 
 		memcpy(cur, ptr, len);
 
@@ -546,7 +495,7 @@ struct BinAlloc {
 	__forceinline T* get (bid offset) const {
 		if (offset >= 0) {
 			assert(offset % alignof(T) == 0);
-			return (T*)(v._data + offset);
+			return (T*)(v.data() + offset);
 		}
 		return nullptr;
 	}
@@ -554,7 +503,7 @@ struct BinAlloc {
 	__forceinline T* get_unchecked (bid offset) const {
 		assert(offset >= 0);
 		assert(offset % alignof(T) == 0);
-		return (T*)(v._data + offset);
+		return (T*)(v.data() + offset);
 	}
 };
 

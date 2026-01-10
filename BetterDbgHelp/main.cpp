@@ -1,3 +1,6 @@
+
+#define TRACY_MEMORY_PROFILING 0
+
 #include "util.hpp"
 #include <functional>
 #include <random>
@@ -8,6 +11,7 @@
 #include "dbghelp.hpp"
 #include "sym_resolver.hpp"
 
+#if TRACY_MEMORY_PROFILING
 // Track standard memory allocation via tracy
 // (VirtualAlloc is tracked seperately)
 void* operator new (std::size_t count) {
@@ -19,6 +23,7 @@ void operator delete (void* ptr) noexcept {
 	TracyFree(ptr);
 	free(ptr);
 }
+#endif
 
 bool run_dbghelp = true;
 bool clear_cpu_cache = false;
@@ -732,6 +737,7 @@ void profiling_pdb_parse (int iterations) {
 
 	logf("=============== PDB parsing Profiling =============\n");
 
+	/*
 	try {
 		ZoneScopedN("TinyProgram.exe");
 		SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
@@ -744,11 +750,18 @@ void profiling_pdb_parse (int iterations) {
 		SymTesting sym("CityBuilderExample/city_builder_rel.exe");
 		sym.measure_pdb_parse(".exe", iterations/2);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
-	
+
 	try {
 		ZoneScopedN("rust_bevy_test.exe");
 		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
 		sym.measure_pdb_parse(".exe", iterations/5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	*/
+
+	try {
+		ZoneScopedN("rust_bevy_test.exe");
+		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
+		sym.measure_pdb_parse(".exe", iterations);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
