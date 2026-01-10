@@ -435,7 +435,13 @@ public:
 		return res->valid();
 	}
 
+	// In cases where multiple symbols exist at one address, we will sometimes pick a different one than dbghelp
+	// This function was meant to test if the symbol dbghelp returned existed in the pdb at all (to differentiate bugs from simply picking the wrong symbol which I can't do anything about afaik)
+	// But originally this required extra logic, and now that I optimized and built custom data structures these extra symbols don't exist anymore
+	// This could be re-implemented at some point
+	// Though instead of implementing this, I'd rather implement a method where all symbols at an address can be iterated instead and let the caller implement the check itself
 	bool has_symbol_for_addr (void* ptr, SymResult const& dbghelp_res) {
+		/*
 		uintptr_t addr = (uintptr_t)ptr;
 		
 		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
@@ -449,6 +455,8 @@ public:
 		uintptr_t mod_raddr = addr - mod->base_addr;
 		
 		return mod->pdb->has_symbol_for_addr(mod_raddr, dbghelp_res.sym_name);
+		*/
+		return false;
 	}
 	
 	__declspec(noinline)

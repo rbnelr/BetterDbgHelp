@@ -55,7 +55,7 @@ namespace lineinfo {
 			assert(cur.offset >= prev.offset);
 			assert(cur.lineno < UINT32_MAX);
 
-			auto try_delta_code = [&] () {
+			auto try_delta_code = [&] () [[msvc::forceinline]]  {
 				if (pblock == -1)
 					return false;
 
@@ -96,9 +96,9 @@ namespace lineinfo {
 				}
 
 				if (push_gap) {
-					alloc.push(gap);
+					alloc.push_noalign(gap);
 				}
-				alloc.push(range);
+				alloc.push_noalign(range);
 
 				block.num_deltas += num_push;
 
@@ -107,19 +107,23 @@ namespace lineinfo {
 			};
 
 			if (!try_delta_code()) {
-				Block block = {};
-				block.start_offset = cur.offset;
-				block.first_length = cur.length;
-				block.start_lineno = cur.lineno;
-				block.is_last = true;
-				block.sourcefile = cur.sourcefile;
-				block.num_deltas = 0;
-				
 				auto* prev_block = alloc.get<Block>(pblock);
 				if (prev_block) {
 					prev_block->is_last = false;
 				}
-				pblock = alloc.push(block);
+
+				// Manually push alignment as an optimization vs BinAlloc alignement memset logic
+				if (!alloc.is_aliged<Block>()) {
+					alloc._grow_noalign(sizeof(DeltaCoded), alignof(DeltaCoded));
+				}
+
+				Block* block = alloc._push_noalign<Block>(&pblock);
+				block->start_offset = cur.offset;
+				block->first_length = cur.length;
+				block->start_lineno = cur.lineno;
+				block->is_last = true;
+				block->sourcefile = cur.sourcefile;
+				block->num_deltas = 0;
 			}
 			
 			prev = cur;

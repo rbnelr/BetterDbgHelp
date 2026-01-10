@@ -6,8 +6,6 @@
 #include "lineinfo.hpp"
 #include <map>
 
-#define TRACK_ALL_SYMBOLS 0
-
 // https://github.com/PascalBeyer/PDB-Documentation
 
 template <typename K, typename V>
@@ -145,30 +143,12 @@ class PDB_File {
 	
 	// deduplicate symbols with identical addresses, as functions can be merged, pick first one
 	// currently in these cases I still regularily pick different symbols compared to dbghelp, I kinda gave up for the moment
-	// I pick the first one, I remember seeing no apparent pattern (first one, last one etc.), but I may have messed up TODO:
+	// I pick the first one, I remember seeing no apparent pattern (first one, last one etc.), but I may have messed up
 	hashmap<uintptr_t, int> extracted_symbol_addresses;
-	
-#if 0
-	hashmap<std::string_view, StrAlloc::sid> names_extracted;
 
-	// copy string from /names entry to stralloc, also deduplicate just in case
-	StrAlloc::sid extract_name (u32 names_offset) {
-		auto* str = names + names_offset;
-		auto strv = std::string_view(str);
-
-		auto it = names_extracted.find(strv);
-		if (it != names_extracted.end())
-			return it->second;
-		
-		auto sid = stralloc.push(str);
-		names_extracted.emplace(strv, sid);
-		return sid;
-	}
-#else
-	// deduplicating with hashmap turns out to be a big bottleneck, actually, file names are not really duplicated in practice afaik
 	hashmap<u32, StrAlloc::sid> names_extracted;
-
-	// copy string from /names entry to stralloc
+	// copy string from /names entry to stralloc on first reference
+	// TODO: this is a big bottleneck in reading the pdb, could simply copy the names buffer 1 to 1 and simply translate the offsets
 	StrAlloc::sid extract_name (u32 names_offset) {
 
 		auto it = names_extracted.find(names_offset);
@@ -181,7 +161,6 @@ class PDB_File {
 		names_extracted.emplace(names_offset, sid);
 		return sid;
 	}
-#endif
 	
 	// Turns "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@4_KA" into "_OptionsStorage"
 	// like dbghelp does (it does this even without SYMOPT_UNDNAME, ie demangling)
@@ -229,6 +208,7 @@ class PDB_File {
 	}
 	
 	void read_stream_table () {
+		ZoneScoped;
 
 		//u32* _sts_ppages = (u32*)get_page(header->page_list_of_stream_table_stream_page_list[0]);
 		//u32* _sts_pages = (u32*)get_page(_sts_ppages[0]);
@@ -344,6 +324,8 @@ class PDB_File {
 	}
 
 	void read_names () {
+		ZoneScoped;
+
 		if (!named_streams.contains("/names")) {
 			// this happens with pdbs downloaded from MS symbol servers, possibly because they are stripped
 			// Simply leave names as null works, as these files also don't contain references to it
@@ -392,6 +374,8 @@ class PDB_File {
 	}
 
 	void read_DBI () {
+		ZoneScoped;
+
 		DBI_data = copy_into_consecutive(3);
 		char* ptr = DBI_data.data();
 
@@ -515,6 +499,8 @@ class PDB_File {
 		//byte_size_of_the_optional_debug_header_substream
 	}
 	void read_module_symbol_streams () {
+		ZoneScoped;
+
 		char* ptr = DBI_data.data();
 
 		auto* header = (dbi_stream_header*)ptr;
@@ -709,6 +695,8 @@ class PDB_File {
 	void read_module_symbol_stream (s16 module_index, pdb_module_information* mi) {
 		if (mi->stream_index_of_module_symbol_stream == 0xffff)
 			return; // no symbol data
+
+		ZoneScoped;
 
 		auto symbol_stream_data = copy_into_consecutive(mi->stream_index_of_module_symbol_stream);
 		char* ptr = symbol_stream_data.data();
@@ -977,7 +965,7 @@ class PDB_File {
 						//logf(">> %s %4d|%8x => %4llx, %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, module_raddr, proc->len, proc->name);
 
 						if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
-							auto bid = binalloc.push<Symbol>({});
+							auto bid = binalloc.push<Symbol>(Symbol());
 
 							Symbol s;
 							s.base_addr = module_raddr;
@@ -1074,6 +1062,8 @@ class PDB_File {
 	}
 	
 	void read_symbol_record_stream () {
+		ZoneScoped;
+
 		auto* dbi = (dbi_stream_header*)DBI_data.data();
 		symbol_record_stream_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
 		char* ptr = symbol_record_stream_data.data();
@@ -1147,6 +1137,8 @@ class PDB_File {
 	}
 	
 	void read_TPI_stream () {
+		ZoneScoped;
+
 		TPI_data = copy_into_consecutive(2);
 		char* ptr = TPI_data.data();
 
@@ -1198,6 +1190,8 @@ class PDB_File {
 		assert((ptr - type_info) == header->byte_count_of_type_record_data_following_the_header);
 	}
 	void read_IPI_stream () {
+		ZoneScoped;
+
 		IPI_data = copy_into_consecutive(4);
 		char* ptr = IPI_data.data();
 
@@ -1384,6 +1378,8 @@ class PDB_File {
 	// So instead I simply choose to keep symbols out of order and order just their indices instead
 
 	void finalize_symbols () {
+		ZoneScoped;
+		
 		typedef BinAlloc::bid Id;
 		auto _cmp = [&] (Id l, Id r) -> int {
 			return std::less<uintptr_t>()(binalloc.get_unchecked<Symbol>(l)->get_addr(), binalloc.get_unchecked<Symbol>(r)->get_addr());
@@ -1408,9 +1404,6 @@ class PDB_File {
 		IPI_id2name.reserve(128);
 
 		symbols.reserve(1024);
-	#if TRACK_ALL_SYMBOLS
-		sym_unfiltered.reserve(1024);
-	#endif
 	}
 
 public:
@@ -1429,19 +1422,9 @@ public:
 	void print_symbols () {
 		for (size_t i=0; i<symbols.size(); i++) {
 			auto& s = get_sym(i);
-			logf(">> %4llx %4x mod=%d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
+			logf(">> %4llx %4x mod=%4d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
 		}
 	}
-	
-#if TRACK_ALL_SYMBOLS
-	AddressIndex<Symbol> sym_unfiltered; // to support has_symbol_for_addr
-
-	void print_all_symbols () {
-		for (auto& s : sym_unfiltered) {
-			logf(">> %4llx %4x mod=%d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
-		}
-	}
-#endif
 
 	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& exe_path) {
 		try {
@@ -1488,6 +1471,8 @@ public:
 		if (opt_streams->stream_index_of_section_header_dump == 0xFFFF)
 			throw std::runtime_error("Section dump not found!");
 
+		// Note: I leaned about OMAP long after implementing the pdb parsing code, and was worried this was causing some of the mismatches vs dbghelp
+		// but none of my example executables have OMAP data, perhaps this only exists in some rare case, perhaps with profile guided optimization?
 		if (opt_streams->stream_index_of_omap_from_src_data != 0xFFFF ||
 			opt_streams->stream_index_of_omap_to_src_data != 0xFFFF)
 			throw std::runtime_error("PDB contains OMAP data, which invalidates some addresses, this is currently not implemented!");
@@ -1504,11 +1489,6 @@ public:
 
 		finalize_symbols();
 
-	#if TRACK_ALL_SYMBOLS
-		sym_unfiltered.sort_and_build_index();
-
-		//print_all_symbols();
-	#endif
 		//print_dump_names();
 		//stralloc.print_dump();
 
@@ -1530,45 +1510,6 @@ public:
 		return binalloc.get_unchecked<Symbol>(symbols[idx]);
 	}
 
-	// try diagnosing us returning different symbols from dbghelp by being able to check if overlapping symbol existed but we chose the "wrong" one
-	Symbol* has_symbol_for_addr (uintptr_t addr, const char* name) {
-	#if TRACK_ALL_SYMBOLS
-		// TODO: This comment is confusing, also in case of multiple symbols with same offset, which one do we return (last?)
-		// This seems to work currently, but should take another look at this
-
-		// need to find first symbol with lower or equal address than addr, but lower bound only returns that in equal case,
-		// so use upper bound instead (returns first item bigger than addr), then use previous
-		auto dymmy_Symbol = Symbol{ addr };
-		auto it = std::upper_bound(sym_unfiltered.begin(), sym_unfiltered.end(), dymmy_Symbol, [] (Symbol const& l, Symbol const& r) {
-			return l.base_addr < r.base_addr;
-		});
-		if (it <= sym_unfiltered.begin()) {
-			// first symbol after addr is first symbol, search failed
-			return nullptr;
-		}
-		it--;
-		
-		uintptr_t sym_addr = it->base_addr;
-		
-		//auto* actual_sym = find_symbol_for_addr(addr);
-		//printf("> %s\n", stralloc[actual_sym->name]);
-		
-		// iterate backwards through any symbols with equal address to find first one
-		// but ignore ones in the global symbol_record_stream, as they contain mangled version of the symbol without size, but we sometimes want those if there is no real symbol
-		// like __ImageBase
-		for (Symbol* cur=&*it; cur >= &*sym_unfiltered.begin() && cur->base_addr == sym_addr; --cur) {
-			//printf(">> %s\n", stralloc[cur->name]);
-			if (strcmp(stralloc[cur->name], name)==0) {
-				return cur;
-			}
-		}
-		
-		return nullptr;
-	#else
-		return nullptr;
-	#endif
-	}
-	
 	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
 		//ZoneScoped;
 		
@@ -1634,7 +1575,7 @@ public:
 		logf("@ PDB %s:\n", path.string().c_str());
 		symbol_index.print_stats(symbols.size(), "Symbols");
 
-		logf("binalloc: size: %.1f kB\n", binalloc.buf.size()/1000.0f);
-		logf("stralloc: size: %.1f kB\n", stralloc.buf.size()/1000.0f);
+		logf("binalloc: size: %.1f kB\n", binalloc.size()/1000.0f);
+		logf("stralloc: size: %.1f kB\n", stralloc.size()/1000.0f);
 	}
 };

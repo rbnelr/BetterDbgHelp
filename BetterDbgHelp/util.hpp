@@ -187,6 +187,10 @@ struct StrAlloc {
 		buf.reserve(1024*8);
 	}
 	
+	size_t size () const {
+		return buf.size();
+	}
+	
 	char* operator[] (sid offset) {
 		return buf.data() + offset;
 	}
@@ -270,6 +274,7 @@ struct StrAlloc {
 	}
 };
 
+#if 0
 struct BinAlloc {
 	typedef int32_t bid;
 	std::vector<char> buf;
@@ -358,6 +363,165 @@ struct BinAlloc {
 		return (T*)(buf.data() + offset);
 	}
 };
+#else
+// Use memory reservation to push data with having to copy on grow
+// gives a very good pdb parsing speedup, added benefit of stable pointers, but I'm not sure is smart to utilize that
+struct BinAlloc {
+	typedef int32_t bid;
+	char* _data = nullptr;
+	int32_t _size = 0;
+	int32_t _capacity = 0;
+
+	static inline constexpr size_t MAX_CAPACITY = (1llu << 32) - 1;
+	static inline constexpr size_t GROW_BLOCK_SIZE = 1024*32;
+
+	BinAlloc () {
+		_data = (char*)VirtualAlloc(nullptr, MAX_CAPACITY, MEM_RESERVE, PAGE_NOACCESS);
+		_realloc(GROW_BLOCK_SIZE);
+	}
+	~BinAlloc () {
+		VirtualFree(_data, 0, MEM_RELEASE);
+	}
+
+	size_t size () const {
+		return _size;
+	}
+	
+	__declspec(noinline) void _realloc (int32_t min_capacity) {
+		auto new_capacity = (min_capacity + GROW_BLOCK_SIZE-1) & ~(GROW_BLOCK_SIZE-1);
+
+		VirtualAlloc(_data + _capacity, new_capacity-_capacity, MEM_COMMIT, PAGE_READWRITE);
+		_capacity = (int32_t)new_capacity;
+	}
+	__forceinline bid _grow_to_align (size_t size, size_t align) {
+		auto offset = (size_t)_size;
+		auto padded_offset = (offset + align-1) & ~(align-1);
+		auto padding_size = padded_offset - offset;
+
+		auto new_size = padded_offset + size;
+		assert(new_size <= MAX_CAPACITY);
+
+		if (new_size > _capacity) {
+			_realloc((int32_t)new_size);
+		}
+
+		_size = (int32_t)new_size;
+
+		if (padding_size > 0)
+			memset(_data + padded_offset, 0, padding_size); // Always pad with zeros
+		
+		return (bid)padded_offset;
+	}
+
+	__forceinline bid _grow_noalign (size_t size, size_t align) {
+		auto offset = (size_t)_size;
+		assert((offset % align) == 0);
+
+		auto new_size = offset + size;
+		assert(new_size <= MAX_CAPACITY);
+
+		if (new_size > _capacity) {
+			_realloc((int32_t)new_size);
+		}
+
+		_size = (int32_t)new_size;
+		
+		return (bid)offset;
+	}
+	
+	template <typename T>
+	__forceinline T* _push (bid* out_offset) {
+		//static_assert(std::is_trivial_v<T>);
+		static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>);
+
+		bid offset = _grow_to_align(sizeof(T), alignof(T));
+		T* ptr = (T*)(_data + offset);
+
+		*out_offset = offset;
+		return ptr;
+	}
+	
+	template <typename T>
+	__forceinline bool is_aliged () {
+		return ((size_t)_size % alignof(T)) == 0;
+	}
+	template <typename T>
+	__forceinline T* _push_noalign (bid* out_offset) {
+		//static_assert(std::is_trivial_v<T>);
+		static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>);
+
+		bid offset = _grow_noalign(sizeof(T), alignof(T));
+		T* ptr = (T*)(_data + offset);
+
+		*out_offset = offset;
+		return ptr;
+	}
+	template <typename T>
+	bid push_noalign (T const& data) {
+		bid offset;
+		auto* ptr = _push_noalign<T>(&offset);
+
+		*ptr = data;
+		return offset;
+	}
+
+	// get offset returned by next push<T>
+	// so aligned offset for T
+	// does not actually push yet!
+	template <typename T>
+	bid prepare_push () {
+		//static_assert(std::is_trivial_v<T>);
+		static_assert(std::is_standard_layout_v<T>);
+
+		bid offset = _grow_to_align(0, alignof(T));
+		return offset;
+	}
+	
+	template <typename T>
+	bid push (T&& data) {
+		bid offset;
+		auto* ptr = _push<std::remove_reference_t<T>>(&offset);
+
+		//memcpy(cur, data, sizeof(T));
+		*ptr = data;
+		return offset;
+	}
+	template <typename T>
+	bid push (T const& data) {
+		bid offset;
+		auto* ptr = _push<T>(&offset);
+
+		//memcpy(cur, data, sizeof(T));
+		*ptr = data;
+
+		return offset;
+	}
+
+	bid push_bytes (void* ptr, size_t len) {
+		bid offset = _grow_to_align(len, 1);
+		auto* cur = _data + offset;
+
+		memcpy(cur, ptr, len);
+
+		return offset;
+	}
+	
+	template <typename T>
+	__forceinline T* get (bid offset) const {
+		if (offset >= 0) {
+			assert(offset % alignof(T) == 0);
+			return (T*)(_data + offset);
+		}
+		return nullptr;
+	}
+	template <typename T>
+	__forceinline T* get_unchecked (bid offset) const {
+		assert(offset >= 0);
+		assert(offset % alignof(T) == 0);
+		return (T*)(_data + offset);
+	}
+};
+#endif
 
 // Small string allocator that uses a fixed amount of stack space before spilling to heap
 template <size_t STACK_BUF>
