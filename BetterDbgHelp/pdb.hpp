@@ -5,6 +5,7 @@
 #include "address_index.hpp"
 #include "lineinfo.hpp"
 #include <map>
+#include <cstdlib>
 
 // https://github.com/PascalBeyer/PDB-Documentation
 
@@ -70,16 +71,28 @@ static_assert(lineinfo::ALIGN == 4);
 class PDB_File {
 	std::filesystem::path path;
 
+	//// Handle pdb paging logic
 	MemoryMappedFile file;
+
+	msf_header* header;
+
+	struct Stream {
+		u32 size;
+		std::vector<u32> pages;
+	};
+	std::vector<Stream> streams;
 	
 	void* get_page (u32 idx) {
 		return (char*)file.data() + idx * header->page_size;
 	}
-	u32 ceil_div (u32 a, u32 b) {
+	static u32 ceil_div (u32 a, u32 b) {
 		return (a + (b-1)) / b;
 	}
-	char* align_up (char* ptr, u32 align) {
-		uintptr_t x = (uintptr_t)ptr;
+	static size_t align_up (size_t x, size_t align) {
+		return (x + align-1) / align * align;
+	}
+	static char* align_up (char* ptr, size_t align) {
+		size_t x = (size_t)ptr;
 		return (char*)((x + align-1) / align * align);
 	}
 
@@ -87,8 +100,6 @@ class PDB_File {
 		u32 page_idx    = ptr / header->page_size;
 		u32 ptr_in_page = ptr % header->page_size;
 		
-		//u32 sts_num_pages = ceil_div(header->stream_table_stream_size, header->page_size);
-
 		u32 u32_per_page = header->page_size / sizeof(u32);
 		u32 page_idx_page     = page_idx / u32_per_page;
 		u32 page_idx_page_idx = page_idx % u32_per_page;
@@ -102,31 +113,60 @@ class PDB_File {
 		return (char*)get_page(sts_pages[page_idx_page_idx]) + ptr_in_page;
 	}
 	
-	msf_header* header;
+	// Its possible to implement a fread-style interface to abstract away the pdb paging scheme
+	// but unfortunately due to the complicated nature of the pdb format and the way that many of the records are variable length
+	// actually reading via pointer math is way simpler and crucially allows storing references to data for later use, unlike fread io
+	// so this function is used to copy an entire stream into a consecutive vector of bytes
+	// this avoids all the complexities of the above at the expense of increased ram use, but may be faster
+	// however the returned vector can be scoped as to only actually require a fraction of the size of the pdb in ram (mainly the module symbol streams)
+	struct StreamData {
+		std::unique_ptr<char[]> _data;
+		size_t _size = 0;
 
-	struct Stream {
-		u32 size;
-		std::vector<u32> pages;
+		char* data () { return _data.get(); }
+		size_t size () { return _size; }
 	};
-	std::vector<Stream> streams;
-	
-	std::vector<char> pdb_info_data;
-	std::vector<char> names_data;
-	std::vector<char> TPI_data;
-	std::vector<char> IPI_data;
-	std::vector<char> DBI_data;
-	std::vector<char> section_header_dump_data;
-	std::vector<char> symbol_record_stream_data;
+	StreamData copy_stream_consecutive (u32 streami) {
+		ZoneScoped;
 
-	//pdb_information_stream_header* info;
+		auto& stream = streams[streami];
+
+		size_t page_size = (size_t)header->page_size;
+		size_t padded_stream_size = align_up((size_t)stream.size, page_size);
+
+		// std::make_unique<char[]> initializes memsets the memory for some insane reason, this doesn't which makes this function -20% faster
+		StreamData data;
+		data._data = std::make_unique_for_overwrite<char[]>(padded_stream_size);
+		data._size = stream.size;
+		
+		char* file_data = (char*)file.data();
+		char* dst = data.data();
+
+		for (u32 page_idx : stream.pages) {
+			char* src = file_data + page_idx * page_size;
+			memcpy(dst, src, page_size);
+			dst += header->page_size;
+		}
+
+		return data;
+	}
+	
+	// NOTE: prefer storing stream data for as short as possible to minimize memory use
+	StreamData pdb_info_data; // needed for named_streams to have string_view key
+	StreamData names_data; // needed for names lookup
+	StreamData TPI_data; // needed for typeid2name to have non-owning string
+	//StreamData IPI_data;
+	StreamData DBI_data; // needed for read_module_symbol_streams to iterate modules
+	//StreamData section_header_dump_data;
+	//StreamData symbol_record_stream_data;
 
 	hashmap<std::string_view, u32> named_streams;
+
+	optional_debug_header_substream opt_streams;
 
 	// contains function names for source line info (both normal and inline stack)
 	const char* names = nullptr;
 	size_t names_size = 0;
-
-	optional_debug_header_substream* opt_streams;
 
 	// Struct, Class and Union names from TPI, these are already fully formatted
 	hashmap<CV_typ_t, const char*> typeid2name;
@@ -146,7 +186,7 @@ class PDB_File {
 	// I pick the first one, I remember seeing no apparent pattern (first one, last one etc.), but I may have messed up
 	hashmap<uintptr_t, int> extracted_symbol_addresses;
 
-#define EXTRACT_ALL_NAMES 1
+#define EXTRACT_ALL_NAMES 0
 #if !EXTRACT_ALL_NAMES
 	hashmap<u32, StrAlloc::sid> names_extracted;
 	// copy string from /names entry to stralloc on first reference
@@ -201,30 +241,6 @@ class PDB_File {
 		return stralloc.push(name);
 	}
 
-	void* read_stream (u32 stream, u32 ptr) {
-		u32 page_idx    = ptr / header->page_size;
-		u32 ptr_in_page = ptr % header->page_size;
-
-		assert(stream < streams.size() && ptr < streams[stream].size);
-		return (char*)get_page(streams[stream].pages[page_idx]) + ptr_in_page;
-	}
-	std::vector<char> copy_into_consecutive (u32 streami) {
-		std::vector<char> data;
-
-		auto& stream = streams[streami];
-		data.resize(stream.size);
-
-		char* cur = data.data();
-		size_t remain = stream.size;
-		for (u32 pg : stream.pages) {
-			memcpy(cur, get_page(pg), (u32)std::min((size_t)header->page_size, remain));
-			remain -= header->page_size;
-			cur += header->page_size;
-		}
-
-		return data;
-	}
-	
 	void read_header () {
 		header = (msf_header*)file.data();
 		assert(strncmp((const char*)header->signature, "Microsoft C/C++ MSF 7.00\r\n\032DS\0\0\0", 32) == 0);
@@ -265,7 +281,7 @@ class PDB_File {
 			auto& stream = streams[si];
 			//logf("Stream %3d: { ", si);
 		
-			u32 num_pages = ceil_div(stream.size, header->page_size);
+			size_t num_pages = ceil_div(stream.size, header->page_size);
 			for (u32 i=0; i<num_pages; i++) {
 				u32 page_idx = *(u32*)read_sts(cur);
 				cur += sizeof(u32);
@@ -281,7 +297,7 @@ class PDB_File {
 
 	void read_pdb_info (PDB_Locator::PDB_guid_and_age const& rsds) {
 		
-		pdb_info_data = copy_into_consecutive(1);
+		pdb_info_data = copy_stream_consecutive(1);
 		char* ptr = pdb_info_data.data();
 
 		auto* info = (pdb_information_stream_header*)ptr;
@@ -335,10 +351,6 @@ class PDB_File {
 			if(word_index < present_word_count && (present_bits[word_index] & (1u << bit_index))){
 				auto& kv = entries[entry_index++];
 
-				//std::string key = std::string(&string_buffer[kv.key]);
-				//logf("> %s: %d\n", key.c_str(), kv.value);
-				//named_streams[std::move(key)] = kv.value;
-				std::string key = std::string(&string_buffer[kv.key]);
 				//logf("> %s: %d\n", &string_buffer[kv.key], kv.value);
 				named_streams[&string_buffer[kv.key]] = kv.value;
 				continue;
@@ -355,7 +367,7 @@ class PDB_File {
 			return;
 		}
 
-		names_data = copy_into_consecutive(named_streams.at("/names"));
+		names_data = copy_stream_consecutive(named_streams.at("/names"));
 		char* ptr = names_data.data();
 
 		u32 signature = *(u32*)ptr;
@@ -410,7 +422,7 @@ class PDB_File {
 	void read_DBI () {
 		ZoneScoped;
 
-		DBI_data = copy_into_consecutive(3);
+		DBI_data = copy_stream_consecutive(3);
 		char* ptr = DBI_data.data();
 
 		auto* header = (dbi_stream_header*)ptr;
@@ -528,7 +540,7 @@ class PDB_File {
 		ptr += header->byte_size_of_the_edit_and_continue_substream;
 
 		//// optional_debug_header_substream
-		opt_streams = (optional_debug_header_substream*)ptr;
+		opt_streams = *(optional_debug_header_substream*)ptr;
 
 		//byte_size_of_the_optional_debug_header_substream
 	}
@@ -564,8 +576,8 @@ class PDB_File {
 	}
 
 	void read_section_header_dump () {
-		section_header_dump_data = copy_into_consecutive(opt_streams->stream_index_of_section_header_dump);
-		assert(section_header_dump_data.size() == streams[opt_streams->stream_index_of_section_header_dump].size);
+		auto section_header_dump_data = copy_stream_consecutive(opt_streams.stream_index_of_section_header_dump);
+		assert(section_header_dump_data.size() == streams[opt_streams.stream_index_of_section_header_dump].size);
 
 		char* ptr = section_header_dump_data.data();
 		char* ptr2 = ptr;
@@ -768,7 +780,7 @@ class PDB_File {
 
 		ZoneScoped;
 
-		auto symbol_stream_data = copy_into_consecutive(mi->stream_index_of_module_symbol_stream);
+		auto symbol_stream_data = copy_stream_consecutive(mi->stream_index_of_module_symbol_stream);
 		char* ptr = symbol_stream_data.data();
 
 		char* file_checksum_ptr = nullptr;
@@ -1139,10 +1151,9 @@ class PDB_File {
 		ZoneScoped;
 
 		auto* dbi = (dbi_stream_header*)DBI_data.data();
-		symbol_record_stream_data = copy_into_consecutive(dbi->stream_index_of_the_symbol_record_stream);
+		auto symbol_record_stream_data = copy_stream_consecutive(dbi->stream_index_of_the_symbol_record_stream);
 		char* ptr = symbol_record_stream_data.data();
-
-		char* ptr2 = ptr;
+		char* end = ptr + symbol_record_stream_data.size();
 		
 		auto push_symbol = [this] (u32 offs, u32 size, u16 seg, const char* name, const char* _sym_type) [[msvc::forceinline]] {
 			uintptr_t module_raddr;
@@ -1163,7 +1174,7 @@ class PDB_File {
 			}
 		};
 		
-		while (ptr < ptr2 + symbol_record_stream_data.size()) {
+		while (ptr < end) {
 			auto sym = (codeview_symbol_header*)ptr;
 			
 			ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
@@ -1207,13 +1218,13 @@ class PDB_File {
 				}
 			}
 		}
-		assert((ptr - ptr2) == symbol_record_stream_data.size());
+		assert(ptr == end);
 	}
 	
 	void read_TPI_stream () {
 		ZoneScoped;
 
-		TPI_data = copy_into_consecutive(2);
+		TPI_data = copy_stream_consecutive(2);
 		char* ptr = TPI_data.data();
 
 		auto* header = (tpi_stream_header*)ptr;
@@ -1223,35 +1234,35 @@ class PDB_File {
 
 		u32 count = header->one_past_last_type_index - header->minimal_type_index;
 		u32 id = header->minimal_type_index;
+		
+		auto push_type = [this] (u32 id, unsigned char* data) -> const char* [[msvc::forceinline]] {
+			ulong size = 0;
+			size_t dcb = CbExtractNumeric(data, &size);
+			auto* name = (const char *)data + dcb;
 
-		char* type_info = ptr;
-		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
+			assert(typeid2name.find(id) == typeid2name.end());
+			typeid2name.emplace(id, name);
+
+			return name;
+		};
+
+		char* end = ptr + header->byte_count_of_type_record_data_following_the_header;
+		while (ptr < end) {
 			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
 			
 			assert(id < header->one_past_last_type_index);
 			
-			auto push_type = [this, id] (unsigned char* data) -> const char* [[msvc::forceinline]] {
-				ulong size = 0;
-				size_t dcb = CbExtractNumeric(data, &size);
-				auto* name = (const char *)data + dcb;
-
-				assert(typeid2name.find(id) == typeid2name.end());
-				typeid2name.emplace(id, name);
-
-				return name;
-			};
-
 			switch (lf->kind) {
 				case LF_STRUCTURE:
 				case LF_CLASS: {
 					auto* struc = (lfClass*)lf;
-					auto* name = push_type(struc->data);
+					auto* name = push_type(id, struc->data);
 					//logf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
 				} break;
 				case LF_UNION: {
 					auto* struc = (lfUnion*)lf;
-					auto* name = push_type(struc->data);
+					auto* name = push_type(id, struc->data);
 				} break;
 				//case LF_PROCEDURE: {
 				//	auto* proc = (lfProc*)lf;
@@ -1261,23 +1272,24 @@ class PDB_File {
 
 			id++;
 		}
-		assert((ptr - type_info) == header->byte_count_of_type_record_data_following_the_header);
+		assert(ptr == end);
 	}
 	void read_IPI_stream () {
 		ZoneScoped;
 
-		IPI_data = copy_into_consecutive(4);
+		auto IPI_data = copy_stream_consecutive(4);
 		char* ptr = IPI_data.data();
 
 		auto* header = (tpi_stream_header*)ptr;
 		ptr += sizeof(tpi_stream_header);
-		
+
 		assert(header->version == 20040203);
 
 		u32 count = header->one_past_last_type_index - header->minimal_type_index;
 
 		u32 id = header->minimal_type_index;
 		char* type_info = ptr;
+		char* type_info_end = type_info + header->byte_count_of_type_record_data_following_the_header;
 		
 		struct IPI_STRING_IDs {
 			// LF_STRING_ID is what lfFuncId.scopeId points to
@@ -1325,7 +1337,7 @@ class PDB_File {
 		IPI_STRING_IDs strids;
 		strids.map.reserve(32);
 		
-		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
+		while (ptr < type_info_end) {
 			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
 			//assert((sizeof(u16) + lf->length)%4 == 0);
@@ -1382,12 +1394,11 @@ class PDB_File {
 
 			id++;
 		}
-		assert((ptr - type_info) == header->byte_count_of_type_record_data_following_the_header);
+		assert(ptr == type_info_end);
 		
 		id = header->minimal_type_index;
 		ptr = type_info;
-
-		while (ptr < type_info + header->byte_count_of_type_record_data_following_the_header) {
+		while (ptr < type_info_end) {
 			auto* lf = (codeview_type_record_header*)ptr;
 			ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
 			
@@ -1436,7 +1447,7 @@ class PDB_File {
 
 			id++;
 		}
-		assert((ptr - type_info) == header->byte_count_of_type_record_data_following_the_header);
+		assert(ptr == type_info_end);
 	}
 	
 	// Symbols as encountered in the symbol record stream and in each of the module streams are not sorted by address
@@ -1544,13 +1555,13 @@ public:
 		read_DBI();
 
 		// read list of all sections, needed to map section-relative offsets to rva
-		if (opt_streams->stream_index_of_section_header_dump == 0xFFFF)
+		if (opt_streams.stream_index_of_section_header_dump == 0xFFFF)
 			throw std::runtime_error("Section dump not found!");
 
 		// Note: I leaned about OMAP long after implementing the pdb parsing code, and was worried this was causing some of the mismatches vs dbghelp
 		// but none of my example executables have OMAP data, perhaps this only exists in some rare case, perhaps with profile guided optimization?
-		if (opt_streams->stream_index_of_omap_from_src_data != 0xFFFF ||
-			opt_streams->stream_index_of_omap_to_src_data != 0xFFFF)
+		if (opt_streams.stream_index_of_omap_from_src_data != 0xFFFF ||
+			opt_streams.stream_index_of_omap_to_src_data != 0xFFFF)
 			throw std::runtime_error("PDB contains OMAP data, which invalidates some addresses, this is currently not implemented!");
 
 		read_section_header_dump();

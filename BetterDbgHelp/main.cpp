@@ -1,5 +1,5 @@
 
-#define TRACY_MEMORY_PROFILING 0
+#define TRACY_MEMORY_PROFILING 1
 
 #include "util.hpp"
 #include <functional>
@@ -453,7 +453,10 @@ public:
 		logf("@ Measure PDB parse for module %s\n", mod.path.c_str());
 
 		for (int i=0; i<iterations; i++) {
+			//_clear_cpu_cache();
 			//dbghelp->measure_addr2sym(addr);
+
+			_clear_cpu_cache();
 			resolver->measure_pdb_parse(addr);
 		}
 		if (print_timings)
@@ -737,7 +740,6 @@ void profiling_pdb_parse (int iterations) {
 
 	logf("=============== PDB parsing Profiling =============\n");
 
-	/*
 	try {
 		ZoneScopedN("TinyProgram.exe");
 		SymTesting sym("TinyProgram/TinyProgram.exe", 0.5f);
@@ -755,13 +757,6 @@ void profiling_pdb_parse (int iterations) {
 		ZoneScopedN("rust_bevy_test.exe");
 		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
 		sym.measure_pdb_parse(".exe", iterations/5);
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
-	*/
-
-	try {
-		ZoneScopedN("rust_bevy_test.exe");
-		SymTesting sym("RustBevyExample/rust_bevy_test.exe");
-		sym.measure_pdb_parse(".exe", iterations);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
@@ -838,14 +833,14 @@ void profiling_run_cachemiss () {
 
 int main(int argc, const char** argv) {
 	//print_timings = false;
-	//example_addresses(true, false, 0);
-	//sweep_tests();
+	example_addresses(true, false, 0);
+	sweep_tests();
 
 	//profiling_run();
 	//profiling_run_cached();
 	//profiling_run_cachemiss();
 
-	profiling_pdb_parse(100);
+	//profiling_pdb_parse(100);
 	
 	//try {
 	//	SymTesting sym("CityBuilderExample/city_builder_rel.exe");
