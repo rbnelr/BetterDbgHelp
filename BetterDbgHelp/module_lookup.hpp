@@ -12,7 +12,7 @@ struct LoadedModule {
 	uintptr_t base_addr;
 	size_t size;
 
-	std::unique_ptr<PDB_File> pdb;
+	std::unique_ptr<FastPdbLookup> pdb;
 	std::unique_ptr<ExportTableQuery> exports;
 
 	LoadedModule (std::filesystem::path&& path, uintptr_t base_addr, size_t size) {
@@ -22,7 +22,7 @@ struct LoadedModule {
 		this->size = size;
 	}
 	void load_pdb () {
-		pdb = PDB_File::try_load_pdb(path);
+		pdb = FastPdbLookup::try_load_for_exe(path);
 	}
 
 	ExportTableQuery* load_export_table () {

@@ -287,6 +287,7 @@ public:
 
 		try {
 			ExeParser exe;
+			names.init();
 			
 			exe.open_image(filepath);
 			exe.find_exports(names, [this] (uint32_t func_rva, StrAlloc::sid mangled_name) {

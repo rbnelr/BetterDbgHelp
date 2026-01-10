@@ -67,9 +67,116 @@ static_assert(alignof(Symbol) == 8);
 static_assert(alignof(Inlinesite) == 4);
 static_assert(lineinfo::ALIGN == 4);
 
-// TODO: eventually extract pdb parsing code and have it output symbol resolver with all custom data structure
-class PDB_File {
-	std::filesystem::path path;
+class FastPdbLookup {
+public:
+
+	std::filesystem::path pdb_path;
+
+	BinAlloc binalloc;
+	StrAlloc stralloc;
+	
+	AddressIndex symbol_index;
+
+	std::vector<BinAlloc::bid> symbols;
+
+	Symbol& get_sym (size_t idx) {
+		return *binalloc.get<Symbol>(symbols[idx]);
+	}
+	
+	void print_symbols () {
+		for (size_t i=0; i<symbols.size(); i++) {
+			auto& s = get_sym(i);
+			logf(">> %4llx %4x mod=%4d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
+		}
+	}
+
+	Symbol* find_symbol_for_addr (uintptr_t addr) {
+		//ZoneScoped;
+		
+		auto idx = symbol_index.upper_bound((intptr_t)addr);
+		if (idx <= 0) {
+			// first symbol after addr is first symbol, search failed
+			return nullptr;
+		}
+		idx--;
+		
+		return binalloc.get_unchecked<Symbol>(symbols[idx]);
+	}
+
+	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
+		//ZoneScoped;
+		
+		assert(addr >= sym->base_addr);
+		if (addr >= sym->base_addr + sym->size) {
+			// past symbol address range, no valid line number
+			return false;
+		}
+		uintptr_t sym_raddr = addr - sym->base_addr;
+		
+		auto* lineinfo = binalloc.get<char>(sym->p_lineinfo);
+		if (!lineinfo)
+			return false;
+		return lineinfo::find_line_for_addr(lineinfo, sym_raddr, stralloc, out_src_loc);
+	}
+	
+	int trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs) {
+		//ZoneScoped;
+		assert(sym->inline_depth > 0); // only call when actually needed!
+
+		uintptr_t proc_raddr = addr - sym->base_addr;
+
+		int depth = 0;
+		
+		BinAlloc::bid site_id = sym->p_inlinesites;
+		while (depth < num_locs && site_id >= 0) {
+			auto* site = binalloc.get<Inlinesite>(site_id);
+			SourceLoc encoded_loc = {};
+
+			if (lineinfo::find_line_for_addr_for_inline(site->get_lineinfo(), proc_raddr, stralloc, &encoded_loc)) {
+				// Matching Inlinesite
+
+				out_locs[depth].fnname = stralloc[site->fnname];
+				out_locs[depth].filepath = encoded_loc.filepath;
+				out_locs[depth].lineno = encoded_loc.lineno;
+				depth++;
+
+				// site->pChildren != null: recurse into subtree
+				// site->pChildren == null: leaf site found => matching branch explored; stop
+				site_id = site->pChildren;
+			}
+			else {
+				// Non-matching Inlinesite
+				
+				// site->pSibling != null: look at next sibling
+				// site->pSibling == null: last sibling checked => matching branch explored; stop
+				site_id = site->pSibling;
+			}
+		}
+		return depth;
+	}
+
+	
+	// TODO: figure out why there's huge memory use with rust_bevy
+	struct Stats {
+		int num_symbols;
+		int num_symbol_lookup;
+		int num_lineinfos;
+		int num_inlinesites;
+		int num_strings;
+	};
+	void print_stats () {
+		logf("@ PDB %s:\n", pdb_path.string().c_str());
+		symbol_index.print_stats(symbols.size(), "Symbols");
+
+		logf("binalloc: size: %.1f kB\n", binalloc.size()/1000.0f);
+		logf("stralloc: size: %.1f kB\n", stralloc.size()/1000.0f);
+	}
+
+	static std::unique_ptr<FastPdbLookup> try_load_for_exe (std::filesystem::path const& exe_path);
+};
+
+class PdbReader {
+	std::filesystem::path pdb_path;
 
 	//// Handle pdb paging logic
 	MemoryMappedFile file;
@@ -150,7 +257,7 @@ class PDB_File {
 
 		return data;
 	}
-	
+
 	// NOTE: prefer storing stream data for as short as possible to minimize memory use
 	StreamData pdb_info_data; // needed for named_streams to have string_view key
 	StreamData names_data; // needed for names lookup
@@ -208,7 +315,7 @@ class PDB_File {
 		
 		auto* str = names + names_offset;
 
-		auto sid = stralloc.push(str);
+		auto sid = lookup.stralloc.push(str);
 		names_extracted.emplace(names_offset, sid);
 		return sid;
 	}
@@ -235,10 +342,10 @@ class PDB_File {
 			const char* begin = name+1;
 			const char* end = strchr(begin, '@');
 			if (end && begin != end) {
-				return stralloc.push(begin, end - begin);
+				return lookup.stralloc.push(begin, end - begin);
 			}
 		}
-		return stralloc.push(name);
+		return lookup.stralloc.push(name);
 	}
 
 	void read_header () {
@@ -304,7 +411,7 @@ class PDB_File {
 		ptr += sizeof(pdb_information_stream_header);
 
 		if (!PDB_Locator::verify_pdb(rsds, info))
-			throw std::runtime_error("PDB loaded but GUID or age mismatch for "+ path.string()
+			throw std::runtime_error("PDB loaded but GUID or age mismatch for "+ pdb_path.string()
 				+"\nThis likely means the pdb is from a different program or an older build, symbols will likely be wrong!");
 
 		// read named stream hashmap
@@ -340,8 +447,6 @@ class PDB_File {
 
 		// unused
 		ptr += sizeof(u32);
-
-		named_streams.reserve(32);
 		
 		//logf("Named Streams:\n");
 		for(u32 index = 0, entry_index = 0; index < capacity && entry_index < amount_of_entries; index++){
@@ -724,7 +829,7 @@ class PDB_File {
 						
 				Inlinesite s = {};
 				s.fnname = name_it->second;
-				site.site_id = binalloc.push(s);
+				site.site_id = lookup.binalloc.push(s);
 
 				lineinfo::encode_compressed_annotation(
 					site.inl->binaryAnnotations, anno_end,
@@ -732,7 +837,7 @@ class PDB_File {
 					[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
 						auto* cksm = (codeview_file_checksum*)((char*)file_checksum_ptr + offset_in_file_checksums);
 						return extract_name(cksm->offset_in_string_table);
-					}, binalloc);
+					}, lookup.binalloc);
 			}
 		}
 		
@@ -748,7 +853,7 @@ class PDB_File {
 				auto& site = level[i];
 				auto* right_sibling = i+1 < level.size() ? &level[i+1] : nullptr;
 
-				auto* s = binalloc.get<Inlinesite>(site.site_id);
+				auto* s = lookup.binalloc.get<Inlinesite>(site.site_id);
 				// set right sibling reference if pdb pParent indicates relationship
 				if (right_sibling && right_sibling->inl->pParent == site.inl->pParent)
 					s->pSibling = right_sibling->site_id; // else leave at -1
@@ -768,9 +873,9 @@ class PDB_File {
 			}
 		}
 		
-		get_sym(cur_symbol).inline_depth = (uint8_t)std::min(_inlinesites.written_depth, 255);
+		lookup.get_sym(cur_symbol).inline_depth = (uint8_t)std::min(_inlinesites.written_depth, 255);
 		if (_inlinesites.written_depth > 0 && !_inlinesites.stack[0].empty())
-			get_sym(cur_symbol).p_inlinesites = _inlinesites.stack[0].front().site_id;
+			lookup.get_sym(cur_symbol).p_inlinesites = _inlinesites.stack[0].front().site_id;
 	}
 
 
@@ -1049,12 +1154,12 @@ class PDB_File {
 						//logf(">> %s %4d|%8x => %4llx, %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, module_raddr, proc->len, proc->name);
 
 						if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
-							auto bid = binalloc.push<Symbol>(Symbol());
+							auto bid = lookup.binalloc.push<Symbol>(Symbol());
 
 							Symbol s = {};
 							s.base_addr = module_raddr;
 							s.size = proc->len;
-							s.name = stralloc.push( (const char*)proc->name ); // TODO: make sure to not do this for unused symbols improve string buffer cache hit rate
+							s.name = lookup.stralloc.push( (const char*)proc->name ); // TODO: make sure to not do this for unused symbols improve string buffer cache hit rate
 							s.module_index = module_index;
 
 							uintptr_t lineinfo_base_addr;
@@ -1065,13 +1170,13 @@ class PDB_File {
 								[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
 									auto* cksm = (codeview_file_checksum*)(file_checksum_ptr + offset_in_file_checksums);
 									return extract_name(cksm->offset_in_string_table);
-								}, binalloc);
+								}, lookup.binalloc);
 							}
 
-							*binalloc.get<Symbol>(bid) = s;
+							*lookup.binalloc.get<Symbol>(bid) = s;
 
-							int idx = (int)symbols.size();
-							symbols.push_back(bid);
+							int idx = (int)lookup.symbols.size();
+							lookup.symbols.push_back(bid);
 
 							extracted_symbol_addresses.emplace(module_raddr, idx);
 							cur_symbol = idx;
@@ -1167,8 +1272,8 @@ class PDB_File {
 				s.size = size;
 				s.name = trim_mangled_name(name);
 
-				auto bid = binalloc.push(s);
-				symbols.push_back(bid);
+				auto bid = lookup.binalloc.push(s);
+				lookup.symbols.push_back(bid);
 
 				//logf("%s: %4d|%8x => %4llx, %s\n", _sym_type, seg, offs, addr, stralloc[trimmed_name]);
 			}
@@ -1411,15 +1516,15 @@ class PDB_File {
 					//logf(">> lfFuncId: [%4x]=%s\n", id, func->name);
 
 					if (func->scopeId != 0) {
-						auto formatted_strid = strids.push_scope_prefix(&stralloc, func->scopeId); // pushes "nested::scope::"
-						stralloc.push((const char*)func->name); // pushes final name with null terminator
+						auto formatted_strid = strids.push_scope_prefix(&lookup.stralloc, func->scopeId); // pushes "nested::scope::"
+						lookup.stralloc.push((const char*)func->name); // pushes final name with null terminator
 
 						assert(IPI_id2name.find(id) == IPI_id2name.end());
 						IPI_id2name.emplace(id, formatted_strid);
 					}
 					else {
 						assert(IPI_id2name.find(id) == IPI_id2name.end());
-						IPI_id2name.emplace(id, stralloc.push((const char*)func->name));
+						IPI_id2name.emplace(id, lookup.stralloc.push((const char*)func->name));
 					}
 
 					//if (strcmp((const char*)func->name, "from_axis_angle")==0) {
@@ -1433,7 +1538,7 @@ class PDB_File {
 					assert(parent_name);
 					if (parent_name) {
 						//logf(">> lfMFuncId: [%4x]=%s::%s\n", id, parent_name->c_str(), (const char*)func->name);
-						auto formatted_strid = stralloc.push_concat(*parent_name, "::", (const char*)func->name);
+						auto formatted_strid = lookup.stralloc.push_concat(*parent_name, "::", (const char*)func->name);
 						
 						assert(IPI_id2name.find(id) == IPI_id2name.end());
 						IPI_id2name.emplace(id, formatted_strid);
@@ -1467,7 +1572,7 @@ class PDB_File {
 		
 		typedef BinAlloc::bid Id;
 		auto _cmp = [&] (Id l, Id r) -> int {
-			return std::less<uintptr_t>()(binalloc.get_unchecked<Symbol>(l)->get_addr(), binalloc.get_unchecked<Symbol>(r)->get_addr());
+			return std::less<uintptr_t>()(lookup.binalloc.get_unchecked<Symbol>(l)->get_addr(), lookup.binalloc.get_unchecked<Symbol>(r)->get_addr());
 		};
 		//auto _less = [&] (Id l, Id r) -> bool {
 		//	return binalloc.get<Symbol>(l)->get_addr() < binalloc.get<Symbol>(r)->get_addr();
@@ -1475,61 +1580,46 @@ class PDB_File {
 
 		// sort based on base_addr
 		// use stable sorts as symbol can and will overlap, so preserve insertion order
-		std::stable_sort(symbols.begin(), symbols.end(), _cmp);
+		std::stable_sort(lookup.symbols.begin(), lookup.symbols.end(), _cmp);
 
-		symbol_index.build_index(symbols.size(), [&] (unsigned idx) {
-			return get_sym(idx).get_addr();
+		lookup.symbol_index.build_index(lookup.symbols.size(), [&] (unsigned idx) {
+			return lookup.get_sym(idx).get_addr();
 		});
 	}
 
 	void _reserve () {
+		named_streams.reserve(32);
 		sections_sorted.reserve(32);
 
 		typeid2name.reserve(128);
 		IPI_id2name.reserve(128);
 
-		symbols.reserve(1024);
+		lookup.symbols.reserve(1024);
 
 		_inlinesites.reserve();
 	}
 
-public:
 //// Final needed data
-	BinAlloc binalloc;
-	StrAlloc stralloc;
-	
-	AddressIndex symbol_index;
+	FastPdbLookup lookup;
 
-	std::vector<BinAlloc::bid> symbols;
+public:
 
-	Symbol& get_sym (size_t idx) {
-		return *binalloc.get<Symbol>(symbols[idx]);
-	}
-	
-	void print_symbols () {
-		for (size_t i=0; i<symbols.size(); i++) {
-			auto& s = get_sym(i);
-			logf(">> %4llx %4x mod=%4d %s\n", s.base_addr, s.size, s.module_index, stralloc[s.name]);
-		}
+	static std::unique_ptr<PdbReader> pdb_for_exe (std::filesystem::path const& exe_path) {
+		PDB_Locator locator(exe_path);
+		auto path = locator.get_pdb_path();
+		auto rsds = locator.get_rsds();
+		return std::make_unique<PdbReader>(std::move(path), rsds);
 	}
 
-	static std::unique_ptr<PDB_File> try_load_pdb (std::filesystem::path const& exe_path) {
-		try {
-			PDB_Locator locator(exe_path);
-			auto path = locator.get_pdb_path();
-			auto rsds = locator.get_rsds();
-			return std::make_unique<PDB_File>(std::move(path), rsds);
-		} catch (std::exception& ex) {
-			logf("!!! PDB loading exception: %s\n", ex.what());
-		}
-		return nullptr;
-	}
-	PDB_File (std::filesystem::path&& path, PDB_Locator::PDB_guid_and_age const& rsds): path{std::move(path)} {
+	PdbReader (std::filesystem::path&& pdb_path, PDB_Locator::PDB_guid_and_age const& rsds): pdb_path{pdb_path} {
 		ZoneScopedN("parse_pdb");
 
-		if (!file.open(this->path)) {
-			throw std::runtime_error("File not found: "+ path.string());
+		if (!file.open(this->pdb_path)) {
+			throw std::runtime_error("File not found: "+ this->pdb_path.string());
 		}
+
+		lookup.binalloc.init();
+		lookup.stralloc.init();
 
 		_reserve();
 		
@@ -1584,85 +1674,17 @@ public:
 		//logf("PDB read.\n");
 	}
 
-	Symbol* find_symbol_for_addr (uintptr_t addr) {
-		//ZoneScoped;
-		
-		auto idx = symbol_index.upper_bound((intptr_t)addr);
-		if (idx <= 0) {
-			// first symbol after addr is first symbol, search failed
-			return nullptr;
-		}
-		idx--;
-		
-		return binalloc.get_unchecked<Symbol>(symbols[idx]);
-	}
-
-	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
-		//ZoneScoped;
-		
-		assert(addr >= sym->base_addr);
-		if (addr >= sym->base_addr + sym->size) {
-			// past symbol address range, no valid line number
-			return false;
-		}
-		uintptr_t sym_raddr = addr - sym->base_addr;
-		
-		auto* lineinfo = binalloc.get<char>(sym->p_lineinfo);
-		if (!lineinfo)
-			return false;
-		return lineinfo::find_line_for_addr(lineinfo, sym_raddr, stralloc, out_src_loc);
-	}
-	
-	int trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs) {
-		//ZoneScoped;
-		assert(sym->inline_depth > 0); // only call when actually needed!
-
-		uintptr_t proc_raddr = addr - sym->base_addr;
-
-		int depth = 0;
-		
-		BinAlloc::bid site_id = sym->p_inlinesites;
-		while (depth < num_locs && site_id >= 0) {
-			auto* site = binalloc.get<Inlinesite>(site_id);
-			SourceLoc encoded_loc = {};
-
-			if (lineinfo::find_line_for_addr_for_inline(site->get_lineinfo(), proc_raddr, stralloc, &encoded_loc)) {
-				// Matching Inlinesite
-
-				out_locs[depth].fnname = stralloc[site->fnname];
-				out_locs[depth].filepath = encoded_loc.filepath;
-				out_locs[depth].lineno = encoded_loc.lineno;
-				depth++;
-
-				// site->pChildren != null: recurse into subtree
-				// site->pChildren == null: leaf site found => matching branch explored; stop
-				site_id = site->pChildren;
-			}
-			else {
-				// Non-matching Inlinesite
-				
-				// site->pSibling != null: look at next sibling
-				// site->pSibling == null: last sibling checked => matching branch explored; stop
-				site_id = site->pSibling;
-			}
-		}
-		return depth;
-	}
-
-	
-	// TODO: figure out why there's huge memory use with rust_bevy
-	struct Stats {
-		int num_symbols;
-		int num_symbol_lookup;
-		int num_lineinfos;
-		int num_inlinesites;
-		int num_strings;
-	};
-	void print_stats () {
-		logf("@ PDB %s:\n", path.string().c_str());
-		symbol_index.print_stats(symbols.size(), "Symbols");
-
-		logf("binalloc: size: %.1f kB\n", binalloc.size()/1000.0f);
-		logf("stralloc: size: %.1f kB\n", stralloc.size()/1000.0f);
+	FastPdbLookup extract_lookup () {
+		return std::move(lookup);
 	}
 };
+
+inline std::unique_ptr<FastPdbLookup> FastPdbLookup::try_load_for_exe (std::filesystem::path const& exe_path) {
+	try {
+		auto reader = PdbReader::pdb_for_exe(exe_path);
+		return std::make_unique<FastPdbLookup>( reader->extract_lookup() );
+	} catch (std::exception& ex) {
+		logf("!!! PDB loading exception: %s\n", ex.what());
+	}
+	return nullptr;
+}

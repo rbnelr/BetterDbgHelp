@@ -117,6 +117,7 @@ class MemoryMappedFile {
 	HANDLE file_mapping_handle = INVALID_HANDLE_VALUE;
 	void* _data = nullptr;
 	
+	// Move-only class
 	friend void swap (MemoryMappedFile& l, MemoryMappedFile& r) {
 		std::swap(l.file_mapping_handle, r.file_mapping_handle);
 		std::swap(l._data, r._data);
@@ -195,21 +196,36 @@ public:
 	char* data () { return _data; }
 	int32_t size () const { return _size; }
 	
-	VirtualMemoryVector () {
+	VirtualMemoryVector () {}
+	// need this to properly support move semantics because move semantics are designed badly
+	void init () {
 		_data = (char*)VirtualAlloc(nullptr, MAX_CAPACITY, MEM_RESERVE, PAGE_NOACCESS);
 		_realloc(GROW_BLOCK_SIZE);
 	}
 	~VirtualMemoryVector () {
-	#if TRACY_MEMORY_PROFILING
-		//if (_capacity > 0) { TracyFree(_data); }
-		size_t offs = 0;
-		while (offs < _capacity) {
-			TracyFree(_data + offs);
-			offs += GROW_BLOCK_SIZE;
+		if (_data) {
+		#if TRACY_MEMORY_PROFILING
+			//if (_capacity > 0) { TracyFree(_data); }
+			size_t offs = 0;
+			while (offs < _capacity) {
+				TracyFree(_data + offs);
+				offs += GROW_BLOCK_SIZE;
+			}
+		#endif
+			VirtualFree(_data, 0, MEM_RELEASE);
 		}
-	#endif
-		VirtualFree(_data, 0, MEM_RELEASE);
 	}
+
+	// Move-only class
+	friend void swap (VirtualMemoryVector& l, VirtualMemoryVector& r) {
+		std::swap(l._data, r._data);
+		std::swap(l._size, r._size);
+		std::swap(l._capacity, r._capacity);
+	}
+	VirtualMemoryVector& operator= (VirtualMemoryVector& r) = delete;
+	VirtualMemoryVector (VirtualMemoryVector& r) = delete;
+	VirtualMemoryVector& operator= (VirtualMemoryVector&& r) {	swap(*this, r);	return *this; }
+	VirtualMemoryVector (VirtualMemoryVector&& r) {				swap(*this, r); }
 
 	__declspec(noinline) void _realloc (int32_t min_capacity) {
 		auto new_capacity = (min_capacity + GROW_BLOCK_SIZE-1) & ~(GROW_BLOCK_SIZE-1);
@@ -275,7 +291,8 @@ public:
 	char* data () { return vec.data(); }
 	int32_t size () const { return (int32_t)vec.size(); }
 	
-	MemoryVector () {
+	MemoryVector () {}
+	void init () {
 		vec.reserve(1024*32);
 	}
 
@@ -316,6 +333,10 @@ public:
 struct StrAlloc {
 	typedef int32_t sid; // Strbuf index
 	MemoryVector v;
+
+	void init () {
+		v.init();
+	}
 	
 	size_t size () const {
 		return v.size();
@@ -411,6 +432,10 @@ struct BinAlloc {
 	typedef int32_t bid;
 	
 	MemoryVector v;
+
+	void init () {
+		v.init();
+	}
 
 	size_t size () const {
 		return v.size();
