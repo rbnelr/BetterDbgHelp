@@ -660,16 +660,46 @@ class PDB_File {
 	// yes another case of conflicting info, quite a lot of it in rust executables as well, afaik this makes no logical sense
 	ankerl::unordered_dense::map<CV_ItemId, InlineeSourceLine*> module_inlinee_c13;
 
+	// Push inlinesites breath-first despite pdb storing them depth-first as lookup was found to be faster this way
 	struct Site {
 		INLINESITESYM* inl;
 		BinAlloc::bid site_id = -1;
 	};
-	// TODO: should really optimize this
-	std::vector<std::vector<Site>> _inlinesites;
+	inline static constexpr int MAX_INLINE_DEPTH = 512;
+	struct InlinesiteTree {
+		// Use fixed size buffer to avoid vector of vector complexities which resulted in lots of heap allocation
+		// instead each level can be a vector which allows heap allocation to be reused
+		// This optimization is -22% to total pdb parsing time
+		std::vector<Site> stack[MAX_INLINE_DEPTH];
+		int written_depth = 0;
+		
+		void reserve () {
+			for (int i=0; i<16; i++) {
+				stack[i].reserve(64);
+			};
+		}
+		void push (int depth, INLINESITESYM* inl) {
+			if (depth >= MAX_INLINE_DEPTH)
+				return; // Ignore this inlinesite if it exceeds max depth
+
+			written_depth = std::max(written_depth, depth+1);
+
+			stack[depth].push_back({ inl });
+		}
+		void clear () {
+			for (int i=0; i<written_depth; i++) {
+				stack[i].clear();
+			}
+			written_depth = 0;
+		}
+	} _inlinesites;
 
 	void push_inline_tree (char* sym_info, char* file_checksum_ptr, int cur_symbol) {
-		for (auto& level : _inlinesites) {
-			for (auto& site : level) {
+		assert(_inlinesites.written_depth > 0);
+
+		// iterate breath first to push data
+		for (int depth=0; depth<_inlinesites.written_depth; depth++) {
+			for (auto& site : _inlinesites.stack[depth]) {
 				auto it = module_inlinee_c13.find(site.inl->inlinee);
 				if (it == module_inlinee_c13.end())
 					continue;
@@ -694,35 +724,41 @@ class PDB_File {
 			}
 		}
 		
-		for (size_t l=0; l<_inlinesites.size(); l++) {
-			auto& level = _inlinesites[l];
-			auto* children_cur = l+1 < _inlinesites.size() ? _inlinesites[l+1].data() : nullptr;
-			auto* children_end = l+1 < _inlinesites.size() ? _inlinesites[l+1].data() + _inlinesites[l+1].size() : nullptr;
+		// iterate each level and link up siblings and parent-children references
+		for (int depth=0; depth<_inlinesites.written_depth; depth++) {
+			auto& level = _inlinesites.stack[depth];
+			auto* next_level = depth+1 < _inlinesites.written_depth ? &_inlinesites.stack[depth+1] : nullptr;
+			
+			auto* children_cur = next_level ? next_level->data() : nullptr;
+			auto* children_end = next_level ? next_level->data() + next_level->size() : nullptr;
 
 			for (size_t i=0; i<level.size(); i++) {
 				auto& site = level[i];
 				auto* right_sibling = i+1 < level.size() ? &level[i+1] : nullptr;
 
 				auto* s = binalloc.get<Inlinesite>(site.site_id);
+				// set right sibling reference if pdb pParent indicates relationship
 				if (right_sibling && right_sibling->inl->pParent == site.inl->pParent)
 					s->pSibling = right_sibling->site_id; // else leave at -1
 
 				// iterate children list to find first child of this parent
 				if (children_cur) {
 					size_t pParent = (char*)site.inl - sym_info;
+					// skipping all previous parents children without having to iterate the entire list every time
+					// result is either this parents first child or child of a later parent
 					while (children_cur < children_end && children_cur->inl->pParent < pParent)
 						children_cur++;
-
+					// set child if it belongs to this parent 
 					if (children_cur < children_end && children_cur->inl->pParent == pParent) {
 						s->pChildren = children_cur->site_id;
 					}
 				}
 			}
 		}
-				
-		get_sym(cur_symbol).inline_depth = (uint8_t)std::min(_inlinesites.size(), (size_t)255);
-		if (!_inlinesites.empty() && !_inlinesites.front().empty())
-			get_sym(cur_symbol).p_inlinesites = _inlinesites.front().front().site_id;
+		
+		get_sym(cur_symbol).inline_depth = (uint8_t)std::min(_inlinesites.written_depth, 255);
+		if (_inlinesites.written_depth > 0 && !_inlinesites.stack[0].empty())
+			get_sym(cur_symbol).p_inlinesites = _inlinesites.stack[0].front().site_id;
 	}
 
 
@@ -791,6 +827,7 @@ class PDB_File {
 				auto* header = (codeview_inlinee_source_line_header*)ptr;
 				ptr += sizeof(codeview_inlinee_source_line_header);
 				
+				/*
 				// rust (LLVM) seems to be output duplicate inlinee entries (same inlinee func id) even within the same module
 				// filepath can differ:
 				//                                   /rustc/1159e78c4747b02ef996e55082b704c09b970588/library\core\src\convert\mod.rs
@@ -813,6 +850,7 @@ class PDB_File {
 						//logf(">>>>>> %s\n", b);
 					}
 				};
+				*/
 				if (header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE) {
 					while (ptr < end) {
 						auto* line = (InlineeSourceLine*)ptr;
@@ -820,20 +858,20 @@ class PDB_File {
 						
 						//logf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
-						check_duplicates(line);
+						//check_duplicates(line);
 						module_inlinee_c13.try_emplace(line->inlinee, line);
 					}
 				} else if (header->signature == CV_INLINEE_SOURCE_LINE_SIGNATURE_EX) {
 					while (ptr < end) {
 						auto* line = (InlineeSourceLineEx*)ptr;
 						ptr += sizeof(InlineeSourceLineEx);
+
+						ptr += line->countOfExtraFiles * sizeof(CV_off32_t);
 						
 						//logf(">>  Line %d %s %d\n", line->sourceLineNum, get_lineinfo_source_filepath(mod, line->fileId), line->inlinee);
 						
-						check_duplicates((InlineeSourceLine*)line);
+						//check_duplicates((InlineeSourceLine*)line);
 						module_inlinee_c13.try_emplace(line->inlinee, (InlineeSourceLine*)line);
-
-						ptr += line->countOfExtraFiles * sizeof(CV_off32_t);
 					}
 				} else {
 					assert(false);
@@ -1001,7 +1039,7 @@ class PDB_File {
 						if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
 							auto bid = binalloc.push<Symbol>(Symbol());
 
-							Symbol s;
+							Symbol s = {};
 							s.base_addr = module_raddr;
 							s.size = proc->len;
 							s.name = stralloc.push( (const char*)proc->name ); // TODO: make sure to not do this for unused symbols improve string buffer cache hit rate
@@ -1066,9 +1104,11 @@ class PDB_File {
 						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, stralloc[IPI_id2name.find(inl->inlinee)->second]);
 						//}
 
-						if (_inlinesites.size() <= inline_depth)
-							_inlinesites.emplace_back();
-						_inlinesites[inline_depth].push_back({ inl });
+						if (cur_symbol > 0) {
+							//if (_inlinesites.size() <= inline_depth)
+							//	_inlinesites.emplace_back();
+							_inlinesites.push(inline_depth, inl);
+						}
 
 						inline_depth++;
 					} break;
@@ -1079,7 +1119,7 @@ class PDB_File {
 					case S_END: {
 						assert(inline_depth == 0);
 
-						if (cur_symbol >= 0) {
+						if (cur_symbol >= 0 && _inlinesites.written_depth > 0) {
 							push_inline_tree(sym_info, file_checksum_ptr, cur_symbol);
 						}
 						_inlinesites.clear();
@@ -1191,7 +1231,7 @@ class PDB_File {
 			
 			assert(id < header->one_past_last_type_index);
 			
-			auto push_symbol = [this, id] (unsigned char* data) -> const char* [[msvc::forceinline]] {
+			auto push_type = [this, id] (unsigned char* data) -> const char* [[msvc::forceinline]] {
 				ulong size = 0;
 				size_t dcb = CbExtractNumeric(data, &size);
 				auto* name = (const char *)data + dcb;
@@ -1206,12 +1246,12 @@ class PDB_File {
 				case LF_STRUCTURE:
 				case LF_CLASS: {
 					auto* struc = (lfClass*)lf;
-					auto* name = push_symbol(struc->data);
+					auto* name = push_type(struc->data);
 					//logf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
 				} break;
 				case LF_UNION: {
 					auto* struc = (lfUnion*)lf;
-					auto* name = push_symbol(struc->data);
+					auto* name = push_type(struc->data);
 				} break;
 				//case LF_PROCEDURE: {
 				//	auto* proc = (lfProc*)lf;
@@ -1438,6 +1478,8 @@ class PDB_File {
 		IPI_id2name.reserve(128);
 
 		symbols.reserve(1024);
+
+		_inlinesites.reserve();
 	}
 
 public:
