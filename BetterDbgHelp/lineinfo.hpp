@@ -114,7 +114,7 @@ namespace lineinfo {
 
 				// Manually push alignment as an optimization vs BinAlloc alignement memset logic
 				if (!alloc.is_aliged<Block>()) {
-					alloc._grow_noalign(sizeof(DeltaCoded), alignof(DeltaCoded));
+					alloc.v._grow_noalign(sizeof(DeltaCoded), alignof(DeltaCoded));
 				}
 
 				Block* block = alloc._push_noalign<Block>(&pblock);

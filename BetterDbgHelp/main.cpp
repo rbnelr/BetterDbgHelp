@@ -8,6 +8,18 @@
 #include "dbghelp.hpp"
 #include "sym_resolver.hpp"
 
+// Track standard memory allocation via tracy
+// (VirtualAlloc is tracked seperately)
+void* operator new (std::size_t count) {
+	auto ptr = malloc(count);
+	TracyAlloc(ptr, count);
+	return ptr;
+}
+void operator delete (void* ptr) noexcept {
+	TracyFree(ptr);
+	free(ptr);
+}
+
 bool run_dbghelp = true;
 bool clear_cpu_cache = false;
 void _clear_cpu_cache ();
@@ -857,14 +869,12 @@ int main(int argc, const char** argv) {
 	return 0;
 }
 
-
-
-// L3 sized buffer 12MB
-const size_t L3_size = 12 * 1024 * 1024; 
-std::vector<char> g_trash_buffer(L3_size);
-
 // Function to wipe the cache
 void _clear_cpu_cache () {
+	// L3 sized buffer 12MB
+	constexpr size_t L3_size = 12 * 1024 * 1024;
+	static std::vector<char> g_trash_buffer(L3_size);
+
 	ZoneScopedC(0xff0000);
 
 	volatile char* sink = g_trash_buffer.data();
