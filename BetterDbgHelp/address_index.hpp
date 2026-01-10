@@ -33,7 +33,7 @@ public:
 		auto used_slots = count;
 		auto num_slots = blocks.size()*BLOCKSZ;
 
-		logf("%s: simd blocks: #blocks %llu addresses: %.1f kB blocks: %.1f kB block_indices: %.1f kB\nwasted %.2f%%\n", name, blocks.size(),
+		logf("%s:    simd blocks: %llu\n    addresses: %.1f kB\n    blocks: %.1f kB\n    block_indices: %.1f kB\n    wasted block ratio: %.2f%%\n", name, blocks.size(),
 			addresses.size()*sizeof(addresses[0])/1000.0f,
 			blocks.size()*sizeof(blocks[0])/1000.0f,
 			block_indices.size()*sizeof(block_indices[0])/1000.0f,

@@ -46,8 +46,10 @@ namespace lineinfo {
 
 		BinAlloc::bid pblock = -1;
 		SourceRange prev = { INT_MIN, 0, 0, 0 };
+
+		Stats& stats;
 		
-		Encoder (BinAlloc& alloc) {
+		Encoder (BinAlloc& alloc, Stats& stats): stats{stats} {
 			result = alloc.prepare_push<Block>();
 		}
 
@@ -97,8 +99,10 @@ namespace lineinfo {
 
 				if (push_gap) {
 					alloc.push_noalign(gap);
+					stats.num_lineinfo_delta_coded++;
 				}
 				alloc.push_noalign(range);
+				stats.num_lineinfo_delta_coded++;
 
 				block.num_deltas += num_push;
 
@@ -124,6 +128,8 @@ namespace lineinfo {
 				block->is_last = true;
 				block->sourcefile = cur.sourcefile;
 				block->num_deltas = 0;
+
+				stats.num_lineinfo_blocks++;
 			}
 			
 			prev = cur;
@@ -197,7 +203,7 @@ namespace lineinfo {
 	template <typename FUNC>
 	inline BinAlloc::bid encode_c13_lineinfo (
 			codeview_subsection_header* subsec, int32_t symbol_offset,
-			FUNC extract_checksums_str, BinAlloc& alloc
+			FUNC extract_checksums_str, BinAlloc& alloc, Stats& stats
 		) {
 		// Normally one Line header exists per function
 		// with the section and offset being equal, ie. the resulting module_raddr being equal
@@ -235,7 +241,8 @@ namespace lineinfo {
 
 		// the algorithm seems to be simple, remember line on addr>=line, break if addr<line, last line is returned
 		
-		Encoder encoder(alloc);
+		stats.num_lineinfo++;
+		Encoder encoder(alloc, stats);
 
 		auto* ptr = (char*)subsec;
 		ptr += sizeof(codeview_subsection_header);
@@ -297,8 +304,9 @@ namespace lineinfo {
 	inline BinAlloc::bid encode_compressed_annotation (
 			PCompressedAnnotation annotations, PCompressedAnnotation anno_end,
 			u32 initial_fileId, u32 initialSourceLineNum,
-			FUNC extract_checksums_str, BinAlloc& alloc
+			FUNC extract_checksums_str, BinAlloc& alloc, Stats& stats
 		) {
+
 		struct Line {
 			u32 code_offset;
 			u32 code_length;
@@ -308,7 +316,8 @@ namespace lineinfo {
 			u32 kind;
 		};
 
-		Encoder encoder(alloc);
+		stats.num_lineinfo++;
+		Encoder encoder(alloc, stats);
 
 		auto emit_range = [&] (Line& line) {
 			auto sourcefile = extract_checksums_str(line.file_id);

@@ -3,9 +3,19 @@
 #include "codeview.hpp"
 #include "pdb_locator.hpp"
 #include "address_index.hpp"
-#include "lineinfo.hpp"
+
 #include <map>
 #include <cstdlib>
+
+struct Stats {
+	size_t num_inlinesites = 0;
+	size_t num_lineinfo = 0;
+	size_t num_lineinfo_blocks = 0;
+	size_t num_lineinfo_delta_coded = 0;
+	size_t num_strings = -1;
+};
+
+#include "lineinfo.hpp"
 
 // https://github.com/PascalBeyer/PDB-Documentation
 
@@ -155,29 +165,41 @@ public:
 		return depth;
 	}
 
-	
-	// TODO: figure out why there's huge memory use with rust_bevy
-	struct Stats {
-		int num_symbols;
-		int num_symbol_lookup;
-		int num_lineinfos;
-		int num_inlinesites;
-		int num_strings;
-	};
-	void print_stats () {
-		logf("@ PDB %s:\n", pdb_path.string().c_str());
-		symbol_index.print_stats(symbols.size(), "Symbols");
+	Stats stats;
 
-		logf("binalloc: size: %.1f kB\n", binalloc.size()/1000.0f);
-		logf("stralloc: size: %.1f kB\n", stralloc.size()/1000.0f);
+	void print_stats () {
+		// do this lazily as string pushes are complex
+		if (stats.num_strings == -1) {
+			stats.num_strings = count_strings();
+		}
+
+		logf("@ PDB %s:\n", pdb_path.string().c_str());
+
+		symbol_index.print_stats(symbols.size(), "symbol index");
+		logf("binalloc             :         | %.1f kB\n", binalloc.size()/1000.0f);
+		logf("stralloc             : %7llu | %.1f kB\n", stats.num_strings, stralloc.size()/1000.0f);
+		logf("symbols              : %7llu | %.1f kB\n", symbols.size(), symbols.size() * sizeof(Symbol)/1000.0f);
+		logf("inlinesites          : %7llu | %.1f kB\n", stats.num_inlinesites, stats.num_inlinesites * sizeof(Inlinesite)/1000.0f);
+		logf("lineinfos            : %7llu\n", stats.num_lineinfo);
+		logf("lineinfo_blocks      : %7llu | %.1f kB\n", stats.num_lineinfo_blocks, stats.num_lineinfo_blocks * sizeof(lineinfo::Block)/1000.0f);
+		logf("lineinfo_delta_coded : %7llu | %.1f kB\n", stats.num_lineinfo_delta_coded, stats.num_lineinfo_delta_coded * sizeof(lineinfo::DeltaCoded)/1000.0f);
+	}
+	size_t count_strings () const {
+		char const* cur = stralloc.v.data();
+		char const* end = cur + stralloc.v.size();
+
+		size_t count = 0;
+		while (cur < end) {
+			cur += strlen(cur)+1;
+			count++;
+		}
+		return count;
 	}
 
 	static std::unique_ptr<FastPdbLookup> try_load_for_exe (std::filesystem::path const& exe_path);
 };
 
 class PdbReader {
-	std::filesystem::path pdb_path;
-
 	//// Handle pdb paging logic
 	MemoryMappedFile file;
 
@@ -411,7 +433,7 @@ class PdbReader {
 		ptr += sizeof(pdb_information_stream_header);
 
 		if (!PDB_Locator::verify_pdb(rsds, info))
-			throw std::runtime_error("PDB loaded but GUID or age mismatch for "+ pdb_path.string()
+			throw std::runtime_error("PDB loaded but GUID or age mismatch for "+ lookup.pdb_path.string()
 				+"\nThis likely means the pdb is from a different program or an older build, symbols will likely be wrong!");
 
 		// read named stream hashmap
@@ -826,10 +848,12 @@ class PdbReader {
 					continue;
 
 				auto* anno_end = (PCompressedAnnotation)((char*)site.inl + sizeof(u16) + site.inl->reclen); // length field of codeview_symbol_header not contained in length
-						
+				
 				Inlinesite s = {};
 				s.fnname = name_it->second;
 				site.site_id = lookup.binalloc.push(s);
+
+				lookup.stats.num_inlinesites++;
 
 				lineinfo::encode_compressed_annotation(
 					site.inl->binaryAnnotations, anno_end,
@@ -837,7 +861,7 @@ class PdbReader {
 					[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
 						auto* cksm = (codeview_file_checksum*)((char*)file_checksum_ptr + offset_in_file_checksums);
 						return extract_name(cksm->offset_in_string_table);
-					}, lookup.binalloc);
+					}, lookup.binalloc, lookup.stats);
 			}
 		}
 		
@@ -1170,7 +1194,7 @@ class PdbReader {
 								[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
 									auto* cksm = (codeview_file_checksum*)(file_checksum_ptr + offset_in_file_checksums);
 									return extract_name(cksm->offset_in_string_table);
-								}, lookup.binalloc);
+								}, lookup.binalloc, lookup.stats);
 							}
 
 							*lookup.binalloc.get<Symbol>(bid) = s;
@@ -1611,12 +1635,14 @@ public:
 		return std::make_unique<PdbReader>(std::move(path), rsds);
 	}
 
-	PdbReader (std::filesystem::path&& pdb_path, PDB_Locator::PDB_guid_and_age const& rsds): pdb_path{pdb_path} {
+	PdbReader (std::filesystem::path&& pdb_path, PDB_Locator::PDB_guid_and_age const& rsds) {
 		ZoneScopedN("parse_pdb");
 
-		if (!file.open(this->pdb_path)) {
-			throw std::runtime_error("File not found: "+ this->pdb_path.string());
+		if (!file.open(pdb_path)) {
+			throw std::runtime_error("File not found: "+ pdb_path.string());
 		}
+
+		lookup.pdb_path = std::move(pdb_path);
 
 		lookup.binalloc.init();
 		lookup.stralloc.init();
