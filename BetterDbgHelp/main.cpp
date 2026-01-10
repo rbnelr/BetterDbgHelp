@@ -334,6 +334,18 @@ public:
 			prev_res = std::move(res);
 		}
 	}
+	void show_distinct_sym_dbghelp (LoadedModule const& mod, uintptr_t addr) {
+		auto res = std::make_unique<SymResult>();
+
+		dbghelp->addr2sym((void*)addr, res.get());
+		
+		if (!res->equal_sym(*prev_res)) {
+			logf("[%llx] ", addr - (uintptr_t)mod.addr);
+			res->print_sym();
+
+			prev_res = std::move(res);
+		}
+	}
 
 	template <typename FUNC>
 	void run_examples_addresses (bool show, bool test, int meas_iterations, FUNC run_examples) {
@@ -390,6 +402,15 @@ public:
 			for (uintptr_t addr = start; addr < end; addr++) {
 				show_and_test_distinct_addr2sym(addr);
 			}
+			/*
+			logf("@ Dbghelp:\n");
+			for (uintptr_t addr = start; addr < end; addr++) {
+				show_distinct_sym_dbghelp(mod, addr);
+			}
+			logf("@ SymResolver:\n");
+			for (uintptr_t addr = start; addr < end; addr++) {
+				show_distinct_sym(mod, addr);
+			}*/
 		}
 		else {
 			for (uintptr_t addr = start; addr < end; addr++) {
@@ -666,6 +687,9 @@ void sweep_tests () {
 		//sym.show_addr2sym(exe + 0x1090);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
+	// NOTE: For some reason I can download the pdb for notepad.exe from the symbol servers and use it successfully
+	// yet dbghelp throws errors no matter the address, I initially though that me writing the pdb to SymbolCache somehow broke dbghelp
+	// but actually, dbghelp fails even with an empty SymbolCache, so I have no idea, maybe it refuses to provide symbols for anything but dlls or something
 	try {
 		ZoneScopedN("notepad.exe");
 		SymTesting sym("C:/Windows/System32/notepad.exe", 0.5f);

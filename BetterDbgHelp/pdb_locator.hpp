@@ -1,5 +1,6 @@
 #pragma once
 #include "util.hpp"
+#include <codecvt>
 
 #include <Urlmon.h>
 #pragma comment(lib, "Urlmon.lib")
@@ -67,7 +68,7 @@ public:
 	}
 
 	template <typename FUNC>
-	void find_exports (StrAlloc& strs, FUNC func_and_name) {
+	bool find_exports (StrAlloc& strs, FUNC func_and_name) {
 		auto& exports = nt_header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
 		if (exports.VirtualAddress) {
 			auto* export_directory = (IMAGE_EXPORT_DIRECTORY*)map_rva(exports.VirtualAddress);
@@ -90,9 +91,11 @@ public:
 				func_and_name(func_rva, strs.push(name));
 			}
 
-			return;
+			return true;
 		}
-		throw std::runtime_error("Exports not found");
+		// don't throw exception
+		// exports.VirtualAddress being null may be expected for .exe (unlike .dll)
+		return false;
 	}
 };
 
@@ -140,13 +143,23 @@ class PDB_Locator {
 
 		// This cache often will contain no pdb at this path, but another subfolder called "stripped" which contains the file, presumably with just some functions names left in
 		// I don't know I need to somehow respect that or not
-		return std::filesystem::temp_directory_path() / "SymbolCache" / pdb_name / guid_age_str / pdb_name;
+		
+		// I initially thought that with notepad.exe, I may have written downloaded the pdb to the wrong spot or in a wrong way
+		// and that this caused dbghelp to fail, but actually it fails on notepad even without me interfering (despite me using the pdb successfully)
+		// But still, let's create a custom cache folder to avoid future problems with peoples debugging, since I have no idea what the microsoft code is actually doing
+
+		//return std::filesystem::temp_directory_path() / "SymbolCache" / pdb_name / guid_age_str / pdb_name;
+		return std::filesystem::temp_directory_path() / "Hexcoder" / "SymbolCache" / pdb_name / guid_age_str / pdb_name;
 	}
 
 	std::filesystem::path try_downloading_pdb_if_not_in_cache () {
 		if (std::filesystem::exists(cache_path)) {
 			return cache_path;
 		}
+		
+		std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+		std::string url = converter.to_bytes(symbol_server_url);
+		logf("Downloading pdb from %s to %s.\n", url.c_str(), cache_path.string().c_str());
 		
 		// Abuse URLOpenBlockingStreamW to avoid creating empty directories when no file can actually be downloaded
 		// Ideally I'd use the blocking stream to actually write the file out myself, but I don't want to incur overhead from manually doing writing out in chunks
