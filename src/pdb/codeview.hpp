@@ -18,6 +18,53 @@ typedef unsigned short  _2BYTEPAD;
 typedef unsigned long   CV_tkn_t;
 typedef CV_typ_t CV_ItemId;
 
+// Tags used by codeview and returned in SYMBOL_INFO
+enum class SymTagEnum : uint8_t { // NOTE: type size not specified in the original headers, but make it small intentionally to save memory
+    SymTagNull,
+    SymTagExe,
+    SymTagCompiland,
+    SymTagCompilandDetails,
+    SymTagCompilandEnv,
+    SymTagFunction,
+    SymTagBlock,
+    SymTagData,
+    SymTagAnnotation,
+    SymTagLabel,
+    SymTagPublicSymbol,
+    SymTagUDT,
+    SymTagEnum,
+    SymTagFunctionType,
+    SymTagPointerType,
+    SymTagArrayType,
+    SymTagBaseType,
+    SymTagTypedef,
+    SymTagBaseClass,
+    SymTagFriend,
+    SymTagFunctionArgType,
+    SymTagFuncDebugStart,
+    SymTagFuncDebugEnd,
+    SymTagUsingNamespace,
+    SymTagVTableShape,
+    SymTagVTable,
+    SymTagCustom,
+    SymTagThunk,
+    SymTagCustomType,
+    SymTagManagedType,
+    SymTagDimension,
+    SymTagCallSite,
+    SymTagInlineSite,
+    SymTagBaseInterface,
+    SymTagVectorType,
+    SymTagMatrixType,
+    SymTagHLSLType,
+    SymTagCaller,
+    SymTagCallee,
+    SymTagExport,
+    SymTagHeapAllocationSite,
+    SymTagCoffGroup,
+    SymTagMax
+};
+
 // seems like CV_typ_t are ids in TPI and IPI
 // while CV_ItemId are not, but they are for inlinees?
 
@@ -738,6 +785,19 @@ typedef struct PROCSYM32 {
     CV_PROCFLAGS    flags;      // Proc flags
     unsigned char   name[1];    // Length-prefixed name
 } PROCSYM32;
+typedef struct THUNKSYM32 {
+    unsigned short  reclen;     // Record length
+    unsigned short  rectyp;     // S_THUNK32
+    unsigned long   pParent;    // pointer to the parent
+    unsigned long   pEnd;       // pointer to this blocks end
+    unsigned long   pNext;      // pointer to next symbol
+    CV_uoff32_t     off;
+    unsigned short  seg;
+    unsigned short  len;        // length of thunk
+    unsigned char   ord;        // THUNK_ORDINAL specifying type of thunk
+    unsigned char   name[1];    // Length-prefixed name
+    //unsigned char   variant[CV_ZEROLEN]; // variant portion of thunk
+} THUNKSYM32;
 typedef struct REFSYM2 {
     unsigned short  reclen;     // Record length
     unsigned short  rectyp;     // S_PROCREF, S_DATAREF, or S_LPROCREF

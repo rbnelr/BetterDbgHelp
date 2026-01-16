@@ -367,9 +367,11 @@ void profiling_run_cachemiss () {
 }
 
 int main(int argc, const char** argv) {
+	//example_addresses(true, true, 0);
+	
 	//print_timings = false;
-	example_addresses(true, false, 0);
-	//sweep_tests();
+	//example_addresses(true, false, 0);
+	sweep_tests();
 
 	//profiling_run();
 	//profiling_run_cached();

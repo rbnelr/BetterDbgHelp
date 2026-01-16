@@ -57,6 +57,20 @@ public:
 		}
 		
 		res->sym_name = mod->pdb->stralloc[sym->name];
+		
+		res->info.TypeIndex = 0; // sym->si_type_index;
+		res->info.Reserved[0] = 0;
+		res->info.Reserved[1] = 0;
+		res->info.Index = 0; //sym->si_index;
+		res->info.Size = sym->size;
+		res->info.ModBase = mod->base_addr;
+		res->info.Flags = sym->si_flags;
+		res->info.Value = 0; //sym->si_value;
+		res->info.Address = sym->base_addr != 0 ? sym->base_addr + mod->base_addr : 0; // HACK: __ImageBase does not return an Address unlike seemingly everything else in dbghelp
+		res->info.Register = 0; //sym->si_register;
+		res->info.Scope = 0; //sym->si_scope;
+		res->info.Tag = (ULONG)sym->si_tag;
+		//res->info.NameLen = strlen(res->sym_name);
 
 		SourceLoc src_loc = {};
 		if (mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
@@ -230,6 +244,86 @@ public:
 	~SymResolverDebughelp () {
 		real_dbghelp.SymCleanup(inspectee);
 	}
+
+	bool addr2sym (void* addr, SymResult* res) {
+		res->clear();
+		
+		SYMBOL_INFO_PACKAGE buf;
+		buf.si = {};
+		buf.si.SizeOfStruct = sizeof(buf.si);
+		buf.si.MaxNameLen = MAX_SYM_NAME;
+
+		DWORD Displacement = 0;
+
+		if (!real_dbghelp.SymFromAddr(inspectee, (DWORD64)addr, nullptr, &buf.si)) {
+			res->err = "SymFromAddr error";
+			return false;
+		}
+
+		memcpy(&res->info, &buf.si, SymResult::INFO_RELEVANT_SIZE);
+
+		constexpr uint32_t SEEN_FLAGS =
+			SYMFLAG_FUNC_NO_RETURN
+		;
+		assert((res->info.Flags & ~SEEN_FLAGS) == 0);
+		assert(res->info.Value == 0);
+		assert(res->info.Register == 0);
+		assert(res->info.Scope == 0);
+		assert(
+			   res->info.Tag == 5 // SymTagFunction
+			|| res->info.Tag == 7 // SymTagData
+			|| res->info.Tag == 10 // SymTagPublicSymbol
+			|| res->info.Tag == 27 // SymTagThunk
+		);
+
+		// need to copy into per-SymResult string buffer
+		res->module_path = nullptr; // dbghelp.dll does not seem to return this, module_path is mainly for completeness sake, tracy actually determines this itself
+		res->sym_name = res->str_alloc.push(buf.si.Name, buf.si.NameLen);
+		res->src_filepath = nullptr;
+		res->src_lineno = 0;
+		
+		{
+			IMAGEHLP_LINE64 line = {};
+			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+			if (real_dbghelp.SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line)) {
+				res->src_filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
+				res->src_lineno = line.LineNumber;
+			}
+		}
+
+		BOOL doInline = FALSE;
+		DWORD ctx = 0;
+		DWORD inlineNum = 0;
+		if (real_dbghelp.SymAddrIncludeInlineTrace) {
+			inlineNum = real_dbghelp.SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
+
+			DWORD idx;
+			if (inlineNum != 0) {
+				doInline = real_dbghelp.SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
+			}
+		}
+		
+		if (doInline) {
+			res->num_inlines = (int)inlineNum;
+			for (int i=res->num_inlines-1; i>=0; i--) {
+				res->inlines[i] = {};
+
+				if (real_dbghelp.SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, &buf.si)) {
+					res->inlines[i].fnname = res->str_alloc.push(buf.si.Name, buf.si.NameLen);
+					
+					IMAGEHLP_LINE64 line = {};
+					line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+					if (real_dbghelp.SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line)) {
+						res->inlines[i].filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
+						res->inlines[i].lineno = line.LineNumber;
+					}
+				}
+
+				ctx++;
+			}
+		}
+		return res->valid();
+	}
 	
 	void measure_addr2sym (char* addr) {
 		ZoneScopedC(0xAC563E);
@@ -299,70 +393,6 @@ public:
 				}
 			}
 		}
-	}
-
-	bool addr2sym (void* addr, SymResult* res) {
-		res->clear();
-		
-		SYMBOL_INFO_PACKAGE buf;
-		buf.si = {};
-		buf.si.SizeOfStruct = sizeof(buf.si);
-		buf.si.MaxNameLen = MAX_SYM_NAME;
-
-		DWORD Displacement = 0;
-
-		if (!real_dbghelp.SymFromAddr(inspectee, (DWORD64)addr, nullptr, &buf.si)) {
-			res->err = "SymFromAddr error";
-			return false;
-		}
-
-		// need to copy into per-SymResult string buffer
-		res->module_path = nullptr; // dbghelp.dll does not seem to return this, module_path is mainly for completeness sake, tracy actually determines this itself
-		res->sym_name = res->str_alloc.push(buf.si.Name, buf.si.NameLen);
-		res->src_filepath = nullptr;
-		res->src_lineno = 0;
-		
-		{
-			IMAGEHLP_LINE64 line = {};
-			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-			if (real_dbghelp.SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line)) {
-				res->src_filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
-				res->src_lineno = line.LineNumber;
-			}
-		}
-
-		BOOL doInline = FALSE;
-		DWORD ctx = 0;
-		DWORD inlineNum = 0;
-		if (real_dbghelp.SymAddrIncludeInlineTrace) {
-			inlineNum = real_dbghelp.SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
-
-			DWORD idx;
-			if (inlineNum != 0) {
-				doInline = real_dbghelp.SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
-			}
-		}
-		
-		if (doInline) {
-			res->num_inlines = (int)inlineNum;
-			for (int i=res->num_inlines-1; i>=0; i--) {
-				res->inlines[i] = {};
-
-				if (real_dbghelp.SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, &buf.si)) {
-					res->inlines[i].fnname = res->str_alloc.push(buf.si.Name, buf.si.NameLen);
-					
-					IMAGEHLP_LINE64 line = {};
-					line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-					if (real_dbghelp.SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line)) {
-						res->inlines[i].filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
-						res->inlines[i].lineno = line.LineNumber;
-					}
-				}
-
-				ctx++;
-			}
-		}
-		return res->valid();
 	}
 
 	void print_timings () {

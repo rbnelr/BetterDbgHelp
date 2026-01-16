@@ -9,6 +9,10 @@ struct MismatchCounts {
 	int symbol_mismatch = 0;
 	int source_mismatch = 0;
 	int inline_mimatch = 0;
+	int info_mimatch = 0;
+	int info_size_mimatch = 0;
+	int info_flags_mimatch = 0;
+	int info_tag_mimatch = 0;
 
 	int symbol_mismatch_overlap = 0; // different symbol name (but overlapping symbol with correct name existed)
 	//int symbol_name_mangled = 0; // correct symbol but we did not filer out mangled scoped info (Note: I did not enable demangling, but dbghelp still 'stripped' the name of the mangled parts)
@@ -21,6 +25,10 @@ struct MismatchCounts {
 		logf("  symbol_mismatch: %d\n", symbol_mismatch);
 		logf("  source_mismatch: %d\n", source_mismatch);
 		logf("  inline_mimatch: %d\n", inline_mimatch);
+		logf("  info_mimatch: %d\n", info_mimatch);
+		logf("  info_size_mimatch: %d\n", info_size_mimatch);
+		logf("  info_flags_mimatch: %d\n", info_flags_mimatch);
+		logf("  info_tag_mimatch: %d\n", info_tag_mimatch);
 		logf("  symbol_mismatch_overlap: %d\n", symbol_mismatch_overlap);
 		//logf("  symbol_name_mangled: %d\n", symbol_name_mangled);
 		logf("  DH_no_source: %d\n", DH_no_source);
@@ -49,6 +57,9 @@ struct SymResult {
 	
 	int num_inlines;
 	SourceLocAndFn inlines[MAX_INLINES];
+
+	static inline constexpr size_t INFO_RELEVANT_SIZE = offsetof(SYMBOL_INFO, NameLen); // exclude NameLen, MaxNameLen, and Name[1] at end of struct
+	SYMBOL_INFO info; // full dbghelp info, all of which other than the name is irrelevant for tracy use case
 	
 	// my own symbol resolver returns stable pointers but dbghelp needs to copy the strings
 	// I could have just resorted to using std::string everywhere
@@ -85,12 +96,10 @@ struct SymResult {
 		
 		num_inlines = 0;
 
-		// I had a bug with inlinesites not getting properly cleared(?)
-		// but this memset takes time, so let's just get this right instead
-		//#ifndef NDEBUG
-		//memset((char*)this + STRBUF_SIZE, 0, sizeof(SymResult)-STRBUF_SIZE);
-		//memset(inlines, 0, sizeof(inlines));
-		//#endif
+		// Need to do this if we want to memcmp to test symbol equality
+		info = {};
+		info.SizeOfStruct = sizeof(SYMBOL_INFO);
+		info.MaxNameLen = MAX_SYM_NAME;
 	}
 	void clear_inlines () {
 		for (int i=num_inlines; i<MAX_INLINES; i++) {
@@ -138,41 +147,37 @@ struct SymResult {
 		}
 		return true;
 	}
-
-	/*
-	bool operator== (SymResult const& r) const {
-		if (valid() != r.valid()) return false;
-
-		if (valid()) {
-			// dbghelp.dll not returning module name, assume it's correct
-			//if (my_strcmp(module_path, r.module_path) != 0) return false;
-			if (!my_strcmp(sym_name, r.sym_name)) return false;
-
-			if (has_source() != r.has_source()) return false;
-			if (has_source()) {
-				if (!my_strcmp(src_filepath, r.src_filepath)) return false;
-				if (src_lineno != r.src_lineno) return false;
-			}
-				
-			if (num_inlines != r.num_inlines) return false;
-			for (int i=0; i<num_inlines; i++) {
-				auto& li = inlines[i];
-				auto& ri = r.inlines[i];
-				if (!my_strcmp(li.fnname, ri.fnname)) return false;
-				if (!my_strcmp(li.filepath, ri.filepath)) return false;
-				if (li.lineno != ri.lineno) return false;
-			}
-		}
-		else {
-			// If both throw error it counts as a match as comparing errors may be hard
-		}
-		return true;
-	}
-	bool operator!= (SymResult const& r) const {
-		return !(*this == r);
-	}
-	*/
 	
+	bool info_equal (SymResult const& r) const {
+		// Assume SizeOfStruct, Reserved, and MaxNameLen are set up identically to make this simple
+		// We should be able to ignore NameLen though as the actual string is compared
+		//return memcmp(&info, &r.info, INFO_RELEVANT_SIZE) == 0;
+		
+		// TODO: for now just compare the values I actively try to get, later try to achive exact matches
+		return true
+			&& info.Scope == r.info.Scope
+			&& info.Size == r.info.Size
+			&& info.Flags == r.info.Flags
+			&& info.Value == r.info.Value
+			&& info.Address == r.info.Address
+			&& info.Register == r.info.Register
+			&& info.Scope == r.info.Scope
+			//info.Tag == r.info.Tag
+		;
+	}
+	void print_info () const {
+		logf("  info.TypeIndex : %10d\n", info.TypeIndex);
+		logf("  info.Index     : %10d\n", info.Index);
+		logf("  info.Size      : %10x\n", info.Size);
+		logf("  info.ModBase   : %10llx\n", info.ModBase);
+		logf("  info.Flags     : %10x\n", info.Flags);
+		logf("  info.Value     : %10llx\n", info.Value);
+		logf("  info.Address   : %10llx\n", info.Address);
+		logf("  info.Register  : %10d\n", info.Register);
+		logf("  info.Scope     : %10d\n", info.Scope);
+		logf("  info.Tag       : %10d\n", info.Tag);
+	}
+
 	bool equal (SymResult const& r, MismatchCounts::Data c={}) const {
 		auto* counts = c.counts;
 
@@ -188,6 +193,20 @@ struct SymResult {
 			if (!my_strcmp(sym_name, r.sym_name)) {
 				if (counts) {
 					counts->symbol_mismatch_or_mangled(*this, r, c);
+				}
+				return false;
+			}
+
+			if (!info_equal(r)) {
+				if (counts) {
+					counts->info_mimatch++;
+
+					if (info.Size != r.info.Size)
+						counts->info_size_mimatch++;
+					if (info.Flags != r.info.Flags)
+						counts->info_flags_mimatch++;
+					if (info.Tag != r.info.Tag)
+						counts->info_tag_mimatch++;
 				}
 				return false;
 			}
@@ -272,13 +291,20 @@ struct SymResult {
 			return;
 		}
 
+
+		//logf("<<TypeInd:%d>> ", info.TypeIndex);
+		logf("<<Tag:%d>> ", info.Tag);
+
 		logf("%15s!%s ", module_path, sym_name);
+
 		if (has_source()) {
 			logf("%-15s:%d\n", src_filepath, src_lineno);
 		}
 		else {
 			logf("(No source info)\n");
 		}
+
+		//print_info();
 
 		for (int i=0; i<num_inlines; i++) {
 			if (inlines[i].filepath) {
@@ -317,6 +343,12 @@ struct SymResult {
 		if (!my_strcmp(sym_name, r.sym_name)) {
 			logf("> SymResolver: \"%s!%s\" !=\n", module_path,sym_name);
 			logf("> dbghelp:dll: \"[unknown]!%s\"\n", r.sym_name);
+		}
+		if (!info_equal(r)) {
+			logf("> SymResolver:\n");
+			print_info();
+			logf("> dbghelp:dll:\n");
+			r.print_info();
 		}
 		if (   has_source() != r.has_source()
 			|| !my_strcmp(src_filepath, r.src_filepath) || src_lineno != r.src_lineno) {

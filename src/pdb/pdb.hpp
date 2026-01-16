@@ -7,6 +7,8 @@
 #include <map>
 #include <cstdlib>
 
+inline HANDLE _inspectee = INVALID_HANDLE_VALUE;
+
 struct Stats {
 	size_t num_inlinesites = 0;
 	size_t num_lineinfo = 0;
@@ -26,9 +28,47 @@ struct Symbol {
 	uintptr_t base_addr = 0; // relative to module
 	uint32_t size = 0;
 	StrAlloc::sid name = -1;
+
+	bool _is_data = false;
 	
-	s16 module_index = -1;
+//// Info not needed by profilers but needed to replicate SYMBOL_INFO from SymFromAddr
+	// TODO: Describe once I find out what each one means and when it is actually set
+
+	/*
+	A unique value that identifies the type data that describes the symbol. This value does not persist between sessions.
+	Observation: small numbers which do not match the large numbers from the actual type indices that appear in pdbs
+	-> Sounds In that case I likely do not need to (and cannot) replicate the behavior
+	TODO: find out which API makes use of this
+	*/
+	//uint32_t si_type_index = 0;
+	/*
+	The unique value for the symbol.
+	The value associated with a symbol is not guaranteed to be the same each time you run the process.
+	For PDB symbols, the index value for a symbol is not generated until the symbol is enumerated or retrieved through a search by name or address.
+	The index values for all CodeView and COFF symbols are generated when the symbols are loaded.
+	-> Sounds like this index is meaningless and only used for the user to accelerate later lookups?
+	-> In that case I likely do not need to (and cannot) replicate the behavior, instead I could return my own symbol index
+	TODO: find out which API makes use of this
+	*/
+	//uint32_t si_index = 0;
+	uint32_t si_flags = 0;
+	//uint64_t si_value = 0;
+	//uint32_t si_register = 0;
+	//uint32_t si_scope = 0;
+	/*
+	Oberved:
+	5=SymTagFunction       
+	7=SymTagData           
+	10=SymTagPublicSymbol  
+	27=SymTagThunk         
+	TODO: SymTagData and SymTagPublicSymbol are from read_symbol_record_stream, the others from module, but I still sometimes get the wrong result
+	      needs to be reverse engineered in some way
+	*/
+	SymTagEnum si_tag = SymTagEnum::SymTagNull;
+////
+
 	uint8_t inline_depth = 0;
+	int16_t module_index = -1;
 
 	// Could eliminate now that allocated consecutive
 	// possibly via single inlinesites offset
@@ -196,12 +236,14 @@ public:
 		return count;
 	}
 
-	static std::unique_ptr<FastPdbLookup> try_load_for_exe (std::filesystem::path const& exe_path);
+	static std::unique_ptr<FastPdbLookup> try_load_for_exe (std::filesystem::path const& exe_path, uint64_t _mod_base);
 };
 
 class PdbReader {
 	//// Handle pdb paging logic
 	MemoryMappedFile file;
+
+	uint64_t _mod_base;
 
 	msf_header* header;
 
@@ -587,22 +629,19 @@ class PdbReader {
 		ptr = ptr2 + header->byte_size_of_the_module_information_substream;
 		
 		//// section_contribution_substream
-		ptr2 = ptr;
-
 		u32 DBISCImpv = *(u32*)ptr;
-		ptr += sizeof(u32);
 
 		assert(DBISCImpv == (0xeffe0000 + 19970605));
-		
+		auto* section_contributions = (pdb_section_contribution*)(ptr + sizeof(u32)); // skip DBISCImpv
 		u32 num_section_contributions = header->byte_size_of_the_section_contribution_substream / sizeof(pdb_section_contribution);
-		auto* section_contributions = (pdb_section_contribution*)ptr;
-
+		
 		// Section contributions seem just be a list of all the symbol address ranges merged, meaning mainly functions
 		// For my use case it seems pointless to search section contributions, as finding the entry only tells you the module
 		// which you then have to search for the actual symbol, I don't know how dbghelp implemented this, as the symbols in the module appear unsorted and even have duplicates
 		// maybe there is a hashmap somehwere where the start address of the SC can be searched, but I can instead simply build a sorted list of all symbols instead
 		// Except that in rare cases where functions with identical code get merged, dbghelp returns a seemingly random one, and I can't seem to ever return the same one as it
 		// The roundabout way through section contributions does not help afaik
+		/*
 		for (u32 i=0; i<num_section_contributions; i++) {
 			auto* sc = &section_contributions[i];
 			//logf("> %d %8x %4x %d\n", sc->section_id, sc->offset, sc->size, sc->module_index);
@@ -615,8 +654,8 @@ class PdbReader {
 					(sc->section_id == prev->section_id && sc->offset >= prev->offset + prev->size));
 			}
 		}
-		ptr += sizeof(pdb_section_contribution) * num_section_contributions;
-		assert((ptr - ptr2) == header->byte_size_of_the_section_contribution_substream);
+		*/
+		ptr += header->byte_size_of_the_section_contribution_substream;
 		
 		//// section_map_substream
 		//ptr2 = ptr;
@@ -1169,42 +1208,72 @@ class PdbReader {
 				//int entry_offs = (int)((char*)sym - sym_info);
 				//logf("> %7d [%4x] %d %s\n", entry_offs, sym->kind, sym->length, SYM_ENUM_e_str(sym->kind));
 
+				auto push_symbol = [this, module_index, file_checksum_ptr]
+						(u32 offs, u32 size, u16 seg, uint32_t flags, SymTagEnum tag, const char* name) -> int {
+					uintptr_t module_raddr = offs + sections_sorted[seg-1].base_addr;
+					
+					//if (module_raddr == 0x1000 || module_raddr == 0x2580) {
+					//	printf("");
+					//}
+
+					if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
+						auto bid = lookup.binalloc.push<Symbol>(Symbol());
+
+						Symbol s = {};
+						s.base_addr = module_raddr;
+						s.size = size;
+						s.name = lookup.stralloc.push(name);
+						s.module_index = module_index;
+
+						// s.si_type_index = 0;
+						// s.si_index = 0;
+						s.si_flags = flags;
+						// s.si_value = 0;
+						// s.si_register = 0;
+						// s.si_scope = 0;
+						s.si_tag = tag;
+
+						uintptr_t lineinfo_base_addr;
+						auto* lineinfo = find_single_overlapping_lineinfo(s, &lineinfo_base_addr);
+						if (lineinfo) {
+							int32_t symbol_offset = (int32_t)((intptr_t)module_raddr - (intptr_t)lineinfo_base_addr);
+							s.p_lineinfo = lineinfo::encode_c13_lineinfo(lineinfo, symbol_offset,
+							[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
+								auto* cksm = (codeview_file_checksum*)(file_checksum_ptr + offset_in_file_checksums);
+								return extract_name(cksm->offset_in_string_table);
+							}, lookup.binalloc, lookup.stats);
+						}
+
+						*lookup.binalloc.get<Symbol>(bid) = s;
+
+						int idx = (int)lookup.symbols.size();
+						lookup.symbols.push_back(bid);
+
+						extracted_symbol_addresses.emplace(module_raddr, idx);
+						return idx;
+					}
+
+					return -1;
+				};
+
 				switch (sym->kind) {
+					case S_THUNK32: {
+						auto* s = (THUNKSYM32*)sym;
+						printf(">> S_THUNK32: %s\n", s->name);
+
+						cur_symbol = push_symbol(s->off, s->len, s->seg, 0, SymTagEnum::SymTagThunk, (const char*)s->name);
+					} break;
 					case S_GPROC32: case S_LPROC32:
 					case S_GPROC32_ID: case S_LPROC32_ID: {
 						auto* proc = (PROCSYM32*)sym;
-						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
 						
-						//logf(">> %s %4d|%8x => %4llx, %4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, module_raddr, proc->len, proc->name);
+						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
+						logf(">> %s %4d|%8x => %4llx, %4x flags%4x %s\n", sym->kind == S_LPROC32 ? "L":"G", proc->seg, proc->off, module_raddr, proc->len, proc->flags.bAll, proc->name);
 
-						if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
-							auto bid = lookup.binalloc.push<Symbol>(Symbol());
-
-							Symbol s = {};
-							s.base_addr = module_raddr;
-							s.size = proc->len;
-							s.name = lookup.stralloc.push( (const char*)proc->name ); // TODO: make sure to not do this for unused symbols improve string buffer cache hit rate
-							s.module_index = module_index;
-
-							uintptr_t lineinfo_base_addr;
-							auto* lineinfo = find_single_overlapping_lineinfo(s, &lineinfo_base_addr);
-							if (lineinfo) {
-								int32_t symbol_offset = (int32_t)((intptr_t)module_raddr - (intptr_t)lineinfo_base_addr);
-								s.p_lineinfo = lineinfo::encode_c13_lineinfo(lineinfo, symbol_offset,
-								[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
-									auto* cksm = (codeview_file_checksum*)(file_checksum_ptr + offset_in_file_checksums);
-									return extract_name(cksm->offset_in_string_table);
-								}, lookup.binalloc, lookup.stats);
-							}
-
-							*lookup.binalloc.get<Symbol>(bid) = s;
-
-							int idx = (int)lookup.symbols.size();
-							lookup.symbols.push_back(bid);
-
-							extracted_symbol_addresses.emplace(module_raddr, idx);
-							cur_symbol = idx;
-						}
+						uint32_t flags = 0;
+						if (proc->flags.CV_PFLAG_NEVER) flags |= SYMFLAG_FUNC_NO_RETURN;
+						
+						cur_symbol = push_symbol(proc->off, proc->len, proc->seg, flags, SymTagEnum::SymTagFunction, (const char*)proc->name);
 					} break;
 					case S_INLINESITE: {
 						auto* inl = (INLINESITESYM*)sym;
@@ -1284,20 +1353,54 @@ class PdbReader {
 		char* ptr = symbol_record_stream_data.data();
 		char* end = ptr + symbol_record_stream_data.size();
 		
-		auto push_symbol = [this] (u32 offs, u32 size, u16 seg, const char* name, const char* _sym_type) [[msvc::forceinline]] {
+		auto push_symbol = [this] (SYM_ENUM_e kind, u32 offs, u32 size, u16 seg, u32 flags, SymTagEnum tag, const char* name, const char* _sym_type, u32 _flags)
+			[[msvc::forceinline]] {
+			logf("%s: %4d|%8x, %4x %s\n", _sym_type, seg, offs, _flags, name);
+			
 			uintptr_t module_raddr;
 			if (!resolve_rva(offs, seg, &module_raddr))
 				return;
+			
+			if (module_raddr == 0x31f0) {
+				printf("");
+			}
 
-			if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
+			bool _is_data = kind != S_PUB32;
+
+			auto existing = extracted_symbol_addresses.find(module_raddr);
+			if (existing == extracted_symbol_addresses.end() ||
+				(_is_data && !lookup.get_sym(existing->second)._is_data)) {
 				
 				Symbol s = {};
 				s.base_addr = module_raddr;
 				s.size = size;
 				s.name = trim_mangled_name(name);
 
+				s._is_data = _is_data;
+				
+				//s.si_type_index = typeind;
+				// s.si_index = 0;
+				s.si_flags = flags;
+				// s.si_value = 0;
+				// s.si_register = 0;
+				// s.si_scope = 0;
+				s.si_tag = tag;
+				
 				auto bid = lookup.binalloc.push(s);
-				lookup.symbols.push_back(bid);
+
+				// HACK: Replace existing symbol due to weird dbghelp behavior
+				// This is bad because I record data that can never be used TODO: fix this
+				int idx;
+				if (existing == extracted_symbol_addresses.end()) {
+					idx = (int)lookup.symbols.size();
+					lookup.symbols.push_back(bid);
+
+					extracted_symbol_addresses.emplace(module_raddr, idx);
+				}
+				else {
+					idx = existing->second;
+					lookup.symbols[idx] = bid;
+				}
 
 				//logf("%s: %4d|%8x => %4llx, %s\n", _sym_type, seg, offs, addr, stralloc[trimmed_name]);
 			}
@@ -1324,22 +1427,52 @@ class PdbReader {
 				} break;
 				case S_LDATA32: case S_GDATA32: case S_LMANDATA: case S_GMANDATA: {
 					auto* s = (DATASYM32*)sym;
+					
+					// HACK: __ImageBase seems to come from this entry, and none of these have sizes
+					// yet dbghelp returns size=0x40 for __ImageBase, which matches sizeof(IMAGE_DOS_HEADER), so maybe this is correct
+					// There doesn't seem to be any other way of querying symbol sizes, sections contributions don't work as __ImageBase is not in a section
+					auto size = s->seg == 0 && s->off == 0 ? (uint32_t)sizeof(IMAGE_DOS_HEADER) : (uint32_t)1;
+
+					int computed_size = -1;
+					uintptr_t module_raddr;
+					if (resolve_rva(s->off, s->seg, &module_raddr))
+						computed_size = _find_TPI(module_raddr, s->typind);
+					if (computed_size >= 0)
+						size = (uint32_t)computed_size;
+
 					push_symbol(
+						sym->kind,
 						s->off,
-						0, // TODO: these symbols don't have a size, possibly becasue the size is implicit based on the data type?,
+						size,
 						s->seg,
+						0,
+						SymTagEnum::SymTagData,
 						(const char*)s->name,
-						"DATASYM32"
+						"DATASYM32",
+						0
 					);
 				} break;
 				case S_PUB32: {
 					auto* s = (PUBSYM32*)sym;
+
+					if (s->pubsymflags.fFunction == false) {
+						// TODO: despite there being no size stored in PUBSYM32, and also no typind which can be used to compute the size
+						// dbghelp still returns a non-zero size for ?_OptionsStorage@?1??__local_stdio_printf_options@@9@4_KA
+						// which may be because the 4_KA encodes the "unsigned __int64" in unsigned __int64 `__local_stdio_printf_options'::`2'::_OptionsStorage
+						// Indeed this is a data symbol which for some reason exists as S_PUB32 but there is no other entry (no S_LDATA32 etc.) at that address
+					}
+
 					push_symbol(
+						sym->kind,
 						s->off,
 						0,
 						s->seg,
+						0,
+						s->pubsymflags.fFunction ? SymTagEnum::SymTagPublicSymbol : SymTagEnum::SymTagData,
+						//SymTagEnum::SymTagPublicSymbol, // Sometimes this is supposed to be SymTagEnum::SymTagData and I don't know why
 						(const char*)s->name,
-						"PUBSYM32"
+						"PUBSYM32",
+						(u32)s->pubsymflags.grfFlags
 					);
 				} break;
 				default: {
@@ -1350,6 +1483,82 @@ class PdbReader {
 		assert(ptr == end);
 	}
 	
+	int _find_TPI (uint64_t module_raddr, CV_typ_t typind) {
+		SYMBOL_INFO_PACKAGE buf;
+		buf.si = {};
+		buf.si.SizeOfStruct = sizeof(buf.si);
+		buf.si.MaxNameLen = MAX_SYM_NAME;
+
+		DWORD Displacement = 0;
+
+		auto res1 = real_dbghelp.SymFromAddr(_inspectee, (DWORD64)(_mod_base + module_raddr), nullptr, &buf.si);
+
+		ULONG64 len = -1;
+		auto res2 = real_dbghelp.SymGetTypeInfo(_inspectee, _mod_base, buf.si.TypeIndex, TI_GET_LENGTH, &len);
+
+		int dbghelp_size = len != -1 ? (int)len : -1;
+		int my_size = -1;
+		
+		char* ptr = TPI_data.data();
+
+		auto* header = (tpi_stream_header*)ptr;
+		ptr += sizeof(tpi_stream_header);
+		
+		assert(header->version == 20040203);
+
+		if (typind >= header->minimal_type_index) {
+			u32 count = header->one_past_last_type_index - header->minimal_type_index;
+			u32 id = header->minimal_type_index;
+		
+			char* end = ptr + header->byte_count_of_type_record_data_following_the_header;
+			while (ptr < end) {
+				auto* lf = (codeview_type_record_header*)ptr;
+				ptr += sizeof(u16) + lf->length; // length field of codeview_type_record_header not contained in length (but kind is)
+			
+				assert(id < header->one_past_last_type_index);
+				if (id == typind) {
+
+					switch (lf->kind) {
+						case LF_STRUCTURE:
+						case LF_CLASS: {
+							auto* struc = (lfClass*)lf;
+							//auto* name = push_type(id, struc->data);
+
+							ulong size = 0;
+							size_t dcb = CbExtractNumeric(struc->data, &size);
+							auto* name = (const char *)struc->data + dcb;
+
+							//logf(">> lfClass: [%4x]: %s %x\n", id, name, struc->field);
+
+							my_size = (int)size;
+						} break;
+						case LF_UNION: {
+							auto* struc = (lfUnion*)lf;
+							//auto* name = push_type(id, struc->data);
+						
+							ulong size = 0;
+							size_t dcb = CbExtractNumeric(struc->data, &size);
+							auto* name = (const char *)struc->data + dcb;
+
+							my_size = (int)size;
+						} break;
+
+						case LF_POINTER: {
+							my_size = 8; // ??
+						} break;
+					}
+					if (my_size >= 0)
+						break;
+				}
+
+				id++;
+			}
+			//assert(my_size >= 0);
+			//assert(my_size == dbghelp_size);
+		}
+
+		return dbghelp_size;
+	}
 	void read_TPI_stream () {
 		ZoneScoped;
 
@@ -1628,14 +1837,14 @@ class PdbReader {
 
 public:
 
-	static std::unique_ptr<PdbReader> pdb_for_exe (std::filesystem::path const& exe_path) {
+	static std::unique_ptr<PdbReader> pdb_for_exe (std::filesystem::path const& exe_path, uint64_t _mod_base) {
 		PDB_Locator locator(exe_path);
 		auto path = locator.get_pdb_path();
 		auto rsds = locator.get_rsds();
-		return std::make_unique<PdbReader>(std::move(path), rsds);
+		return std::make_unique<PdbReader>(std::move(path), rsds, _mod_base);
 	}
 
-	PdbReader (std::filesystem::path&& pdb_path, PDB_Locator::PDB_guid_and_age const& rsds) {
+	PdbReader (std::filesystem::path&& pdb_path, PDB_Locator::PDB_guid_and_age const& rsds, uint64_t _mod_base) {
 		ZoneScopedN("parse_pdb");
 
 		if (!file.open(pdb_path)) {
@@ -1643,6 +1852,7 @@ public:
 		}
 
 		lookup.pdb_path = std::move(pdb_path);
+		this->_mod_base = _mod_base;
 
 		lookup.binalloc.init();
 		lookup.stralloc.init();
@@ -1705,9 +1915,9 @@ public:
 	}
 };
 
-inline std::unique_ptr<FastPdbLookup> FastPdbLookup::try_load_for_exe (std::filesystem::path const& exe_path) {
+inline std::unique_ptr<FastPdbLookup> FastPdbLookup::try_load_for_exe (std::filesystem::path const& exe_path, uint64_t _mod_base) {
 	try {
-		auto reader = PdbReader::pdb_for_exe(exe_path);
+		auto reader = PdbReader::pdb_for_exe(exe_path, _mod_base);
 		return std::make_unique<FastPdbLookup>( reader->extract_lookup() );
 	} catch (std::exception& ex) {
 		logf("!!! PDB loading exception: %s\n", ex.what());
