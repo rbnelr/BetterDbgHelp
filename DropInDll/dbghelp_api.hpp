@@ -1,730 +1,12 @@
 #pragma once
 #include "util.hpp"
 
-// I intentially don't include dbghelp.h directly here, as it would normally define dllimport functions
-// Instead I'm trying to export those same function instead, and then call the original dll which I load with LoadLibary
+// dbghelp.h would normally define dllimport functions, but we're trying to make a dll mimicing dbghelp.dll here
+// by defining _IMAGEHLP_SOURCE_, the header declares the functions without dllimport, which we then ignore and export custom wrapper ones
+// but we need all the types structs and function pointer typdefs (callbacks) to delegate to the original dll
+// (despite the fact that delegating a function call could simply be done with a single jmp instruction)
+#define _IMAGEHLP_SOURCE_
 #include <dbghelp.h>
-
-// =============================================================
-// Needed strutcs and types copied from dbghelp.h
-// TODO: This seems a bit dodgy, maybe I should include the header using the source macro instead, so it declares the functions without dllimport
-// then use the dllexport pragma thing where I can call my own functions as MyFunc but export it as Func
-
-typedef enum {
-	AddrMode1616,
-	AddrMode1632,
-	AddrModeReal,
-	AddrModeFlat
-} ADDRESS_MODE;
-
-typedef struct _tagADDRESS64 {
-	DWORD64       Offset;
-	WORD          Segment;
-	ADDRESS_MODE  Mode;
-} ADDRESS64, * LPADDRESS64;
-
-//
-// New KDHELP structure for 64 bit system support.
-// This structure is preferred in new code.
-//
-typedef struct _KDHELP64 {
-
-	//
-	// address of kernel thread object, as provided in the
-	// WAIT_STATE_CHANGE packet.
-	//
-	DWORD64   Thread;
-
-	//
-	// offset in thread object to pointer to the current callback frame
-	// in kernel stack.
-	//
-	DWORD   ThCallbackStack;
-
-	//
-	// offset in thread object to pointer to the current callback backing
-	// store frame in kernel stack.
-	//
-	DWORD   ThCallbackBStore;
-
-	//
-	// offsets to values in frame:
-	//
-	// address of next callback frame
-	DWORD   NextCallback;
-
-	// address of saved frame pointer (if applicable)
-	DWORD   FramePointer;
-
-
-	//
-	// Address of the kernel function that calls out to user mode
-	//
-	DWORD64   KiCallUserMode;
-
-	//
-	// Address of the user mode dispatcher function
-	//
-	DWORD64   KeUserCallbackDispatcher;
-
-	//
-	// Lowest kernel mode address
-	//
-	DWORD64   SystemRangeStart;
-
-	//
-	// Address of the user mode exception dispatcher function.
-	// Added in API version 10.
-	//
-	DWORD64   KiUserExceptionDispatcher;
-
-	//
-	// Stack bounds, added in API version 11.
-	//
-	DWORD64   StackBase;
-	DWORD64   StackLimit;
-
-	//
-	// Target OS build number. Added in API version 12.
-	//
-	DWORD     BuildVersion;
-	DWORD     RetpolineStubFunctionTableSize;
-	DWORD64   RetpolineStubFunctionTable;
-	DWORD     RetpolineStubOffset;
-	DWORD     RetpolineStubSize;
-	DWORD64   Reserved0[2];
-
-} KDHELP64, * PKDHELP64;
-
-typedef struct API_VERSION {
-	USHORT  MajorVersion;
-	USHORT  MinorVersion;
-	USHORT  Revision;
-	USHORT  Reserved;
-} API_VERSION, * LPAPI_VERSION;
-
-typedef struct _tagSTACKFRAME64 {
-	ADDRESS64   AddrPC;               // program counter
-	ADDRESS64   AddrReturn;           // return address
-	ADDRESS64   AddrFrame;            // frame pointer
-	ADDRESS64   AddrStack;            // stack pointer
-	ADDRESS64   AddrBStore;           // backing store pointer
-	PVOID       FuncTableEntry;       // pointer to pdata/fpo or NULL
-	DWORD64     Params[4];            // possible arguments to the function
-	BOOL        Far;                  // WOW far call
-	BOOL        Virtual;              // is this a virtual frame?
-	DWORD64     Reserved[3];
-	KDHELP64    KdHelp;
-} STACKFRAME64, * LPSTACKFRAME64;
-
-typedef BOOL
-(CALLBACK* PENUMDIRTREE_CALLBACK)(
-	_In_ PCSTR FilePath,
-	_In_opt_ PVOID CallerData
-	);
-
-typedef BOOL
-(CALLBACK* PENUMLOADED_MODULES_CALLBACK64)(
-	_In_ PCSTR ModuleName,
-	_In_ DWORD64 ModuleBase,
-	_In_ ULONG ModuleSize,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PFIND_DEBUG_FILE_CALLBACK)(
-	_In_ HANDLE FileHandle,
-	_In_ PCSTR FileName,
-	_In_ PVOID CallerData
-	);
-
-typedef BOOL
-(CALLBACK* PFIND_EXE_FILE_CALLBACK)(
-	_In_ HANDLE FileHandle,
-	_In_ PCSTR FileName,
-	_In_opt_ PVOID CallerData
-	);
-
-typedef
-BOOL
-(__stdcall* PREAD_PROCESS_MEMORY_ROUTINE64)(
-	_In_ HANDLE hProcess,
-	_In_ DWORD64 qwBaseAddress,
-	_Out_writes_bytes_(nSize) PVOID lpBuffer,
-	_In_ DWORD nSize,
-	_Out_ LPDWORD lpNumberOfBytesRead
-	);
-
-typedef
-BOOL
-(__stdcall* PREAD_PROCESS_MEMORY_ROUTINE64)(
-	_In_ HANDLE hProcess,
-	_In_ DWORD64 qwBaseAddress,
-	_Out_writes_bytes_(nSize) PVOID lpBuffer,
-	_In_ DWORD nSize,
-	_Out_ LPDWORD lpNumberOfBytesRead
-	);
-
-typedef
-PVOID
-(__stdcall* PFUNCTION_TABLE_ACCESS_ROUTINE64)(
-	_In_ HANDLE ahProcess,
-	_In_ DWORD64 AddrBase
-	);
-
-typedef
-DWORD64
-(__stdcall* PGET_MODULE_BASE_ROUTINE64)(
-	_In_ HANDLE hProcess,
-	_In_ DWORD64 Address
-	);
-
-typedef
-DWORD64
-(__stdcall* PTRANSLATE_ADDRESS_ROUTINE64)(
-	_In_ HANDLE hProcess,
-	_In_ HANDLE hThread,
-	_In_ LPADDRESS64 lpaddr
-	);
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMMODULES_CALLBACK64)(
-	_In_ PCSTR ModuleName,
-	_In_ DWORD64 BaseOfDll,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMMODULES_CALLBACKW64)(
-	_In_ PCWSTR ModuleName,
-	_In_ DWORD64 BaseOfDll,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PENUMLOADED_MODULES_CALLBACK64)(
-	_In_ PCSTR ModuleName,
-	_In_ DWORD64 ModuleBase,
-	_In_ ULONG ModuleSize,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PENUMLOADED_MODULES_CALLBACKW64)(
-	_In_ PCWSTR ModuleName,
-	_In_ DWORD64 ModuleBase,
-	_In_ ULONG ModuleSize,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMSYMBOLS_CALLBACK64)(
-	_In_ PCSTR SymbolName,
-	_In_ DWORD64 SymbolAddress,
-	_In_ ULONG SymbolSize,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMSYMBOLS_CALLBACK64W)(
-	_In_ PCWSTR SymbolName,
-	_In_ DWORD64 SymbolAddress,
-	_In_ ULONG SymbolSize,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PSYMBOL_REGISTERED_CALLBACK64)(
-	_In_ HANDLE hProcess,
-	_In_ ULONG ActionCode,
-	_In_opt_ ULONG64 CallbackData,
-	_In_opt_ ULONG64 UserContext
-	);
-
-typedef
-PVOID
-(CALLBACK* PSYMBOL_FUNCENTRY_CALLBACK)(
-	_In_ HANDLE hProcess,
-	_In_ DWORD AddrBase,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef
-PVOID
-(CALLBACK* PSYMBOL_FUNCENTRY_CALLBACK64)(
-	_In_ HANDLE hProcess,
-	_In_ ULONG64 AddrBase,
-	_In_ ULONG64 UserContext
-	);
-
-typedef struct _SRCCODEINFO {
-	DWORD   SizeOfStruct;           // set to sizeof(SRCCODEINFO)
-	PVOID   Key;                    // not used
-	DWORD64 ModBase;                // base address of module this applies to
-	CHAR    Obj[MAX_PATH + 1];      // the object file within the module
-	CHAR    FileName[MAX_PATH + 1]; // full filename
-	DWORD   LineNumber;             // line number in file
-	DWORD64 Address;                // first instruction of line
-} SRCCODEINFO, * PSRCCODEINFO;
-
-typedef struct _SRCCODEINFOW {
-	DWORD   SizeOfStruct;           // set to sizeof(SRCCODEINFO)
-	PVOID   Key;                    // not used
-	DWORD64 ModBase;                // base address of module this applies to
-	WCHAR   Obj[MAX_PATH + 1];      // the object file within the module
-	WCHAR   FileName[MAX_PATH + 1]; // full filename
-	DWORD   LineNumber;             // line number in file
-	DWORD64 Address;                // first instruction of line
-} SRCCODEINFOW, * PSRCCODEINFOW;
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMLINES_CALLBACK)(
-	_In_ PSRCCODEINFO LineInfo,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMPROCESSES_CALLBACK)(
-	_In_ HANDLE hProcess,
-	_In_ PVOID UserContext
-	);
-
-typedef struct _SOURCEFILE {
-	DWORD64  ModBase;                // base address of loaded module
-	PCHAR    FileName;               // full filename of source
-} SOURCEFILE, * PSOURCEFILE;
-
-typedef struct _SOURCEFILEW {
-	DWORD64  ModBase;                // base address of loaded module
-	PWSTR    FileName;               // full filename of source
-} SOURCEFILEW, * PSOURCEFILEW;
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMSOURCEFILES_CALLBACK)(
-	_In_ PSOURCEFILE pSourceFile,
-	_In_opt_ PVOID UserContext
-	);
-
-
-typedef struct _SYMBOL_INFO {
-	ULONG       SizeOfStruct;
-	ULONG       TypeIndex;        // Type Index of symbol
-	ULONG64     Reserved[2];
-	ULONG       Index;
-	ULONG       Size;
-	ULONG64     ModBase;          // Base Address of module comtaining this symbol
-	ULONG       Flags;
-	ULONG64     Value;            // Value of symbol, ValuePresent should be 1
-	ULONG64     Address;          // Address of symbol including base address of module
-	ULONG       Register;         // register holding value or pointer to value
-	ULONG       Scope;            // scope of the symbol
-	ULONG       Tag;              // pdb classification
-	ULONG       NameLen;          // Actual length of name
-	ULONG       MaxNameLen;
-	CHAR        Name[1];          // Name of symbol
-} SYMBOL_INFO, * PSYMBOL_INFO;
-
-#define MAX_SYM_NAME            2000
-
-typedef struct _SYMBOL_INFO_PACKAGE {
-	SYMBOL_INFO si;
-	CHAR        name[MAX_SYM_NAME + 1];
-} SYMBOL_INFO_PACKAGE, * PSYMBOL_INFO_PACKAGE;
-
-typedef struct _SYMBOL_INFOW {
-	ULONG       SizeOfStruct;
-	ULONG       TypeIndex;        // Type Index of symbol
-	ULONG64     Reserved[2];
-	ULONG       Index;
-	ULONG       Size;
-	ULONG64     ModBase;          // Base Address of module comtaining this symbol
-	ULONG       Flags;
-	ULONG64     Value;            // Value of symbol, ValuePresent should be 1
-	ULONG64     Address;          // Address of symbol including base address of module
-	ULONG       Register;         // register holding value or pointer to value
-	ULONG       Scope;            // scope of the symbol
-	ULONG       Tag;              // pdb classification
-	ULONG       NameLen;          // Actual length of name
-	ULONG       MaxNameLen;
-	WCHAR       Name[1];          // Name of symbol
-} SYMBOL_INFOW, * PSYMBOL_INFOW;
-
-typedef struct _SYMBOL_INFO_PACKAGEW {
-	SYMBOL_INFOW si;
-	WCHAR        name[MAX_SYM_NAME + 1];
-} SYMBOL_INFO_PACKAGEW, * PSYMBOL_INFO_PACKAGEW;
-
-#define SYMENUM_OPTIONS_DEFAULT 0x00000001
-#define SYMENUM_OPTIONS_INLINE  0x00000002
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMERATESYMBOLS_CALLBACK)(
-	_In_ PSYMBOL_INFO pSymInfo,
-	_In_ ULONG SymbolSize,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PFINDFILEINPATHCALLBACK)(
-	_In_ PCSTR filename,
-	_In_ PVOID context
-	);
-
-typedef struct _IMAGEHLP_LINE64 {
-	DWORD    SizeOfStruct;           // set to sizeof(IMAGEHLP_LINE64)
-	PVOID    Key;                    // internal
-	DWORD    LineNumber;             // line number in file
-	PCHAR    FileName;               // full filename
-	DWORD64  Address;                // first instruction of line
-} IMAGEHLP_LINE64, * PIMAGEHLP_LINE64;
-
-typedef struct _IMAGEHLP_LINEW64 {
-	DWORD    SizeOfStruct;           // set to sizeof(IMAGEHLP_LINE64)
-	PVOID    Key;                    // internal
-	DWORD    LineNumber;             // line number in file
-	PWSTR    FileName;               // full filename
-	DWORD64  Address;                // first instruction of line
-} IMAGEHLP_LINEW64, * PIMAGEHLP_LINEW64;
-
-typedef enum {
-	SymNone = 0,
-	SymCoff,
-	SymCv,
-	SymPdb,
-	SymExport,
-	SymDeferred,
-	SymSym,       // .sym file
-	SymDia,
-	SymVirtual,
-	NumSymTypes
-} SYM_TYPE;
-
-typedef enum {
-	hdBase = 0, // root directory for dbghelp
-	hdSym,      // where symbols are stored
-	hdSrc,      // where source is stored
-	hdMax       // end marker
-} IMAGEHLP_HD_TYPE;
-
-typedef struct _OMAP {
-	ULONG  rva;
-	ULONG  rvaTo;
-} OMAP, * POMAP;
-
-typedef struct _IMAGEHLP_MODULE64 {
-	DWORD    SizeOfStruct;           // set to sizeof(IMAGEHLP_MODULE64)
-	DWORD64  BaseOfImage;            // base load address of module
-	DWORD    ImageSize;              // virtual size of the loaded module
-	DWORD    TimeDateStamp;          // date/time stamp from pe header
-	DWORD    CheckSum;               // checksum from the pe header
-	DWORD    NumSyms;                // number of symbols in the symbol table
-	SYM_TYPE SymType;                // type of symbols loaded
-	CHAR     ModuleName[32];         // module name
-	CHAR     ImageName[256];         // image name
-	CHAR     LoadedImageName[256];   // symbol file name
-	// new elements: 07-Jun-2002
-	CHAR     LoadedPdbName[256];     // pdb file name
-	DWORD    CVSig;                  // Signature of the CV record in the debug directories
-	CHAR     CVData[MAX_PATH * 3];   // Contents of the CV record
-	DWORD    PdbSig;                 // Signature of PDB
-	GUID     PdbSig70;               // Signature of PDB (VC 7 and up)
-	DWORD    PdbAge;                 // DBI age of pdb
-	BOOL     PdbUnmatched;           // loaded an unmatched pdb
-	BOOL     DbgUnmatched;           // loaded an unmatched dbg
-	BOOL     LineNumbers;            // we have line number information
-	BOOL     GlobalSymbols;          // we have internal symbol information
-	BOOL     TypeInfo;               // we have type information
-	// new elements: 17-Dec-2003
-	BOOL     SourceIndexed;          // pdb supports source server
-	BOOL     Publics;                // contains public symbols
-	// new element: 15-Jul-2009
-	DWORD    MachineType;            // IMAGE_FILE_MACHINE_XXX from ntimage.h and winnt.h
-	DWORD    Reserved;               // Padding - don't remove.
-} IMAGEHLP_MODULE64, * PIMAGEHLP_MODULE64;
-
-// (Extended) ANSI version of IMAGEHLP_MODULE64 that supports Search Hints
-typedef struct _IMAGEHLP_MODULE64_EX {
-	IMAGEHLP_MODULE64 Module;
-	DWORD    RegionFlags;            // Region Search Flags - IMAGEHLP_MODULE_REGION_XXX
-} IMAGEHLP_MODULE64_EX, * PIMAGEHLP_MODULE64_EX;
-
-typedef enum _IMAGEHLP_SYMBOL_TYPE_INFO {
-	TI_GET_SYMTAG,
-	TI_GET_SYMNAME,
-	TI_GET_LENGTH,
-	TI_GET_TYPE,
-	TI_GET_TYPEID,
-	TI_GET_BASETYPE,
-	TI_GET_ARRAYINDEXTYPEID,
-	TI_FINDCHILDREN,
-	TI_GET_DATAKIND,
-	TI_GET_ADDRESSOFFSET,
-	TI_GET_OFFSET,
-	TI_GET_VALUE,
-	TI_GET_COUNT,
-	TI_GET_CHILDRENCOUNT,
-	TI_GET_BITPOSITION,
-	TI_GET_VIRTUALBASECLASS,
-	TI_GET_VIRTUALTABLESHAPEID,
-	TI_GET_VIRTUALBASEPOINTEROFFSET,
-	TI_GET_CLASSPARENTID,
-	TI_GET_NESTED,
-	TI_GET_SYMINDEX,
-	TI_GET_LEXICALPARENT,
-	TI_GET_ADDRESS,
-	TI_GET_THISADJUST,
-	TI_GET_UDTKIND,
-	TI_IS_EQUIV_TO,
-	TI_GET_CALLING_CONVENTION,
-	TI_IS_CLOSE_EQUIV_TO,
-	TI_GTIEX_REQS_VALID,
-	TI_GET_VIRTUALBASEOFFSET,
-	TI_GET_VIRTUALBASEDISPINDEX,
-	TI_GET_IS_REFERENCE,
-	TI_GET_INDIRECTVIRTUALBASECLASS,
-	TI_GET_VIRTUALBASETABLETYPE,
-	TI_GET_OBJECTPOINTERTYPE,
-	TI_GET_DISCRIMINATEDUNION_TAG_TYPEID,
-	TI_GET_DISCRIMINATEDUNION_TAG_OFFSET,
-	TI_GET_DISCRIMINATEDUNION_TAG_RANGESCOUNT,
-	TI_GET_DISCRIMINATEDUNION_TAG_RANGES,
-	IMAGEHLP_SYMBOL_TYPE_INFO_MAX,
-} IMAGEHLP_SYMBOL_TYPE_INFO;
-
-typedef struct _TI_FINDCHILDREN_PARAMS {
-	ULONG Count;
-	ULONG Start;
-	ULONG ChildId[1];
-} TI_FINDCHILDREN_PARAMS;
-
-typedef struct _DISCRIMINATEDUNION_TAG_VALUE {
-	BYTE value[16];
-	BYTE valueSizeBytes;
-} DISCRIMINATEDUNION_TAG_VALUE;
-
-typedef struct _TI_GET_DISCRIMINATEDUNION_TAG_RANGES_PARAMS {
-	ULONG Count;
-	ULONG Start;
-	DISCRIMINATEDUNION_TAG_VALUE Range[1];
-} TI_GET_DISCRIMINATEDUNION_TAG_RANGES_PARAMS;
-
-#define IMAGEHLP_GET_TYPE_INFO_UNCACHED 0x00000001
-#define IMAGEHLP_GET_TYPE_INFO_CHILDREN 0x00000002
-
-typedef struct _IMAGEHLP_GET_TYPE_INFO_PARAMS {
-	IN  ULONG    SizeOfStruct;
-	IN  ULONG    Flags;
-	IN  ULONG    NumIds;
-	IN  PULONG   TypeIds;
-	IN  ULONG64  TagFilter;
-	IN  ULONG    NumReqs;
-	IN  IMAGEHLP_SYMBOL_TYPE_INFO* ReqKinds;
-	IN  PULONG_PTR ReqOffsets;
-	IN  PULONG   ReqSizes;
-	IN  ULONG_PTR ReqStride;
-	IN  ULONG_PTR BufferSize;
-	OUT PVOID    Buffer;
-	OUT ULONG    EntriesMatched;
-	OUT ULONG    EntriesFilled;
-	OUT ULONG64  TagsFound;
-	OUT ULONG64  AllReqsValid;
-	IN  ULONG    NumReqsValid;
-	OUT PULONG64 ReqsValid OPTIONAL;
-} IMAGEHLP_GET_TYPE_INFO_PARAMS, * PIMAGEHLP_GET_TYPE_INFO_PARAMS;
-
-typedef struct _MODLOAD_DATA {
-	DWORD   ssize;                  // size of this struct
-	DWORD   ssig;                   // signature identifying the passed data
-	PVOID   data;                   // pointer to passed data
-	DWORD   size;                   // size of passed data
-	DWORD   flags;                  // options
-} MODLOAD_DATA, * PMODLOAD_DATA;
-
-typedef struct _IMAGEHLP_STACK_FRAME {
-	ULONG64 InstructionOffset;
-	ULONG64 ReturnOffset;
-	ULONG64 FrameOffset;
-	ULONG64 StackOffset;
-	ULONG64 BackingStoreOffset;
-	ULONG64 FuncTableEntry;
-	ULONG64 Params[4];
-	ULONG64 Reserved[5];
-	BOOL    Virtual;
-	ULONG   Reserved2;
-} IMAGEHLP_STACK_FRAME, * PIMAGEHLP_STACK_FRAME;
-
-typedef VOID IMAGEHLP_CONTEXT, * PIMAGEHLP_CONTEXT;
-
-typedef struct _IMAGEHLP_SYMBOL64 {
-	DWORD   SizeOfStruct;           // set to sizeof(IMAGEHLP_SYMBOL64)
-	DWORD64 Address;                // virtual address including dll base address
-	DWORD   Size;                   // estimated size of symbol, can be zero
-	DWORD   Flags;                  // info about the symbols, see the SYMF defines
-	DWORD   MaxNameLength;          // maximum size of symbol name in 'Name'
-	CHAR    Name[1];                // symbol name (null terminated string)
-} IMAGEHLP_SYMBOL64, * PIMAGEHLP_SYMBOL64;
-
-typedef struct _IMAGEHLP_SYMBOL64_PACKAGE {
-	IMAGEHLP_SYMBOL64 sym;
-	CHAR              name[MAX_SYM_NAME + 1];
-} IMAGEHLP_SYMBOL64_PACKAGE, * PIMAGEHLP_SYMBOL64_PACKAGE;
-
-typedef struct _IMAGEHLP_SYMBOLW64 {
-	DWORD   SizeOfStruct;           // set to sizeof(IMAGEHLP_SYMBOLW64)
-	DWORD64 Address;                // virtual address including dll base address
-	DWORD   Size;                   // estimated size of symbol, can be zero
-	DWORD   Flags;                  // info about the symbols, see the SYMF defines
-	DWORD   MaxNameLength;          // maximum size of symbol name in 'Name'
-	WCHAR   Name[1];                // symbol name (null terminated string)
-} IMAGEHLP_SYMBOLW64, * PIMAGEHLP_SYMBOLW64;
-
-typedef struct _IMAGEHLP_SYMBOLW64_PACKAGE {
-	IMAGEHLP_SYMBOLW64 sym;
-	WCHAR              name[MAX_SYM_NAME + 1];
-} IMAGEHLP_SYMBOLW64_PACKAGE, * PIMAGEHLP_SYMBOLW64_PACKAGE;
-
-typedef struct {
-	DWORD sizeofstruct;
-	char file[MAX_PATH + 1];
-	BOOL  stripped;
-	DWORD timestamp;
-	DWORD size;
-	char dbgfile[MAX_PATH + 1];
-	char pdbfile[MAX_PATH + 1];
-	GUID  guid;
-	DWORD sig;
-	DWORD age;
-} SYMSRV_INDEX_INFO, * PSYMSRV_INDEX_INFO;
-
-typedef struct {
-	DWORD sizeofstruct;
-	WCHAR file[MAX_PATH + 1];
-	BOOL  stripped;
-	DWORD timestamp;
-	DWORD size;
-	WCHAR dbgfile[MAX_PATH + 1];
-	WCHAR pdbfile[MAX_PATH + 1];
-	GUID  guid;
-	DWORD sig;
-	DWORD age;
-} SYMSRV_INDEX_INFOW, * PSYMSRV_INDEX_INFOW;
-
-typedef BOOL (CALLBACK* PENUMSOURCEFILETOKENSCALLBACK)(_In_ PVOID token, _In_ size_t size);
-
-typedef struct _IMAGEHLP_MODULEW64 {
-	DWORD    SizeOfStruct;           // set to sizeof(IMAGEHLP_MODULE64)
-	DWORD64  BaseOfImage;            // base load address of module
-	DWORD    ImageSize;              // virtual size of the loaded module
-	DWORD    TimeDateStamp;          // date/time stamp from pe header
-	DWORD    CheckSum;               // checksum from the pe header
-	DWORD    NumSyms;                // number of symbols in the symbol table
-	SYM_TYPE SymType;                // type of symbols loaded
-	WCHAR    ModuleName[32];         // module name
-	WCHAR    ImageName[256];         // image name
-	// new elements: 07-Jun-2002
-	WCHAR    LoadedImageName[256];   // symbol file name
-	WCHAR    LoadedPdbName[256];     // pdb file name
-	DWORD    CVSig;                  // Signature of the CV record in the debug directories
-	WCHAR        CVData[MAX_PATH * 3];   // Contents of the CV record
-	DWORD    PdbSig;                 // Signature of PDB
-	GUID     PdbSig70;               // Signature of PDB (VC 7 and up)
-	DWORD    PdbAge;                 // DBI age of pdb
-	BOOL     PdbUnmatched;           // loaded an unmatched pdb
-	BOOL     DbgUnmatched;           // loaded an unmatched dbg
-	BOOL     LineNumbers;            // we have line number information
-	BOOL     GlobalSymbols;          // we have internal symbol information
-	BOOL     TypeInfo;               // we have type information
-	// new elements: 17-Dec-2003
-	BOOL     SourceIndexed;          // pdb supports source server
-	BOOL     Publics;                // contains public symbols
-	// new element: 15-Jul-2009
-	DWORD    MachineType;            // IMAGE_FILE_MACHINE_XXX from ntimage.h and winnt.h
-	DWORD    Reserved;               // Padding - don't remove.
-} IMAGEHLP_MODULEW64, * PIMAGEHLP_MODULEW64;
-
-// (Extended) WIDE version of IMAGEHLP_MODULEW64 that supports Search Hints
-typedef struct _IMAGEHLP_MODULEW64_EX {
-	IMAGEHLP_MODULEW64 Module;
-	DWORD    RegionFlags;            // Region Search Flags - IMAGEHLP_MODULE_REGION_XXX
-} IMAGEHLP_MODULEW64_EX, * PIMAGEHLP_MODULEW64_EX;
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMERATESYMBOLS_CALLBACKW)(
-	_In_ PSYMBOL_INFOW pSymInfo,
-	_In_ ULONG SymbolSize,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMLINES_CALLBACKW)(
-	_In_ PSRCCODEINFOW LineInfo,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PSYM_ENUMSOURCEFILES_CALLBACKW)(
-	_In_ PSOURCEFILEW pSourceFile,
-	_In_opt_ PVOID UserContext
-	);
-
-typedef BOOL
-(CALLBACK* PFINDFILEINPATHCALLBACKW)(
-	_In_ PCWSTR filename,
-	_In_ PVOID context
-	);
-
-typedef BOOL
-(CALLBACK* PFIND_DEBUG_FILE_CALLBACKW)(
-	_In_ HANDLE FileHandle,
-	_In_ PCWSTR FileName,
-	_In_ PVOID  CallerData
-	);
-
-typedef BOOL
-(CALLBACK* PFIND_EXE_FILE_CALLBACKW)(
-	_In_ HANDLE FileHandle,
-	_In_ PCWSTR FileName,
-	_In_opt_ PVOID CallerData
-	);
-
-typedef BOOL
-(CALLBACK* PENUMDIRTREE_CALLBACKW)(
-	_In_ PCWSTR FilePath,
-	_In_opt_ PVOID CallerData
-	);
-
-#define INLINE_FRAME_CONTEXT_INIT   0
-#define INLINE_FRAME_CONTEXT_IGNORE 0xFFFFFFFF
-
-typedef struct _tagSTACKFRAME_EX {
-	// First, STACKFRAME64 structure
-	ADDRESS64   AddrPC;            // program counter
-	ADDRESS64   AddrReturn;        // return address
-	ADDRESS64   AddrFrame;         // frame pointer
-	ADDRESS64   AddrStack;         // stack pointer
-	ADDRESS64   AddrBStore;        // backing store pointer
-	PVOID       FuncTableEntry;    // pointer to pdata/fpo or NULL
-	DWORD64     Params[4];         // possible arguments to the function
-	BOOL        Far;               // WOW far call
-	BOOL        Virtual;           // is this a virtual frame?
-	DWORD64     Reserved[3];
-	KDHELP64    KdHelp;
-
-	// Extended STACKFRAME fields
-	DWORD       StackFrameSize;
-	DWORD       InlineFrameContext;
-} STACKFRAME_EX, * LPSTACKFRAME_EX;
-
-#define TARGET_ATTRIBUTE_PACMASK_LIVETARGET 0xFFFFFFFFFFFFFFFFull
-
-typedef
-BOOL
-(__stdcall* PGET_TARGET_ATTRIBUTE_VALUE64)(
-	_In_ HANDLE hProcess,
-	_In_ DWORD Attribute,
-	_In_ DWORD64 AttributeData,
-	_Out_ DWORD64* AttributeValue
-	);
 
 // =============================================================
 // Function Typdefs
@@ -1860,7 +1142,7 @@ inline DebughelpApi real_debughelp;
 // Dllexport Api
 
 extern "C" {
-	__declspec(dllexport) BOOL __stdcall EnumDirTree (
+	__declspec(dllexport) BOOL __stdcall hook_EnumDirTree (
 		HANDLE                hProcess,
 		PCSTR                 RootPath,
 		PCSTR                 InputPathName,
@@ -1870,24 +1152,25 @@ extern "C" {
 	) {
 		return real_debughelp.EnumDirTree(hProcess, RootPath, InputPathName, OutputPathBuffer, cb, data);
 	}
+	#pragma comment(linker, "/EXPORT:EnumDirTree=hook_EnumDirTree")
 
-	__declspec(dllexport) LPAPI_VERSION __stdcall ImagehlpApiVersion () {
+	__declspec(dllexport) LPAPI_VERSION __stdcall hook_ImagehlpApiVersion () {
 		return real_debughelp.ImagehlpApiVersion();
 	}
 
-	__declspec(dllexport) LPAPI_VERSION __stdcall ImagehlpApiVersionEx (
+	__declspec(dllexport) LPAPI_VERSION __stdcall hook_ImagehlpApiVersionEx (
 		LPAPI_VERSION AppVersion
 	) {
 		return real_debughelp.ImagehlpApiVersionEx(AppVersion);
 	}
 
-	__declspec(dllexport) BOOL __stdcall MakeSureDirectoryPathExists (
+	__declspec(dllexport) BOOL __stdcall hook_MakeSureDirectoryPathExists (
 		PCSTR DirPath
 	) {
 		return real_debughelp.MakeSureDirectoryPathExists(DirPath);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SearchTreeForFile (
+	__declspec(dllexport) BOOL __stdcall hook_SearchTreeForFile (
 		PCSTR RootPath,
 		PCSTR InputPathName,
 		PSTR  OutputPathBuffer
@@ -1895,7 +1178,7 @@ extern "C" {
 		return real_debughelp.SearchTreeForFile(RootPath, InputPathName, OutputPathBuffer);
 	}
 
-	__declspec(dllexport) BOOL __stdcall EnumerateLoadedModules64 (
+	__declspec(dllexport) BOOL __stdcall hook_EnumerateLoadedModules64 (
 		HANDLE                         hProcess,
 		PENUMLOADED_MODULES_CALLBACK64 EnumLoadedModulesCallback,
 		PVOID                          UserContext
@@ -1903,7 +1186,7 @@ extern "C" {
 		return real_debughelp.EnumerateLoadedModules64(hProcess, EnumLoadedModulesCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall EnumerateLoadedModulesEx (
+	__declspec(dllexport) BOOL __stdcall hook_EnumerateLoadedModulesEx (
 		HANDLE                         hProcess,
 		PENUMLOADED_MODULES_CALLBACK64 EnumLoadedModulesCallback,
 		PVOID                          UserContext
@@ -1911,7 +1194,7 @@ extern "C" {
 		return real_debughelp.EnumerateLoadedModulesEx(hProcess, EnumLoadedModulesCallback, UserContext);
 	}
 
-	__declspec(dllexport) HANDLE __stdcall FindDebugInfoFile (
+	__declspec(dllexport) HANDLE __stdcall hook_FindDebugInfoFile (
 		PCSTR FileName,
 		PCSTR SymbolPath,
 		PSTR  DebugFilePath
@@ -1919,7 +1202,7 @@ extern "C" {
 		return real_debughelp.FindDebugInfoFile(FileName, SymbolPath, DebugFilePath);
 	}
 
-	__declspec(dllexport) HANDLE __stdcall FindDebugInfoFileEx (
+	__declspec(dllexport) HANDLE __stdcall hook_FindDebugInfoFileEx (
 		PCSTR                     FileName,
 		PCSTR                     SymbolPath,
 		PSTR                      DebugFilePath,
@@ -1929,7 +1212,7 @@ extern "C" {
 		return real_debughelp.FindDebugInfoFileEx(FileName, SymbolPath, DebugFilePath, Callback, CallerData);
 	}
 
-	__declspec(dllexport) HANDLE __stdcall FindExecutableImage (
+	__declspec(dllexport) HANDLE __stdcall hook_FindExecutableImage (
 		PCSTR FileName,
 		PCSTR SymbolPath,
 		PSTR  ImageFilePath
@@ -1937,7 +1220,7 @@ extern "C" {
 		return real_debughelp.FindExecutableImage(FileName, SymbolPath, ImageFilePath);
 	}
 
-	__declspec(dllexport) HANDLE __stdcall FindExecutableImageEx (
+	__declspec(dllexport) HANDLE __stdcall hook_FindExecutableImageEx (
 		PCSTR                   FileName,
 		PCSTR                   SymbolPath,
 		PSTR                    ImageFilePath,
@@ -1947,7 +1230,7 @@ extern "C" {
 		return real_debughelp.FindExecutableImageEx(FileName, SymbolPath, ImageFilePath, Callback, CallerData);
 	}
 
-	__declspec(dllexport) BOOL __stdcall StackWalk64 (
+	__declspec(dllexport) BOOL __stdcall hook_StackWalk64 (
 		DWORD                            MachineType,
 		HANDLE                           hProcess,
 		HANDLE                           hThread,
@@ -1961,13 +1244,13 @@ extern "C" {
 		return real_debughelp.StackWalk64(MachineType, hProcess, hThread, StackFrame, ContextRecord, ReadMemoryRoutine, FunctionTableAccessRoutine, GetModuleBaseRoutine, TranslateAddress);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSetParentWindow (
+	__declspec(dllexport) BOOL __stdcall hook_SymSetParentWindow (
 		HWND hwnd
 	) {
 		return real_debughelp.SymSetParentWindow(hwnd);
 	}
 
-	__declspec(dllexport) DWORD __stdcall UnDecorateSymbolName (
+	__declspec(dllexport) DWORD __stdcall hook_UnDecorateSymbolName (
 		PCSTR name,
 		PSTR  outputString,
 		DWORD maxStringLength,
@@ -1976,13 +1259,13 @@ extern "C" {
 		return real_debughelp.UnDecorateSymbolName(name, outputString, maxStringLength, flags);
 	}
 
-	__declspec(dllexport) DWORD __stdcall GetTimestampForLoadedLibrary (
+	__declspec(dllexport) DWORD __stdcall hook_GetTimestampForLoadedLibrary (
 		HMODULE Module
 	) {
 		return real_debughelp.GetTimestampForLoadedLibrary(Module);
 	}
 
-	__declspec(dllexport) PVOID __stdcall ImageDirectoryEntryToData (
+	__declspec(dllexport) PVOID __stdcall hook_ImageDirectoryEntryToData (
 		PVOID   Base,
 		BOOLEAN MappedAsImage,
 		USHORT  DirectoryEntry,
@@ -1991,7 +1274,7 @@ extern "C" {
 		return real_debughelp.ImageDirectoryEntryToData(Base, MappedAsImage, DirectoryEntry, Size);
 	}
 
-	__declspec(dllexport) PVOID __stdcall ImageDirectoryEntryToDataEx (
+	__declspec(dllexport) PVOID __stdcall hook_ImageDirectoryEntryToDataEx (
 		PVOID                 Base,
 		BOOLEAN               MappedAsImage,
 		USHORT                DirectoryEntry,
@@ -2001,13 +1284,13 @@ extern "C" {
 		return real_debughelp.ImageDirectoryEntryToDataEx(Base, MappedAsImage, DirectoryEntry, Size, FoundHeader);
 	}
 
-	__declspec(dllexport) PIMAGE_NT_HEADERS __stdcall ImageNtHeader (
+	__declspec(dllexport) PIMAGE_NT_HEADERS __stdcall hook_ImageNtHeader (
 		PVOID Base
 	) {
 		return real_debughelp.ImageNtHeader(Base);
 	}
 
-	__declspec(dllexport) PIMAGE_SECTION_HEADER __stdcall ImageRvaToSection (
+	__declspec(dllexport) PIMAGE_SECTION_HEADER __stdcall hook_ImageRvaToSection (
 		PIMAGE_NT_HEADERS NtHeaders,
 		PVOID             Base,
 		ULONG             Rva
@@ -2015,7 +1298,7 @@ extern "C" {
 		return real_debughelp.ImageRvaToSection(NtHeaders, Base, Rva);
 	}
 
-	__declspec(dllexport) PVOID __stdcall ImageRvaToVa (
+	__declspec(dllexport) PVOID __stdcall hook_ImageRvaToVa (
 		PIMAGE_NT_HEADERS     NtHeaders,
 		PVOID                 Base,
 		ULONG                 Rva,
@@ -2024,7 +1307,7 @@ extern "C" {
 		return real_debughelp.ImageRvaToVa(NtHeaders, Base, Rva, LastRvaSection);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymAddSourceStream (
+	__declspec(dllexport) BOOL __stdcall hook_SymAddSourceStream (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCSTR   StreamFile,
@@ -2034,7 +1317,7 @@ extern "C" {
 		return real_debughelp.SymAddSourceStream(hProcess, Base, StreamFile, Buffer, Size);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymAddSymbol (
+	__declspec(dllexport) BOOL __stdcall hook_SymAddSymbol (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		PCSTR   Name,
@@ -2045,13 +1328,13 @@ extern "C" {
 		return real_debughelp.SymAddSymbol(hProcess, BaseOfDll, Name, Address, Size, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymCleanup (
+	__declspec(dllexport) BOOL __stdcall hook_SymCleanup (
 		HANDLE hProcess
 	) {
 		return real_debughelp.SymCleanup(hProcess);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymDeleteSymbol (
+	__declspec(dllexport) BOOL __stdcall hook_SymDeleteSymbol (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		PCSTR   Name,
@@ -2061,7 +1344,7 @@ extern "C" {
 		return real_debughelp.SymDeleteSymbol(hProcess, BaseOfDll, Name, Address, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumerateModules64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumerateModules64 (
 		HANDLE                      hProcess,
 		PSYM_ENUMMODULES_CALLBACK64 EnumModulesCallback,
 		PVOID                       UserContext
@@ -2069,7 +1352,7 @@ extern "C" {
 		return real_debughelp.SymEnumerateModules64(hProcess, EnumModulesCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumLines (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumLines (
 		HANDLE                  hProcess,
 		ULONG64                 Base,
 		PCSTR                   Obj,
@@ -2080,14 +1363,14 @@ extern "C" {
 		return real_debughelp.SymEnumLines(hProcess, Base, Obj, File, EnumLinesCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumProcesses (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumProcesses (
 		PSYM_ENUMPROCESSES_CALLBACK EnumProcessesCallback,
 		PVOID                       UserContext
 	) {
 		return real_debughelp.SymEnumProcesses(EnumProcessesCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumSourceFiles (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumSourceFiles (
 		HANDLE                        hProcess,
 		ULONG64                       ModBase,
 		PCSTR                         Mask,
@@ -2097,7 +1380,7 @@ extern "C" {
 		return real_debughelp.SymEnumSourceFiles(hProcess, ModBase, Mask, cbSrcFiles, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumSourceLines (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumSourceLines (
 		HANDLE                  hProcess,
 		ULONG64                 Base,
 		PCSTR                   Obj,
@@ -2110,7 +1393,7 @@ extern "C" {
 		return real_debughelp.SymEnumSourceLines(hProcess, Base, Obj, File, Line, Flags, EnumLinesCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumSymbols (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumSymbols (
 		HANDLE                         hProcess,
 		ULONG64                        BaseOfDll,
 		PCSTR                          Mask,
@@ -2120,7 +1403,7 @@ extern "C" {
 		return real_debughelp.SymEnumSymbols(hProcess, BaseOfDll, Mask, EnumSymbolsCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumSymbolsForAddr (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumSymbolsForAddr (
 		HANDLE                         hProcess,
 		DWORD64                        Address,
 		PSYM_ENUMERATESYMBOLS_CALLBACK EnumSymbolsCallback,
@@ -2129,7 +1412,7 @@ extern "C" {
 		return real_debughelp.SymEnumSymbolsForAddr(hProcess, Address, EnumSymbolsCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumTypes (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumTypes (
 		HANDLE                         hProcess,
 		ULONG64                        BaseOfDll,
 		PSYM_ENUMERATESYMBOLS_CALLBACK EnumSymbolsCallback,
@@ -2138,7 +1421,7 @@ extern "C" {
 		return real_debughelp.SymEnumTypes(hProcess, BaseOfDll, EnumSymbolsCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumTypesByName (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumTypesByName (
 		HANDLE                         hProcess,
 		ULONG64                        BaseOfDll,
 		PCSTR                          mask,
@@ -2148,7 +1431,7 @@ extern "C" {
 		return real_debughelp.SymEnumTypesByName(hProcess, BaseOfDll, mask, EnumSymbolsCallback, UserContext);
 	}
 
-	__declspec(dllexport) HANDLE __stdcall SymFindDebugInfoFile (
+	__declspec(dllexport) HANDLE __stdcall hook_SymFindDebugInfoFile (
 		HANDLE                    hProcess,
 		PCSTR                     FileName,
 		PSTR                      DebugFilePath,
@@ -2158,7 +1441,7 @@ extern "C" {
 		return real_debughelp.SymFindDebugInfoFile(hProcess, FileName, DebugFilePath, Callback, CallerData);
 	}
 
-	__declspec(dllexport) HANDLE __stdcall SymFindExecutableImage (
+	__declspec(dllexport) HANDLE __stdcall hook_SymFindExecutableImage (
 		HANDLE                  hProcess,
 		PCSTR                   FileName,
 		PSTR                    ImageFilePath,
@@ -2168,7 +1451,7 @@ extern "C" {
 		return real_debughelp.SymFindExecutableImage(hProcess, FileName, ImageFilePath, Callback, CallerData);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymFindFileInPath (
+	__declspec(dllexport) BOOL __stdcall hook_SymFindFileInPath (
 		HANDLE                  hprocess,
 		PCSTR                   SearchPath,
 		PCSTR                   FileName,
@@ -2183,7 +1466,7 @@ extern "C" {
 		return real_debughelp.SymFindFileInPath(hprocess, SearchPath, FileName, id, two, three, flags, FoundFile, callback, context);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymFromAddr (
+	__declspec(dllexport) BOOL __stdcall hook_SymFromAddr (
 		HANDLE       hProcess,
 		DWORD64      Address,
 		PDWORD64     Displacement,
@@ -2194,7 +1477,7 @@ extern "C" {
 		return real_debughelp.SymFromAddr(hProcess, Address, Displacement, Symbol);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymFromIndex (
+	__declspec(dllexport) BOOL __stdcall hook_SymFromIndex (
 		HANDLE       hProcess,
 		ULONG64      BaseOfDll,
 		DWORD        Index,
@@ -2203,7 +1486,7 @@ extern "C" {
 		return real_debughelp.SymFromIndex(hProcess, BaseOfDll, Index, Symbol);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymFromName (
+	__declspec(dllexport) BOOL __stdcall hook_SymFromName (
 		HANDLE       hProcess,
 		PCSTR        Name,
 		PSYMBOL_INFO Symbol
@@ -2211,7 +1494,7 @@ extern "C" {
 		return real_debughelp.SymFromName(hProcess, Name, Symbol);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymFromToken (
+	__declspec(dllexport) BOOL __stdcall hook_SymFromToken (
 		HANDLE       hProcess,
 		DWORD64      Base,
 		DWORD        Token,
@@ -2220,14 +1503,14 @@ extern "C" {
 		return real_debughelp.SymFromToken(hProcess, Base, Token, Symbol);
 	}
 
-	__declspec(dllexport) PVOID __stdcall SymFunctionTableAccess64 (
+	__declspec(dllexport) PVOID __stdcall hook_SymFunctionTableAccess64 (
 		HANDLE  hProcess,
 		DWORD64 AddrBase
 	) {
 		return real_debughelp.SymFunctionTableAccess64(hProcess, AddrBase);
 	}
 
-	__declspec(dllexport) ULONG __stdcall SymGetFileLineOffsets64 (
+	__declspec(dllexport) ULONG __stdcall hook_SymGetFileLineOffsets64 (
 		HANDLE   hProcess,
 		PCSTR    ModuleName,
 		PCSTR    FileName,
@@ -2237,7 +1520,7 @@ extern "C" {
 		return real_debughelp.SymGetFileLineOffsets64(hProcess, ModuleName, FileName, Buffer, BufferLines);
 	}
 
-	__declspec(dllexport) PCHAR __stdcall SymGetHomeDirectory (
+	__declspec(dllexport) PCHAR __stdcall hook_SymGetHomeDirectory (
 		DWORD  type,
 		PSTR   dir,
 		size_t size
@@ -2245,7 +1528,7 @@ extern "C" {
 		return real_debughelp.SymGetHomeDirectory(type, dir, size);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetLineFromAddr64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetLineFromAddr64 (
 		HANDLE           hProcess,
 		DWORD64          qwAddr,
 		PDWORD           pdwDisplacement,
@@ -2254,7 +1537,7 @@ extern "C" {
 		return real_debughelp.SymGetLineFromAddr64(hProcess, qwAddr, pdwDisplacement, Line64);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetLineFromName64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetLineFromName64 (
 		HANDLE           hProcess,
 		PCSTR            ModuleName,
 		PCSTR            FileName,
@@ -2265,28 +1548,28 @@ extern "C" {
 		return real_debughelp.SymGetLineFromName64(hProcess, ModuleName, FileName, dwLineNumber, plDisplacement, Line);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetLineNext64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetLineNext64 (
 		HANDLE           hProcess,
 		PIMAGEHLP_LINE64 Line
 	) {
 		return real_debughelp.SymGetLineNext64(hProcess, Line);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetLinePrev64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetLinePrev64 (
 		HANDLE           hProcess,
 		PIMAGEHLP_LINE64 Line
 	) {
 		return real_debughelp.SymGetLinePrev64(hProcess, Line);
 	}
 
-	__declspec(dllexport) DWORD64 __stdcall SymGetModuleBase64 (
+	__declspec(dllexport) DWORD64 __stdcall hook_SymGetModuleBase64 (
 		HANDLE  hProcess,
 		DWORD64 qwAddr
 	) {
 		return real_debughelp.SymGetModuleBase64(hProcess, qwAddr);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetModuleInfo64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetModuleInfo64 (
 		HANDLE             hProcess,
 		DWORD64            qwAddr,
 		PIMAGEHLP_MODULE64 ModuleInfo
@@ -2294,7 +1577,7 @@ extern "C" {
 		return real_debughelp.SymGetModuleInfo64(hProcess, qwAddr, ModuleInfo);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetOmaps (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetOmaps (
 		HANDLE   hProcess,
 		DWORD64  BaseOfDll,
 		POMAP* OmapTo,
@@ -2305,11 +1588,11 @@ extern "C" {
 		return real_debughelp.SymGetOmaps(hProcess, BaseOfDll, OmapTo, cOmapTo, OmapFrom, cOmapFrom);
 	}
 
-	__declspec(dllexport) DWORD __stdcall SymGetOptions () {
+	__declspec(dllexport) DWORD __stdcall hook_SymGetOptions () {
 		return real_debughelp.SymGetOptions();
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetScope (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetScope (
 		HANDLE       hProcess,
 		ULONG64      BaseOfDll,
 		DWORD        Index,
@@ -2318,7 +1601,7 @@ extern "C" {
 		return real_debughelp.SymGetScope(hProcess, BaseOfDll, Index, Symbol);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSearchPath (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSearchPath (
 		HANDLE hProcess,
 		PSTR   SearchPath,
 		DWORD  SearchPathLength
@@ -2326,7 +1609,7 @@ extern "C" {
 		return real_debughelp.SymGetSearchPath(hProcess, SearchPath, SearchPathLength);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSymbolFile (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSymbolFile (
 		HANDLE hProcess,
 		PCSTR  SymPath,
 		PCSTR  ImageFile,
@@ -2339,7 +1622,7 @@ extern "C" {
 		return real_debughelp.SymGetSymbolFile(hProcess, SymPath, ImageFile, Type, SymbolFile, cSymbolFile, DbgFile, cDbgFile);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetTypeFromName (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetTypeFromName (
 		HANDLE       hProcess,
 		ULONG64      BaseOfDll,
 		PCSTR        Name,
@@ -2348,7 +1631,7 @@ extern "C" {
 		return real_debughelp.SymGetTypeFromName(hProcess, BaseOfDll, Name, Symbol);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetTypeInfo (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetTypeInfo (
 		HANDLE                    hProcess,
 		DWORD64                   ModBase,
 		ULONG                     TypeId,
@@ -2358,7 +1641,7 @@ extern "C" {
 		return real_debughelp.SymGetTypeInfo(hProcess, ModBase, TypeId, GetType, pInfo);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetTypeInfoEx (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetTypeInfoEx (
 		HANDLE                         hProcess,
 		DWORD64                        ModBase,
 		PIMAGEHLP_GET_TYPE_INFO_PARAMS Params
@@ -2366,7 +1649,7 @@ extern "C" {
 		return real_debughelp.SymGetTypeInfoEx(hProcess, ModBase, Params);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymInitialize (
+	__declspec(dllexport) BOOL __stdcall hook_SymInitialize (
 		HANDLE hProcess,
 		PCSTR  UserSearchPath,
 		BOOL   fInvadeProcess
@@ -2374,7 +1657,7 @@ extern "C" {
 		return real_debughelp.SymInitialize(hProcess, UserSearchPath, fInvadeProcess);
 	}
 
-	__declspec(dllexport) DWORD64 __stdcall SymLoadModule64 (
+	__declspec(dllexport) DWORD64 __stdcall hook_SymLoadModule64 (
 		HANDLE  hProcess,
 		HANDLE  hFile,
 		PCSTR   ImageName,
@@ -2385,7 +1668,7 @@ extern "C" {
 		return real_debughelp.SymLoadModule64(hProcess, hFile, ImageName, ModuleName, BaseOfDll, SizeOfDll);
 	}
 
-	__declspec(dllexport) DWORD64 __stdcall SymLoadModuleEx (
+	__declspec(dllexport) DWORD64 __stdcall hook_SymLoadModuleEx (
 		HANDLE        hProcess,
 		HANDLE        hFile,
 		PCSTR         ImageName,
@@ -2398,7 +1681,7 @@ extern "C" {
 		return real_debughelp.SymLoadModuleEx(hProcess, hFile, ImageName, ModuleName, BaseOfDll, DllSize, Data, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymMatchFileName (
+	__declspec(dllexport) BOOL __stdcall hook_SymMatchFileName (
 		PCSTR FileName,
 		PCSTR Match,
 		PSTR* FileNameStop,
@@ -2407,7 +1690,7 @@ extern "C" {
 		return real_debughelp.SymMatchFileName(FileName, Match, FileNameStop, MatchStop);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymMatchString (
+	__declspec(dllexport) BOOL __stdcall hook_SymMatchString (
 		PCSTR string,
 		PCSTR expression,
 		BOOL  fCase
@@ -2415,27 +1698,27 @@ extern "C" {
 		return real_debughelp.SymMatchString(string, expression, fCase);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymNext (
+	__declspec(dllexport) BOOL __stdcall hook_SymNext (
 		HANDLE       hProcess,
 		PSYMBOL_INFO si
 	) {
 		return real_debughelp.SymNext(hProcess, si);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymPrev (
+	__declspec(dllexport) BOOL __stdcall hook_SymPrev (
 		HANDLE       hProcess,
 		PSYMBOL_INFO si
 	) {
 		return real_debughelp.SymPrev(hProcess, si);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymRefreshModuleList (
+	__declspec(dllexport) BOOL __stdcall hook_SymRefreshModuleList (
 		HANDLE hProcess
 	) {
 		return real_debughelp.SymRefreshModuleList(hProcess);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymRegisterCallback64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymRegisterCallback64 (
 		HANDLE                        hProcess,
 		PSYMBOL_REGISTERED_CALLBACK64 CallbackFunction,
 		ULONG64                       UserContext
@@ -2443,7 +1726,7 @@ extern "C" {
 		return real_debughelp.SymRegisterCallback64(hProcess, CallbackFunction, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymRegisterFunctionEntryCallback64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymRegisterFunctionEntryCallback64 (
 		HANDLE                       hProcess,
 		PSYMBOL_FUNCENTRY_CALLBACK64 CallbackFunction,
 		ULONG64                      UserContext
@@ -2451,7 +1734,7 @@ extern "C" {
 		return real_debughelp.SymRegisterFunctionEntryCallback64(hProcess, CallbackFunction, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSearch (
+	__declspec(dllexport) BOOL __stdcall hook_SymSearch (
 		HANDLE                         hProcess,
 		ULONG64                        BaseOfDll,
 		DWORD                          Index,
@@ -2465,7 +1748,7 @@ extern "C" {
 		return real_debughelp.SymSearch(hProcess, BaseOfDll, Index, SymTag, Mask, Address, EnumSymbolsCallback, UserContext, Options);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSetContext (
+	__declspec(dllexport) BOOL __stdcall hook_SymSetContext (
 		HANDLE                hProcess,
 		PIMAGEHLP_STACK_FRAME StackFrame,
 		PIMAGEHLP_CONTEXT     Context
@@ -2473,27 +1756,27 @@ extern "C" {
 		return real_debughelp.SymSetContext(hProcess, StackFrame, Context);
 	}
 
-	__declspec(dllexport) PCHAR __stdcall SymSetHomeDirectory (
+	__declspec(dllexport) PCHAR __stdcall hook_SymSetHomeDirectory (
 		HANDLE hProcess,
 		PCSTR  dir
 	) {
 		return real_debughelp.SymSetHomeDirectory(hProcess, dir);
 	}
 
-	__declspec(dllexport) DWORD __stdcall SymSetOptions (
+	__declspec(dllexport) DWORD __stdcall hook_SymSetOptions (
 		DWORD SymOptions
 	) {
 		return real_debughelp.SymSetOptions(SymOptions);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSetScopeFromAddr (
+	__declspec(dllexport) BOOL __stdcall hook_SymSetScopeFromAddr (
 		HANDLE  hProcess,
 		ULONG64 Address
 	) {
 		return real_debughelp.SymSetScopeFromAddr(hProcess, Address);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSetScopeFromIndex (
+	__declspec(dllexport) BOOL __stdcall hook_SymSetScopeFromIndex (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		DWORD   Index
@@ -2501,14 +1784,14 @@ extern "C" {
 		return real_debughelp.SymSetScopeFromIndex(hProcess, BaseOfDll, Index);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSetSearchPath (
+	__declspec(dllexport) BOOL __stdcall hook_SymSetSearchPath (
 		HANDLE hProcess,
 		PCSTR  SearchPath
 	) {
 		return real_debughelp.SymSetSearchPath(hProcess, SearchPath);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymUnDName64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymUnDName64 (
 		PIMAGEHLP_SYMBOL64 sym,
 		PSTR               UnDecName,
 		DWORD              UnDecNameLength
@@ -2516,14 +1799,14 @@ extern "C" {
 		return real_debughelp.SymUnDName64(sym, UnDecName, UnDecNameLength);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymUnloadModule64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymUnloadModule64 (
 		HANDLE  hProcess,
 		DWORD64 BaseOfDll
 	) {
 		return real_debughelp.SymUnloadModule64(hProcess, BaseOfDll);
 	}
 
-	__declspec(dllexport) PCSTR __stdcall SymSrvDeltaName (
+	__declspec(dllexport) PCSTR __stdcall hook_SymSrvDeltaName (
 		HANDLE hProcess,
 		PCSTR  SymPath,
 		PCSTR  Type,
@@ -2533,7 +1816,7 @@ extern "C" {
 		return real_debughelp.SymSrvDeltaName(hProcess, SymPath, Type, File1, File2);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSrvGetFileIndexes (
+	__declspec(dllexport) BOOL __stdcall hook_SymSrvGetFileIndexes (
 		PCSTR  File,
 		GUID* Id,
 		PDWORD Val1,
@@ -2543,7 +1826,7 @@ extern "C" {
 		return real_debughelp.SymSrvGetFileIndexes(File, Id, Val1, Val2, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSrvGetFileIndexInfo (
+	__declspec(dllexport) BOOL __stdcall hook_SymSrvGetFileIndexInfo (
 		PCSTR              File,
 		PSYMSRV_INDEX_INFO Info,
 		DWORD              Flags
@@ -2551,7 +1834,7 @@ extern "C" {
 		return real_debughelp.SymSrvGetFileIndexInfo(File, Info, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSrvGetFileIndexString (
+	__declspec(dllexport) BOOL __stdcall hook_SymSrvGetFileIndexString (
 		HANDLE hProcess,
 		PCSTR  SrvPath,
 		PCSTR  File,
@@ -2562,7 +1845,7 @@ extern "C" {
 		return real_debughelp.SymSrvGetFileIndexString(hProcess, SrvPath, File, Index, Size, Flags);
 	}
 
-	__declspec(dllexport) PCSTR __stdcall SymSrvGetSupplement (
+	__declspec(dllexport) PCSTR __stdcall hook_SymSrvGetSupplement (
 		HANDLE hProcess,
 		PCSTR  SymPath,
 		PCSTR  Node,
@@ -2571,14 +1854,14 @@ extern "C" {
 		return real_debughelp.SymSrvGetSupplement(hProcess, SymPath, Node, File);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSrvIsStore (
+	__declspec(dllexport) BOOL __stdcall hook_SymSrvIsStore (
 		HANDLE hProcess,
 		PCSTR  path
 	) {
 		return real_debughelp.SymSrvIsStore(hProcess, path);
 	}
 
-	__declspec(dllexport) PCSTR __stdcall SymSrvStoreFile (
+	__declspec(dllexport) PCSTR __stdcall hook_SymSrvStoreFile (
 		HANDLE hProcess,
 		PCSTR  SrvPath,
 		PCSTR  File,
@@ -2587,7 +1870,7 @@ extern "C" {
 		return real_debughelp.SymSrvStoreFile(hProcess, SrvPath, File, Flags);
 	}
 
-	__declspec(dllexport) PCSTR __stdcall SymSrvStoreSupplement (
+	__declspec(dllexport) PCSTR __stdcall hook_SymSrvStoreSupplement (
 		HANDLE hProcess,
 		PCSTR  SrvPath,
 		PCSTR  Node,
@@ -2597,7 +1880,7 @@ extern "C" {
 		return real_debughelp.SymSrvStoreSupplement(hProcess, SrvPath, Node, File, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSourceFile (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFile (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCSTR   Params,
@@ -2608,7 +1891,7 @@ extern "C" {
 		return real_debughelp.SymGetSourceFile(hProcess, Base, Params, FileSpec, FilePath, Size);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumSourceFileTokens (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumSourceFileTokens (
 		HANDLE                        hProcess,
 		ULONG64                       Base,
 		PENUMSOURCEFILETOKENSCALLBACK Callback
@@ -2616,7 +1899,7 @@ extern "C" {
 		return real_debughelp.SymEnumSourceFileTokens(hProcess, Base, Callback);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSourceFileFromToken (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileFromToken (
 		HANDLE hProcess,
 		PVOID  Token,
 		PCSTR  Params,
@@ -2626,7 +1909,7 @@ extern "C" {
 		return real_debughelp.SymGetSourceFileFromToken(hProcess, Token, Params, FilePath, Size);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSourceFileToken (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileToken (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCSTR   FileSpec,
@@ -2636,7 +1919,7 @@ extern "C" {
 		return real_debughelp.SymGetSourceFileToken(hProcess, Base, FileSpec, Token, Size);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSourceVarFromToken (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceVarFromToken (
 		HANDLE hProcess,
 		PVOID  Token,
 		PCSTR  Params,
@@ -2647,7 +1930,7 @@ extern "C" {
 		return real_debughelp.SymGetSourceVarFromToken(hProcess, Token, Params, VarName, Value, Size);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymInitializeW (
+	__declspec(dllexport) BOOL __stdcall hook_SymInitializeW (
 		HANDLE hProcess,
 		PCWSTR UserSearchPath,
 		BOOL   fInvadeProcess
@@ -2655,7 +1938,7 @@ extern "C" {
 		return real_debughelp.SymInitializeW(hProcess, UserSearchPath, fInvadeProcess);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymFromAddrW (
+	__declspec(dllexport) BOOL __stdcall hook_SymFromAddrW (
 		HANDLE        hProcess,
 		DWORD64       Address,
 		PDWORD64      Displacement,
@@ -2664,7 +1947,7 @@ extern "C" {
 		return real_debughelp.SymFromAddrW(hProcess, Address, Displacement, Symbol);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymFromNameW (
+	__declspec(dllexport) BOOL __stdcall hook_SymFromNameW (
 		HANDLE        hProcess,
 		PCWSTR        Name,
 		PSYMBOL_INFOW Symbol
@@ -2672,7 +1955,7 @@ extern "C" {
 		return real_debughelp.SymFromNameW(hProcess, Name, Symbol);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetLineFromAddrW64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetLineFromAddrW64 (
 		HANDLE            hProcess,
 		DWORD64           dwAddr,
 		PDWORD            pdwDisplacement,
@@ -2681,7 +1964,7 @@ extern "C" {
 		return real_debughelp.SymGetLineFromAddrW64(hProcess, dwAddr, pdwDisplacement, Line);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetModuleInfoW64 (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetModuleInfoW64 (
 		HANDLE              hProcess,
 		DWORD64             qwAddr,
 		PIMAGEHLP_MODULEW64 ModuleInfo
@@ -2689,7 +1972,7 @@ extern "C" {
 		return real_debughelp.SymGetModuleInfoW64(hProcess, qwAddr, ModuleInfo);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumSymbolsW (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumSymbolsW (
 		HANDLE                          hProcess,
 		ULONG64                         BaseOfDll,
 		PCWSTR                          Mask,
@@ -2699,7 +1982,7 @@ extern "C" {
 		return real_debughelp.SymEnumSymbolsW(hProcess, BaseOfDll, Mask, EnumSymbolsCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumLinesW (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumLinesW (
 		HANDLE                   hProcess,
 		ULONG64                  Base,
 		PCWSTR                   Obj,
@@ -2710,7 +1993,7 @@ extern "C" {
 		return real_debughelp.SymEnumLinesW(hProcess, Base, Obj, File, EnumLinesCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumSourceFilesW (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumSourceFilesW (
 		HANDLE                         hProcess,
 		ULONG64                        ModBase,
 		PCWSTR                         Mask,
@@ -2720,14 +2003,14 @@ extern "C" {
 		return real_debughelp.SymEnumSourceFilesW(hProcess, ModBase, Mask, cbSrcFiles, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSetSearchPathW (
+	__declspec(dllexport) BOOL __stdcall hook_SymSetSearchPathW (
 		HANDLE hProcess,
 		PCWSTR SearchPath
 	) {
 		return real_debughelp.SymSetSearchPathW(hProcess, SearchPath);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSearchPathW (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSearchPathW (
 		HANDLE hProcess,
 		PWSTR  SearchPath,
 		DWORD  SearchPathLength
@@ -2735,7 +2018,7 @@ extern "C" {
 		return real_debughelp.SymGetSearchPathW(hProcess, SearchPath, SearchPathLength);
 	}
 
-	__declspec(dllexport) DWORD64 __stdcall SymLoadModuleExW (
+	__declspec(dllexport) DWORD64 __stdcall hook_SymLoadModuleExW (
 		HANDLE        hProcess,
 		HANDLE        hFile,
 		PCWSTR        ImageName,
@@ -2748,7 +2031,7 @@ extern "C" {
 		return real_debughelp.SymLoadModuleExW(hProcess, hFile, ImageName, ModuleName, BaseOfDll, DllSize, Data, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumTypesW (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumTypesW (
 		HANDLE                          hProcess,
 		ULONG64                         BaseOfDll,
 		PSYM_ENUMERATESYMBOLS_CALLBACKW EnumSymbolsCallback,
@@ -2757,7 +2040,7 @@ extern "C" {
 		return real_debughelp.SymEnumTypesW(hProcess, BaseOfDll, EnumSymbolsCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymEnumTypesByNameW (
+	__declspec(dllexport) BOOL __stdcall hook_SymEnumTypesByNameW (
 		HANDLE                          hProcess,
 		ULONG64                         BaseOfDll,
 		PCWSTR                          mask,
@@ -2767,7 +2050,7 @@ extern "C" {
 		return real_debughelp.SymEnumTypesByNameW(hProcess, BaseOfDll, mask, EnumSymbolsCallback, UserContext);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymSearchW (
+	__declspec(dllexport) BOOL __stdcall hook_SymSearchW (
 		HANDLE                          hProcess,
 		ULONG64                         BaseOfDll,
 		DWORD                           Index,
@@ -2781,7 +2064,7 @@ extern "C" {
 		return real_debughelp.SymSearchW(hProcess, BaseOfDll, Index, SymTag, Mask, Address, EnumSymbolsCallback, UserContext, Options);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSymbolFileW (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSymbolFileW (
 		HANDLE hProcess,
 		PCWSTR SymPath,
 		PCWSTR ImageFile,
@@ -2794,7 +2077,7 @@ extern "C" {
 		return real_debughelp.SymGetSymbolFileW(hProcess, SymPath, ImageFile, Type, SymbolFile, cSymbolFile, DbgFile, cDbgFile);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSourceFileW (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileW (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCWSTR  Params,
@@ -2805,7 +2088,7 @@ extern "C" {
 		return real_debughelp.SymGetSourceFileW(hProcess, Base, Params, FileSpec, FilePath, Size);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetSourceFileFromTokenW (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileFromTokenW (
 		HANDLE hProcess,
 		PVOID  Token,
 		PCWSTR Params,
@@ -2815,7 +2098,7 @@ extern "C" {
 		return real_debughelp.SymGetSourceFileFromTokenW(hProcess, Token, Params, FilePath, Size);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymFindFileInPathW (
+	__declspec(dllexport) BOOL __stdcall hook_SymFindFileInPathW (
 		HANDLE                   hprocess,
 		PCWSTR                   SearchPath,
 		PCWSTR                   FileName,
@@ -2830,7 +2113,7 @@ extern "C" {
 		return real_debughelp.SymFindFileInPathW(hprocess, SearchPath, FileName, id, two, three, flags, FoundFile, callback, context);
 	}
 
-	__declspec(dllexport) HANDLE __stdcall FindDebugInfoFileExW (
+	__declspec(dllexport) HANDLE __stdcall hook_FindDebugInfoFileExW (
 		PCWSTR                     FileName,
 		PCWSTR                     SymbolPath,
 		PWSTR                      DebugFilePath,
@@ -2840,7 +2123,7 @@ extern "C" {
 		return real_debughelp.FindDebugInfoFileExW(FileName, SymbolPath, DebugFilePath, Callback, CallerData);
 	}
 
-	__declspec(dllexport) HANDLE __stdcall FindExecutableImageExW (
+	__declspec(dllexport) HANDLE __stdcall hook_FindExecutableImageExW (
 		PCWSTR                   FileName,
 		PCWSTR                   SymbolPath,
 		PWSTR                    ImageFilePath,
@@ -2850,7 +2133,7 @@ extern "C" {
 		return real_debughelp.FindExecutableImageExW(FileName, SymbolPath, ImageFilePath, Callback, CallerData);
 	}
 
-	__declspec(dllexport) BOOL __stdcall EnumDirTreeW (
+	__declspec(dllexport) BOOL __stdcall hook_EnumDirTreeW (
 		HANDLE                 hProcess,
 		PCWSTR                 RootPath,
 		PCWSTR                 InputPathName,
@@ -2861,7 +2144,7 @@ extern "C" {
 		return real_debughelp.EnumDirTreeW(hProcess, RootPath, InputPathName, OutputPathBuffer, cb, data);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SearchTreeForFileW (
+	__declspec(dllexport) BOOL __stdcall hook_SearchTreeForFileW (
 		PCWSTR RootPath,
 		PCWSTR InputPathName,
 		PWSTR  OutputPathBuffer
@@ -2869,7 +2152,7 @@ extern "C" {
 		return real_debughelp.SearchTreeForFileW(RootPath, InputPathName, OutputPathBuffer);
 	}
 
-	__declspec(dllexport) DWORD __stdcall UnDecorateSymbolNameW (
+	__declspec(dllexport) DWORD __stdcall hook_UnDecorateSymbolNameW (
 		PCWSTR name,
 		PWSTR  outputString,
 		DWORD  maxStringLength,
@@ -2878,7 +2161,7 @@ extern "C" {
 		return real_debughelp.UnDecorateSymbolNameW(name, outputString, maxStringLength, flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymAddSymbolW (
+	__declspec(dllexport) BOOL __stdcall hook_SymAddSymbolW (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		PCWSTR  Name,
@@ -2889,7 +2172,7 @@ extern "C" {
 		return real_debughelp.SymAddSymbolW(hProcess, BaseOfDll, Name, Address, Size, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymDeleteSymbolW (
+	__declspec(dllexport) BOOL __stdcall hook_SymDeleteSymbolW (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		PCWSTR  Name,
@@ -2899,7 +2182,7 @@ extern "C" {
 		return real_debughelp.SymDeleteSymbolW(hProcess, BaseOfDll, Name, Address, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymFromIndexW (
+	__declspec(dllexport) BOOL __stdcall hook_SymFromIndexW (
 		HANDLE        hProcess,
 		ULONG64       BaseOfDll,
 		DWORD         Index,
@@ -2908,7 +2191,7 @@ extern "C" {
 		return real_debughelp.SymFromIndexW(hProcess, BaseOfDll, Index, Symbol);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymGetTypeFromNameW (
+	__declspec(dllexport) BOOL __stdcall hook_SymGetTypeFromNameW (
 		HANDLE        hProcess,
 		ULONG64       BaseOfDll,
 		PCWSTR        Name,
@@ -2917,7 +2200,7 @@ extern "C" {
 		return real_debughelp.SymGetTypeFromNameW(hProcess, BaseOfDll, Name, Symbol);
 	}
 
-	__declspec(dllexport) BOOL __stdcall SymMatchFileNameW (
+	__declspec(dllexport) BOOL __stdcall hook_SymMatchFileNameW (
 		PCWSTR FileName,
 		PCWSTR Match,
 		PWSTR* FileNameStop,
@@ -2926,7 +2209,7 @@ extern "C" {
 		return real_debughelp.SymMatchFileNameW(FileName, Match, FileNameStop, MatchStop);
 	}
 
-	__declspec(dllexport) BOOL __stdcall StackWalkEx (
+	__declspec(dllexport) BOOL __stdcall hook_StackWalkEx (
 		DWORD                            MachineType,
 		HANDLE                           hProcess,
 		HANDLE                           hThread,
@@ -2941,7 +2224,7 @@ extern "C" {
 		return real_debughelp.StackWalkEx(MachineType, hProcess, hThread, StackFrame, ContextRecord, ReadMemoryRoutine, FunctionTableAccessRoutine, GetModuleBaseRoutine, TranslateAddress, Flags);
 	}
 
-	__declspec(dllexport) BOOL __stdcall StackWalk2 (
+	__declspec(dllexport) BOOL __stdcall hook_StackWalk2 (
 		DWORD                            MachineType,
 		HANDLE                           hProcess,
 		HANDLE                           hThread,
