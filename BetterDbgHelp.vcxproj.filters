@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="util">
+      <UniqueIdentifier>{423e822e-9911-4cee-b24c-655f70a33449}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="deps\tracy\public\TracyClient.cpp" />
+    <ClCompile Include="src\util\timer.cpp">
+      <Filter>util</Filter>
+    </ClCompile>
+    <ClCompile Include="src\dll_main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\util\logger.hpp">
+      <Filter>util</Filter>
+    </ClInclude>
+    <ClInclude Include="src\util\timer.hpp">
+      <Filter>util</Filter>
+    </ClInclude>
+    <ClInclude Include="src\dbghelp_api.hpp" />
+    <ClInclude Include="src\dbghelp_dll_forward.hpp" />
+    <ClInclude Include="src\util.hpp" />
+    <ClInclude Include="src\pdb\address_index.hpp" />
+    <ClInclude Include="src\pdb\codeview.hpp" />
+    <ClInclude Include="src\pdb\lineinfo.hpp" />
+    <ClInclude Include="src\pdb\module_lookup.hpp" />
+    <ClInclude Include="src\pdb\pdb.hpp" />
+    <ClInclude Include="src\pdb\pdb_locator.hpp" />
+    <ClInclude Include="src\pdb\sym_resolvers.hpp" />
+    <ClInclude Include="src\pdb\sym_result.hpp" />
+    <ClInclude Include="src\dbghelp_dll_wrapper.hpp" />
+  </ItemGroup>
+</Project>

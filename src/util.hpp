@@ -21,8 +21,8 @@
 
 #include "tracy/Tracy.hpp"
 
-#include "timer.hpp"
-#include "logger.hpp"
+#include "util/timer.hpp"
+#include "util/logger.hpp"
 using namespace kiss;
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -44,6 +44,22 @@ using namespace kiss;
 //#undef BF_BOTTOM
 //#undef BF_TOP
 //#undef ERROR
+
+#define TRACY_MEMORY_PROFILING 1
+
+#if TRACY_MEMORY_PROFILING
+// Track standard memory allocation via tracy
+// (VirtualAlloc is tracked seperately)
+void* operator new (std::size_t count) {
+	auto ptr = malloc(count);
+	TracyAlloc(ptr, count);
+	return ptr;
+}
+void operator delete (void* ptr) noexcept {
+	TracyFree(ptr);
+	free(ptr);
+}
+#endif
 
 inline void print_err(const char* operation) {
 	auto err = GetLastError();
