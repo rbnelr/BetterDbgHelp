@@ -14,6 +14,11 @@ BetterDbgHelp.pdb
 BetterDbgHelp_dbg.exe
 BetterDbgHelp_dbg.pdb
 
+dbghelp*.dll
+dbghelp*.pdb
+dbghelp*.exp
+dbghelp*.lib
+
 # User-specific files
 *.rsuser
 *.suo
