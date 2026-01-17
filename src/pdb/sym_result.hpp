@@ -156,7 +156,7 @@ struct SymResult {
 		// TODO: for now just compare the values I actively try to get, later try to achive exact matches
 		return true
 			&& info.Scope == r.info.Scope
-			&& info.Size == r.info.Size
+			//&& info.Size == r.info.Size
 			&& info.Flags == r.info.Flags
 			&& info.Value == r.info.Value
 			&& info.Address == r.info.Address

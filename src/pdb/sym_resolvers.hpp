@@ -50,7 +50,8 @@ public:
 			return false;
 		}
 
-		auto* sym = mod->pdb->find_symbol_for_addr(mod_raddr);
+		uint32_t sym_idx;
+		auto* sym = mod->pdb->find_symbol_for_addr(mod_raddr, &sym_idx);
 		if (!sym) {
 			res->err = "Symbol not found";
 			return false;
@@ -58,17 +59,20 @@ public:
 		
 		res->sym_name = mod->pdb->stralloc[sym->name];
 		
-		res->info.TypeIndex = 0; // sym->si_type_index;
+		res->info.TypeIndex = 0;
 		res->info.Reserved[0] = 0;
 		res->info.Reserved[1] = 0;
-		res->info.Index = 0; //sym->si_index;
+		// Not the same index as dbghelp (as the indices are unstable across runs and only used for passing into other api functions)
+		// we could implement other parts of the api using our own index scheme
+		res->info.Index = sym_idx;
 		res->info.Size = sym->size;
 		res->info.ModBase = mod->base_addr;
 		res->info.Flags = sym->si_flags;
-		res->info.Value = 0; //sym->si_value;
-		res->info.Address = sym->base_addr != 0 ? sym->base_addr + mod->base_addr : 0; // HACK: __ImageBase does not return an Address unlike seemingly everything else in dbghelp
-		res->info.Register = 0; //sym->si_register;
-		res->info.Scope = 0; //sym->si_scope;
+		res->info.Value = 0;
+		// HACK: __ImageBase does not return an Address unlike seemingly everything else in dbghelp, super pointless but this matches dbghelp more closely
+		res->info.Address = sym->base_addr != 0 ? sym->base_addr + mod->base_addr : 0;
+		res->info.Register = 0;
+		res->info.Scope = 0;
 		res->info.Tag = (ULONG)sym->si_tag;
 		//res->info.NameLen = strlen(res->sym_name);
 
@@ -136,10 +140,11 @@ public:
 			return false;
 		}
 		
+		uint32_t sym_idx;
 		Symbol* sym;
 		{
 			//TimerMeasZone(tfind_symbol_for_addr);
-			sym = mod->pdb->find_symbol_for_addr(mod_raddr);
+			sym = mod->pdb->find_symbol_for_addr(mod_raddr, &sym_idx);
 			if (!sym) {
 				res->err = "Symbol not found";
 				return false;
@@ -147,8 +152,26 @@ public:
 		}
 		
 		res->sym_name = mod->pdb->stralloc[sym->name];
-		res->src_filepath = nullptr;
-		res->src_lineno = 0;
+		
+		res->info.TypeIndex = 0;
+		res->info.Reserved[0] = 0;
+		res->info.Reserved[1] = 0;
+		// Not the same index as dbghelp (as the indices are unstable across runs and only used for passing into other api functions)
+		// we could implement other parts of the api using our own index scheme
+		res->info.Index = sym_idx;
+		// Size for module symbols makes sense, but for global data symbols it has to be "estimated" based on the typeinfo, which I cannot easily replicate
+		// for global function symbols it's even more weird and dbghelp seemingly sometimes computes it based on types extracted from name mangling
+		// Since can't reasonably match it I resort to jus returning 0 in those cases
+		res->info.Size = sym->size;
+		res->info.ModBase = mod->base_addr;
+		res->info.Flags = sym->si_flags;
+		res->info.Value = 0;
+		// HACK: __ImageBase does not return an Address unlike seemingly everything else in dbghelp, super pointless but this matches dbghelp more closely
+		res->info.Address = sym->base_addr != 0 ? sym->base_addr + mod->base_addr : 0;
+		res->info.Register = 0;
+		res->info.Scope = 0;
+		res->info.Tag = (ULONG)sym->si_tag;
+		//res->info.NameLen = strlen(res->sym_name);
 
 		SourceLoc src_loc = {};
 		{

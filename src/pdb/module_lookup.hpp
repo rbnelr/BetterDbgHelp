@@ -5,9 +5,6 @@
 #include <psapi.h>
 #pragma comment(lib, "Kernel32.lib")
 
-// for dev
-extern HANDLE _inspectee;
-
 struct LoadedModule {
 	std::filesystem::path path;
 	std::string ansi_path;
@@ -25,7 +22,7 @@ struct LoadedModule {
 		this->size = size;
 	}
 	void load_pdb () {
-		pdb = FastPdbLookup::try_load_for_exe(path, base_addr);
+		pdb = PdbReader::try_load_lookup_for_exe(path);
 	}
 
 	ExportTableQuery* load_export_table () {
@@ -117,6 +114,8 @@ struct ModuleCache {
 			TimerMeasZone(tload_pdb);
 
 			_inspectee = inspectee;
+			_mod_base = loaded->base_addr;
+
 			loaded->load_pdb();
 		}
 		return loaded;

@@ -25,12 +25,12 @@ enum class SymTagEnum : uint8_t { // NOTE: type size not specified in the origin
     SymTagCompiland,
     SymTagCompilandDetails,
     SymTagCompilandEnv,
-    SymTagFunction,
+    SymTagFunction, // 5
     SymTagBlock,
-    SymTagData,
+    SymTagData, // 7
     SymTagAnnotation,
     SymTagLabel,
-    SymTagPublicSymbol,
+    SymTagPublicSymbol, // 10
     SymTagUDT,
     SymTagEnum,
     SymTagFunctionType,
@@ -47,7 +47,7 @@ enum class SymTagEnum : uint8_t { // NOTE: type size not specified in the origin
     SymTagVTableShape,
     SymTagVTable,
     SymTagCustom,
-    SymTagThunk,
+    SymTagThunk, // 27
     SymTagCustomType,
     SymTagManagedType,
     SymTagDimension,

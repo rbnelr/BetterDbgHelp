@@ -26,7 +26,7 @@ class AddressIndex {
 	
 	std::vector<intptr_t, align_alloc<intptr_t>> addresses;
 	std::vector<Block, align_alloc<Block>> blocks;
-	std::vector<unsigned, align_alloc<unsigned>> block_indices;
+	std::vector<uint32_t, align_alloc<uint32_t>> block_indices;
 	
 public:
 	void print_stats (size_t count, const char* name) {
@@ -41,7 +41,7 @@ public:
 	}
 	
 	template <typename FUNC>
-	void build_index (size_t count, FUNC get_addr) {
+	void build_index (uint32_t count, FUNC get_addr) {
 		ZoneScoped;
 
 		if (count <= 0) return;
@@ -55,10 +55,10 @@ public:
 		Block* cur_block = nullptr;
 		intptr_t block_address = 0;
 		intptr_t block_max_addr = 0;
-		unsigned block_elem_index;
-		unsigned idx_in_block = BLOCKSZ; // causes initial block push
+		uint32_t block_elem_index;
+		uint32_t idx_in_block = BLOCKSZ; // causes initial block push
 		
-		for (unsigned i=0; i<(unsigned)count; i++) {
+		for (uint32_t i=0; i<count; i++) {
 			intptr_t addr = (intptr_t)get_addr(i);
 
 			// if all slots are filled (or initial case)
@@ -82,7 +82,7 @@ public:
 		}
 	}
 
-	__forceinline int upper_bound (intptr_t addr) {
+	__forceinline uint32_t upper_bound (intptr_t addr) {
 		auto it = std::upper_bound(addresses.begin(), addresses.end(), addr);
 		if (it <= addresses.begin()) // addr before first item
 			return 0;
@@ -90,7 +90,7 @@ public:
 		assert(it == addresses.end() || addr < *it);
 		it--;
 		assert(addr >= *it);
-		int block_idx = (int)(it - addresses.begin());
+		auto block_idx = it - addresses.begin();
 		
 		static_assert(BLOCKSZ == (16*2));
 
@@ -99,7 +99,7 @@ public:
 		__m256i values0 = _mm256_load_si256(pvalues);
 		__m256i values1 = _mm256_load_si256(pvalues+1);
 
-		int upper_bound_idx = block_indices[block_idx];
+		uint32_t upper_bound_idx = block_indices[block_idx];
 
 		intptr_t block_addr = *it;
 		intptr_t local_addr64 = addr - block_addr;
@@ -117,7 +117,7 @@ public:
 		uint64_t bitmask0 = (uint64_t)(unsigned)_mm256_movemask_epi8(mask0);
 		uint64_t bitmask1 = (uint64_t)(unsigned)_mm256_movemask_epi8(mask1);
 		
-		unsigned idx = (unsigned)_tzcnt_u64((bitmask1 << 32llu) | bitmask0);
+		uint32_t idx = (uint32_t)_tzcnt_u64((bitmask1 << 32llu) | bitmask0);
 		assert(idx <= 64);
 		upper_bound_idx += idx>>1;
 
