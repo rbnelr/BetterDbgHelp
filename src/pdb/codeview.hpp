@@ -19,7 +19,7 @@ typedef unsigned long   CV_tkn_t;
 typedef CV_typ_t CV_ItemId;
 
 // Tags used by codeview and returned in SYMBOL_INFO
-enum class SymTagEnum : uint8_t { // NOTE: type size not specified in the original headers, but make it small intentionally to save memory
+enum class SymTagEnum : uint8_t { // NOTE: type size not specified in the original headers, but we can make this compact
     SymTagNull,
     SymTagExe,
     SymTagCompiland,
@@ -798,6 +798,44 @@ typedef struct THUNKSYM32 {
     unsigned char   name[1];    // Length-prefixed name
     //unsigned char   variant[CV_ZEROLEN]; // variant portion of thunk
 } THUNKSYM32;
+
+typedef struct SECTIONSYM {
+    unsigned short  reclen;             // Record length
+    unsigned short  rectyp;             // S_SECTION
+
+    unsigned short  isec;               // Section number
+    unsigned char   align;              // Alignment of this section (power of 2)
+    unsigned char   bReserved;          // Reserved.  Must be zero.
+    unsigned long   rva;
+    unsigned long   cb;
+    unsigned long   characteristics;
+    unsigned char   name[1];            // name
+} SECTIONSYM;
+typedef struct COFFGROUPSYM {
+    unsigned short  reclen;             // Record length
+    unsigned short  rectyp;             // S_COFFGROUP
+
+    unsigned long   cb;
+    unsigned long   characteristics;
+    CV_uoff32_t     off;                // Symbol offset
+    unsigned short  seg;                // Symbol segment
+    unsigned char   name[1];            // name
+} COFFGROUPSYM;
+typedef struct EXPORTSYM {
+    unsigned short  reclen;             // Record length
+    unsigned short  rectyp;             // S_EXPORT
+
+    unsigned short  ordinal;
+    unsigned short  fConstant : 1;      // CONSTANT
+    unsigned short  fData : 1;          // DATA
+    unsigned short  fPrivate : 1;       // PRIVATE
+    unsigned short  fNoName : 1;        // NONAME
+    unsigned short  fOrdinal : 1;       // Ordinal was explicitly assigned
+    unsigned short  fForwarder : 1;     // This is a forwarder
+    unsigned short  reserved : 10;      // Reserved. Must be zero.
+    unsigned char   name[1];            // name of
+} EXPORTSYM;
+
 typedef struct REFSYM2 {
     unsigned short  reclen;     // Record length
     unsigned short  rectyp;     // S_PROCREF, S_DATAREF, or S_LPROCREF

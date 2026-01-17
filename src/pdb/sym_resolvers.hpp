@@ -40,9 +40,24 @@ public:
 			auto* exports = mod->load_export_table();
 
 			if (exports) {
-				auto* mangled_name = exports->query(mod_raddr);
+				uint32_t sym_idx;
+				auto* mangled_name = exports->query(mod_raddr, &sym_idx);
 				if (mangled_name) {
 					res->sym_name = mangled_name;
+
+					res->info.TypeIndex = 0;
+					res->info.Reserved[0] = 0;
+					res->info.Reserved[1] = 0;
+					res->info.Index = sym_idx;
+					res->info.Size = 0;
+					res->info.ModBase = mod->base_addr;
+					res->info.Flags = 0;
+					res->info.Value = 0;
+					res->info.Address = mod_raddr + mod->base_addr;
+					res->info.Register = 0;
+					res->info.Scope = 0;
+					res->info.Tag = (ULONG)SymTagEnum::SymTagPublicSymbol;
+
 					return true;
 				}
 			}
@@ -65,9 +80,15 @@ public:
 		// Not the same index as dbghelp (as the indices are unstable across runs and only used for passing into other api functions)
 		// we could implement other parts of the api using our own index scheme
 		res->info.Index = sym_idx;
+		// Size for module symbols makes sense, but for global data symbols it has to be "estimated" based on the typeinfo, which I cannot easily replicate
+		// for global function symbols it's even more weird and dbghelp seemingly sometimes computes it based on types extracted from name mangling
+		// Since can't reasonably match it I resort to jus returning 0 in those cases
 		res->info.Size = sym->size;
 		res->info.ModBase = mod->base_addr;
-		res->info.Flags = sym->si_flags;
+		// Don't bother returning flags, i've only observed very few of them appear and
+		// at least SYMFLAG_EXPORT seems to be determined based on PE export table instead of pdb, which is overcomplicated imho
+		// a full 1-1 match of dbghelp behavior is probably only possibly by caching dbghelp results, which is not my goal
+		res->info.Flags = 0; //sym->si_flags;
 		res->info.Value = 0;
 		// HACK: __ImageBase does not return an Address unlike seemingly everything else in dbghelp, super pointless but this matches dbghelp more closely
 		res->info.Address = sym->base_addr != 0 ? sym->base_addr + mod->base_addr : 0;
@@ -128,11 +149,26 @@ public:
 
 		if (!mod->pdb) {
 			auto* exports = mod->load_export_table();
-
+			
 			if (exports) {
-				auto* mangled_name = exports->query(mod_raddr);
+				uint32_t sym_idx;
+				auto* mangled_name = exports->query(mod_raddr, &sym_idx);
 				if (mangled_name) {
 					res->sym_name = mangled_name;
+
+					res->info.TypeIndex = 0;
+					res->info.Reserved[0] = 0;
+					res->info.Reserved[1] = 0;
+					res->info.Index = sym_idx;
+					res->info.Size = 0;
+					res->info.ModBase = mod->base_addr;
+					res->info.Flags = 0;
+					res->info.Value = 0;
+					res->info.Address = mod_raddr + mod->base_addr;
+					res->info.Register = 0;
+					res->info.Scope = 0;
+					res->info.Tag = (ULONG)SymTagEnum::SymTagPublicSymbol;
+
 					return true;
 				}
 			}
@@ -156,17 +192,11 @@ public:
 		res->info.TypeIndex = 0;
 		res->info.Reserved[0] = 0;
 		res->info.Reserved[1] = 0;
-		// Not the same index as dbghelp (as the indices are unstable across runs and only used for passing into other api functions)
-		// we could implement other parts of the api using our own index scheme
 		res->info.Index = sym_idx;
-		// Size for module symbols makes sense, but for global data symbols it has to be "estimated" based on the typeinfo, which I cannot easily replicate
-		// for global function symbols it's even more weird and dbghelp seemingly sometimes computes it based on types extracted from name mangling
-		// Since can't reasonably match it I resort to jus returning 0 in those cases
 		res->info.Size = sym->size;
 		res->info.ModBase = mod->base_addr;
-		res->info.Flags = sym->si_flags;
+		res->info.Flags = 0;
 		res->info.Value = 0;
-		// HACK: __ImageBase does not return an Address unlike seemingly everything else in dbghelp, super pointless but this matches dbghelp more closely
 		res->info.Address = sym->base_addr != 0 ? sym->base_addr + mod->base_addr : 0;
 		res->info.Register = 0;
 		res->info.Scope = 0;
@@ -286,8 +316,9 @@ public:
 		memcpy(&res->info, &buf.si, SymResult::INFO_RELEVANT_SIZE);
 
 		constexpr uint32_t SEEN_FLAGS =
-			SYMFLAG_FUNC_NO_RETURN
-		;
+			SYMFLAG_FUNC_NO_RETURN |
+			SYMFLAG_EXPORT |
+			SYMFLAG_PUBLIC_CODE;
 		assert((res->info.Flags & ~SEEN_FLAGS) == 0);
 		assert(res->info.Value == 0);
 		assert(res->info.Register == 0);

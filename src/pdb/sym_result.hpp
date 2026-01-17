@@ -157,12 +157,12 @@ struct SymResult {
 		return true
 			&& info.Scope == r.info.Scope
 			//&& info.Size == r.info.Size
-			&& info.Flags == r.info.Flags
+			//&& info.Flags == r.info.Flags
 			&& info.Value == r.info.Value
 			&& info.Address == r.info.Address
 			&& info.Register == r.info.Register
 			&& info.Scope == r.info.Scope
-			//info.Tag == r.info.Tag
+			&& info.Tag == r.info.Tag
 		;
 	}
 	void print_info () const {

@@ -159,7 +159,6 @@ class PDB_Locator {
 		
 		std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 		std::string url = converter.to_bytes(symbol_server_url);
-		logf("Downloading pdb from %s to %s.\n", url.c_str(), cache_path.string().c_str());
 		
 		// Abuse URLOpenBlockingStreamW to avoid creating empty directories when no file can actually be downloaded
 		// Ideally I'd use the blocking stream to actually write the file out myself, but I don't want to incur overhead from manually doing writing out in chunks
@@ -168,6 +167,8 @@ class PDB_Locator {
 		HRESULT hr = URLOpenBlockingStreamW(NULL, symbol_server_url.c_str(), &stream, 0, NULL);
 		if (stream) stream->Release();
 		if (hr == S_OK) {
+			logf("Downloading pdb from %s to %s.\n", url.c_str(), cache_path.string().c_str());
+			
 			std::filesystem::create_directories(cache_path.parent_path());
 
 			if (URLDownloadToFileW(NULL, symbol_server_url.c_str(), cache_path.c_str(), 0, NULL) == S_OK) {
@@ -301,7 +302,7 @@ public:
 		}
 	}
 
-	const char* query (uintptr_t mod_raddr) {
+	const char* query (uintptr_t mod_raddr, uint32_t* out_idx) {
 		if (mod_raddr >= INT_MAX) {
 			assert(false); // If exe is ever over 4GB, likely exports can't be in upper addresses
 			return nullptr;
@@ -312,8 +313,10 @@ public:
 		if (it <= functions_sorted.begin())
 			return nullptr;
 		it--;
-
+		
 		assert(mod_raddr >= it->address);
+
+		*out_idx = (uint32_t)(it - functions_sorted.begin());
 		return names[it->mangled_name];
 	}
 };
