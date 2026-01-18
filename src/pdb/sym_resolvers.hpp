@@ -5,8 +5,6 @@
 #include "dbghelp_api.hpp"
 
 class SymResolver {
-	HANDLE inspectee;
-
 	ModuleCache mod_cache;
 	
 	TimerMeasurement tfind_symbol_for_addr = TimerMeasurement("find_symbol_for_addr");
@@ -15,7 +13,7 @@ class SymResolver {
 	TimerMeasurement tCombinedAddr2sym = TimerMeasurement("CombinedAddr2sym");
 
 public:
-	SymResolver (HANDLE inspectee): inspectee{inspectee} {}
+	SymResolver (HANDLE hprocess): mod_cache{hprocess} {}
 	
 	void measure_addr2sym (char* ptr) {
 		SymResult res;
@@ -25,35 +23,37 @@ public:
 	
 	bool addr2sym (void* ptr, SymResult* res) {
 		res->clear();
-		uintptr_t addr = (uintptr_t)ptr;
+		uint64_t addr = (uint64_t)ptr;
 
-		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
+		auto* mod = mod_cache.find_module_for_addr(addr);
 		if (!mod) {
 			res->err = "Module not found";
 			return false;
 		}
 
-		uintptr_t mod_raddr = addr - mod->base_addr;
+		uint64_t rva = addr - mod->base_addr;
 		res->module_path = mod->ansi_path.c_str();
 
 		if (!mod->pdb) {
 			auto* exports = mod->load_export_table();
 
 			if (exports) {
+				uint64_t sym_rva;
 				uint32_t sym_idx;
-				auto* mangled_name = exports->query(mod_raddr, &sym_idx);
+				auto* mangled_name = exports->query(rva, &sym_rva, &sym_idx);
 				if (mangled_name) {
 					res->sym_name = mangled_name;
 
 					res->info.TypeIndex = 0;
 					res->info.Reserved[0] = 0;
 					res->info.Reserved[1] = 0;
-					res->info.Index = sym_idx;
+					//res->info.Index = sym_idx;
+					res->info.Index = 0;
 					res->info.Size = 0;
 					res->info.ModBase = mod->base_addr;
 					res->info.Flags = 0;
 					res->info.Value = 0;
-					res->info.Address = mod_raddr + mod->base_addr;
+					res->info.Address = mod->base_addr + rva;
 					res->info.Register = 0;
 					res->info.Scope = 0;
 					res->info.Tag = (ULONG)SymTagEnum::SymTagPublicSymbol;
@@ -66,7 +66,7 @@ public:
 		}
 
 		uint32_t sym_idx;
-		auto* sym = mod->pdb->find_symbol_for_addr(mod_raddr, &sym_idx);
+		auto* sym = mod->pdb->find_symbol_for_addr(rva, &sym_idx);
 		if (!sym) {
 			res->err = "Symbol not found";
 			return false;
@@ -79,7 +79,9 @@ public:
 		res->info.Reserved[1] = 0;
 		// Not the same index as dbghelp (as the indices are unstable across runs and only used for passing into other api functions)
 		// we could implement other parts of the api using our own index scheme
-		res->info.Index = sym_idx;
+		// actually, should return 0 here so that if dbghelp calls that I do not replace are called with this index, it can fail instead of being confused
+		//res->info.Index = sym_idx;
+		res->info.Index = 0;
 		// Size for module symbols makes sense, but for global data symbols it has to be "estimated" based on the typeinfo, which I cannot easily replicate
 		// for global function symbols it's even more weird and dbghelp seemingly sometimes computes it based on types extracted from name mangling
 		// Since can't reasonably match it I resort to jus returning 0 in those cases
@@ -98,13 +100,13 @@ public:
 		//res->info.NameLen = strlen(res->sym_name);
 
 		SourceLoc src_loc = {};
-		if (mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
+		if (mod->pdb->find_source_loc_for_addr(sym, rva, &src_loc)) {
 			res->src_filepath = src_loc.filepath;
 			res->src_lineno = src_loc.lineno;
 		}
 		
 		if (sym->inline_depth > 0) {
-			res->num_inlines = mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES);
+			res->num_inlines = mod->pdb->trace_inlinesites_for_addr(sym, rva, res->inlines, SymResult::MAX_INLINES);
 		}
 
 		return res->valid();
@@ -117,7 +119,7 @@ public:
 	// Though instead of implementing this, I'd rather implement a method where all symbols at an address can be iterated instead and let the caller implement the check itself
 	bool has_symbol_for_addr (void* ptr, SymResult const& dbghelp_res) {
 		/*
-		uintptr_t addr = (uintptr_t)ptr;
+		uint64_t addr = (uint64_t)ptr;
 		
 		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
 		if (!mod) {
@@ -127,44 +129,46 @@ public:
 			return false;
 		}
 
-		uintptr_t mod_raddr = addr - mod->base_addr;
+		uint64_t rva = addr - mod->base_addr;
 		
-		return mod->pdb->has_symbol_for_addr(mod_raddr, dbghelp_res.sym_name);
+		return mod->pdb->has_symbol_for_addr(rva, dbghelp_res.sym_name);
 		*/
 		return false;
 	}
 	
 	__declspec(noinline)
 	void measure_pdb_parse (void* ptr) {
-		auto* mod = mod_cache.find_module_for_addr(inspectee, (uintptr_t)ptr);
+		auto* mod = mod_cache.find_module_for_addr((uint64_t)ptr);
 		mod_cache.clear(); // clear cache so this can be called repeatedly
 	}
 
 	//__declspec(noinline)
-	bool _measure_addr2sym (uintptr_t addr, LoadedModule* mod, SymResult* res) {
+	bool _measure_addr2sym (uint64_t addr, LoadedModule* mod, SymResult* res) {
 		//ZoneScoped;
-
-		uintptr_t mod_raddr = addr - mod->base_addr;
+		
+		uint64_t rva = addr - mod->base_addr;
 		res->module_path = mod->ansi_path.c_str();
 
 		if (!mod->pdb) {
 			auto* exports = mod->load_export_table();
 			
 			if (exports) {
+				uint64_t sym_rva;
 				uint32_t sym_idx;
-				auto* mangled_name = exports->query(mod_raddr, &sym_idx);
+				auto* mangled_name = exports->query(rva, &sym_rva, &sym_idx);
 				if (mangled_name) {
 					res->sym_name = mangled_name;
 
 					res->info.TypeIndex = 0;
 					res->info.Reserved[0] = 0;
 					res->info.Reserved[1] = 0;
-					res->info.Index = sym_idx;
+					//res->info.Index = sym_idx;
+					res->info.Index = 0;
 					res->info.Size = 0;
 					res->info.ModBase = mod->base_addr;
 					res->info.Flags = 0;
 					res->info.Value = 0;
-					res->info.Address = mod_raddr + mod->base_addr;
+					res->info.Address = mod->base_addr + rva;
 					res->info.Register = 0;
 					res->info.Scope = 0;
 					res->info.Tag = (ULONG)SymTagEnum::SymTagPublicSymbol;
@@ -180,7 +184,7 @@ public:
 		Symbol* sym;
 		{
 			//TimerMeasZone(tfind_symbol_for_addr);
-			sym = mod->pdb->find_symbol_for_addr(mod_raddr, &sym_idx);
+			sym = mod->pdb->find_symbol_for_addr(rva, &sym_idx);
 			if (!sym) {
 				res->err = "Symbol not found";
 				return false;
@@ -192,7 +196,7 @@ public:
 		res->info.TypeIndex = 0;
 		res->info.Reserved[0] = 0;
 		res->info.Reserved[1] = 0;
-		res->info.Index = sym_idx;
+		res->info.Index = 0;
 		res->info.Size = sym->size;
 		res->info.ModBase = mod->base_addr;
 		res->info.Flags = 0;
@@ -206,7 +210,7 @@ public:
 		SourceLoc src_loc = {};
 		{
 			//TimerMeasZone(tfind_source_loc_for_addr);
-			if (mod->pdb->find_source_loc_for_addr(sym, mod_raddr, &src_loc)) {
+			if (mod->pdb->find_source_loc_for_addr(sym, rva, &src_loc)) {
 				res->src_filepath = src_loc.filepath;
 				res->src_lineno = src_loc.lineno;
 			}
@@ -214,7 +218,7 @@ public:
 
 		if (sym->inline_depth > 0) {
 			//TimerMeasZone(ttrace_inlinesites);
-			res->num_inlines = mod->pdb->trace_inlinesites_for_addr(sym, mod_raddr, res->inlines, SymResult::MAX_INLINES);
+			res->num_inlines = mod->pdb->trace_inlinesites_for_addr(sym, rva, res->inlines, SymResult::MAX_INLINES);
 		}
 
 		return res->valid();
@@ -224,9 +228,9 @@ public:
 		ZoneScoped;
 		
 		res->clear();
-		uintptr_t addr = (uintptr_t)ptr;
+		uint64_t addr = (uint64_t)ptr;
 
-		auto* mod = mod_cache.find_module_for_addr(inspectee, addr);
+		auto* mod = mod_cache.find_module_for_addr(addr);
 		if (!mod) {
 			res->err = "Module not found";
 			return false;
@@ -236,7 +240,7 @@ public:
 	}
 	
 	void print_pdb_stats (void* ptr) {
-		auto* mod = mod_cache.find_module_for_addr(inspectee, (uintptr_t)ptr);
+		auto* mod = mod_cache.find_module_for_addr((uint64_t)ptr);
 		if (mod->pdb) mod->pdb->print_stats();
 	}
 
@@ -251,7 +255,7 @@ public:
 };
 
 class SymResolverDebughelp {
-	HANDLE inspectee;
+	HANDLE hprocess;
 public:
 	
 	TimerMeasurement tDebughelp_init = TimerMeasurement("Debughelp_init");
@@ -263,7 +267,7 @@ public:
 	TimerMeasurement tSymGetLineFromInlineContext = TimerMeasurement("SymGetLineFromInlineContext");
 	TimerMeasurement tCombinedAddr2sym = TimerMeasurement("CombinedAddr2sym");
 
-	SymResolverDebughelp (HANDLE inspectee): inspectee{inspectee} {
+	SymResolverDebughelp (HANDLE hprocess): hprocess{hprocess} {
 		TimerMeasZone(tDebughelp_init);
 
 		real_dbghelp.load_if_not_loaded_yet();
@@ -272,7 +276,7 @@ public:
 		{ // Need to set search_path because dbhelp.dll does not search next to exe for pdb, instead searching this processes working directory
 			char exe_name[1024];
 			DWORD size = sizeof(exe_name);
-			if (!QueryFullProcessImageNameA(inspectee, 0, exe_name, &size)) {
+			if (!QueryFullProcessImageNameA(hprocess, 0, exe_name, &size)) {
 				print_err_throw("QueryFullProcessImageNameA");
 			}
 
@@ -289,13 +293,13 @@ public:
 		// Tracy is using this, but then also calling SymLoadModuleEx later (since modules can be loaded later)
 		// In my case I just want to measure symbol resolution performance and I assume the modules I'm interested in are already loaded
 		BOOL fInvadeProcess = TRUE;
-		if (!real_dbghelp.SymInitialize(inspectee, search_path.c_str(), fInvadeProcess)) {
+		if (!real_dbghelp.SymInitialize(hprocess, search_path.c_str(), fInvadeProcess)) {
 			print_err_throw("SymInitialize");
 		}
 
 	}
 	~SymResolverDebughelp () {
-		real_dbghelp.SymCleanup(inspectee);
+		real_dbghelp.SymCleanup(hprocess);
 	}
 
 	bool addr2sym (void* addr, SymResult* res) {
@@ -308,7 +312,7 @@ public:
 
 		DWORD Displacement = 0;
 
-		if (!real_dbghelp.SymFromAddr(inspectee, (DWORD64)addr, nullptr, &buf.si)) {
+		if (!real_dbghelp.SymFromAddr(hprocess, (DWORD64)addr, nullptr, &buf.si)) {
 			res->err = "SymFromAddr error";
 			return false;
 		}
@@ -339,7 +343,7 @@ public:
 		{
 			IMAGEHLP_LINE64 line = {};
 			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-			if (real_dbghelp.SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line)) {
+			if (real_dbghelp.SymGetLineFromAddr64(hprocess, (DWORD64)addr, &Displacement, &line)) {
 				res->src_filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
 				res->src_lineno = line.LineNumber;
 			}
@@ -349,11 +353,11 @@ public:
 		DWORD ctx = 0;
 		DWORD inlineNum = 0;
 		if (real_dbghelp.SymAddrIncludeInlineTrace) {
-			inlineNum = real_dbghelp.SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
+			inlineNum = real_dbghelp.SymAddrIncludeInlineTrace(hprocess, (DWORD64)addr);
 
 			DWORD idx;
 			if (inlineNum != 0) {
-				doInline = real_dbghelp.SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
+				doInline = real_dbghelp.SymQueryInlineTrace(hprocess, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
 			}
 		}
 		
@@ -362,12 +366,12 @@ public:
 			for (int i=res->num_inlines-1; i>=0; i--) {
 				res->inlines[i] = {};
 
-				if (real_dbghelp.SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, &buf.si)) {
+				if (real_dbghelp.SymFromInlineContext(hprocess, (DWORD64)addr, ctx, NULL, &buf.si)) {
 					res->inlines[i].fnname = res->str_alloc.push(buf.si.Name, buf.si.NameLen);
 					
 					IMAGEHLP_LINE64 line = {};
 					line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-					if (real_dbghelp.SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line)) {
+					if (real_dbghelp.SymGetLineFromInlineContext(hprocess, (DWORD64)addr, ctx, 0, &Displacement, &line)) {
 						res->inlines[i].filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
 						res->inlines[i].lineno = line.LineNumber;
 					}
@@ -394,7 +398,7 @@ public:
 		BOOL res1;
 		{
 			//TimerMeasZone(tSymFromAddr);
-			res1 = real_dbghelp.SymFromAddr(inspectee, (DWORD64)addr, nullptr, &buf.si);
+			res1 = real_dbghelp.SymFromAddr(hprocess, (DWORD64)addr, nullptr, &buf.si);
 		}
 		if (!res1) {
 			return;
@@ -406,7 +410,7 @@ public:
 
 			IMAGEHLP_LINE64 line = {};
 			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-			res2 = real_dbghelp.SymGetLineFromAddr64(inspectee, (DWORD64)addr, &Displacement, &line);
+			res2 = real_dbghelp.SymGetLineFromAddr64(hprocess, (DWORD64)addr, &Displacement, &line);
 		}
 		
 		{
@@ -418,13 +422,13 @@ public:
 			if (real_dbghelp.SymAddrIncludeInlineTrace) {
 				{
 					//TimerMeasZone(tSymAddrIncludeInlineTrace);
-					inlineNum = real_dbghelp.SymAddrIncludeInlineTrace(inspectee, (DWORD64)addr);
+					inlineNum = real_dbghelp.SymAddrIncludeInlineTrace(hprocess, (DWORD64)addr);
 				}
 
 				DWORD idx;
 				if (inlineNum != 0) {
 					//TimerMeasZone(tSymQueryInlineTrace);
-					doInline = real_dbghelp.SymQueryInlineTrace(inspectee, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
+					doInline = real_dbghelp.SymQueryInlineTrace(hprocess, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
 				}
 			}
 		
@@ -432,7 +436,7 @@ public:
 				for (DWORD i=0; i<inlineNum; i++) {
 					{
 						//TimerMeasZone(tSymFromInlineContext);
-						res1 = real_dbghelp.SymFromInlineContext(inspectee, (DWORD64)addr, ctx, NULL, &buf.si);
+						res1 = real_dbghelp.SymFromInlineContext(hprocess, (DWORD64)addr, ctx, NULL, &buf.si);
 					}
 				
 					if (res1) {
@@ -440,7 +444,7 @@ public:
 
 						IMAGEHLP_LINE64 line = {};
 						line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
-						res2 = real_dbghelp.SymGetLineFromInlineContext(inspectee, (DWORD64)addr, ctx, 0, &Displacement, &line);
+						res2 = real_dbghelp.SymGetLineFromInlineContext(hprocess, (DWORD64)addr, ctx, 0, &Displacement, &line);
 					}
 
 					ctx++;

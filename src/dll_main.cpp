@@ -6,10 +6,10 @@
 BOOL WINAPI DllMain (HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 	switch (fdwReason) {
 		case DLL_PROCESS_ATTACH: {
-			dbghelp_wrapper.init();
+			real_dbghelp.load_if_not_loaded_yet();
 		} break;
 		case DLL_PROCESS_DETACH: {
-			dbghelp_wrapper.cleanup();
+			real_dbghelp.unload();
 		} break;
 	}
 	return TRUE;

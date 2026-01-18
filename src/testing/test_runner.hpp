@@ -220,7 +220,7 @@ public:
 
 	void print_addr (const char* context, char* addr) {
 		auto& mod = get_mod(addr);
-		auto rel_addr = (intptr_t)addr - (intptr_t)mod.addr;
+		auto rel_addr = (int64_t)addr - (int64_t)mod.addr;
 		logf("%s: [%s+%llx] ", context, mod.name.c_str(), rel_addr);
 	}
 
@@ -251,7 +251,7 @@ public:
 		
 		if (!res.equal(res_dbghelp, { &mismatch_counts, resolver.get(), addr })) {
 			auto& mod = get_mod(addr);
-			auto rel_addr = (intptr_t)addr - (intptr_t)mod.addr;
+			auto rel_addr = (int64_t)addr - (int64_t)mod.addr;
 
 			res.print_diff(mod.name.c_str(), rel_addr, res_dbghelp);
 			//tests_failed = true;
@@ -261,10 +261,10 @@ public:
 	std::unique_ptr<SymResult> prev_res = std::make_unique<SymResult>();
 	std::unique_ptr<SymResult> prev_res_dbghelp = std::make_unique<SymResult>();
 	
-	void test_distinct_addr2sym (uintptr_t addr) {
+	void test_distinct_addr2sym (uint64_t addr) {
 		show_and_test_distinct_addr2sym(addr, false);
 	}
-	void show_and_test_distinct_addr2sym (uintptr_t addr, bool show=true) {
+	void show_and_test_distinct_addr2sym (uint64_t addr, bool show=true) {
 		auto res = std::make_unique<SymResult>();
 		auto res_dbghelp = std::make_unique<SymResult>();
 
@@ -284,7 +284,7 @@ public:
 				) {
 				
 				auto& mod = get_mod((char*)addr);
-				auto rel_addr = (intptr_t)addr - (intptr_t)mod.addr;
+				auto rel_addr = (int64_t)addr - (int64_t)mod.addr;
 
 				res->print_diff(mod.name.c_str(), rel_addr, *res_dbghelp);
 				//tests_failed = true;
@@ -294,37 +294,37 @@ public:
 			prev_res_dbghelp = std::move(res_dbghelp);
 		}
 	}
-	void show_distinct_sym_lineinfo (LoadedModule const& mod, uintptr_t addr) {
+	void show_distinct_sym_lineinfo (LoadedModule const& mod, uint64_t addr) {
 		auto res = std::make_unique<SymResult>();
 
 		resolver->addr2sym((void*)addr, res.get());
 		
 		if (!res->equal_no_inline(*prev_res)) {
-			logf("[%llx] ", addr - (uintptr_t)mod.addr);
+			logf("[%llx] ", addr - (uint64_t)mod.addr);
 			res->print_no_inline();
 
 			prev_res = std::move(res);
 		}
 	}
-	void show_distinct_sym (LoadedModule const& mod, uintptr_t addr) {
+	void show_distinct_sym (LoadedModule const& mod, uint64_t addr) {
 		auto res = std::make_unique<SymResult>();
 
 		resolver->addr2sym((void*)addr, res.get());
 		
 		if (!res->equal_sym(*prev_res)) {
-			logf("[%llx] ", addr - (uintptr_t)mod.addr);
+			logf("[%llx] ", addr - (uint64_t)mod.addr);
 			res->print_sym();
 
 			prev_res = std::move(res);
 		}
 	}
-	void show_distinct_sym_dbghelp (LoadedModule const& mod, uintptr_t addr) {
+	void show_distinct_sym_dbghelp (LoadedModule const& mod, uint64_t addr) {
 		auto res = std::make_unique<SymResult>();
 
 		dbghelp->addr2sym((void*)addr, res.get());
 		
 		if (!res->equal_sym(*prev_res)) {
-			logf("[%llx] ", addr - (uintptr_t)mod.addr);
+			logf("[%llx] ", addr - (uint64_t)mod.addr);
 			res->print_sym();
 
 			prev_res = std::move(res);
@@ -376,28 +376,28 @@ public:
 		auto& mod = loaded_modules.find(filter);
 		sweep_mod(filter, 0, mod.size, show);
 	}
-	void sweep_mod (std::string_view filter, uintptr_t rva_start, uintptr_t rva_end, bool show=false) {
+	void sweep_mod (std::string_view filter, uint64_t rva_start, uint64_t rva_end, bool show=false) {
 		auto& mod = loaded_modules.find(filter);
-		auto start = (uintptr_t)mod.addr + rva_start;
-		auto end = (uintptr_t)mod.addr + rva_end;
+		auto start = (uint64_t)mod.addr + rva_start;
+		auto end = (uint64_t)mod.addr + rva_end;
 		
 		logf("@ Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
 		if (show) {
-			for (uintptr_t addr = start; addr < end; addr++) {
+			for (uint64_t addr = start; addr < end; addr++) {
 				show_and_test_distinct_addr2sym(addr);
 			}
 			/*
 			logf("@ Dbghelp:\n");
-			for (uintptr_t addr = start; addr < end; addr++) {
+			for (uint64_t addr = start; addr < end; addr++) {
 				show_distinct_sym_dbghelp(mod, addr);
 			}
 			logf("@ SymResolver:\n");
-			for (uintptr_t addr = start; addr < end; addr++) {
+			for (uint64_t addr = start; addr < end; addr++) {
 				show_distinct_sym(mod, addr);
 			}*/
 		}
 		else {
-			for (uintptr_t addr = start; addr < end; addr++) {
+			for (uint64_t addr = start; addr < end; addr++) {
 				test_distinct_addr2sym(addr);
 			}
 		}
@@ -407,11 +407,11 @@ public:
 	
 	void sweep_mod_measure (std::string_view filter) {
 		auto& mod = loaded_modules.find(filter);
-		auto start = (uintptr_t)mod.addr;
-		auto end = (uintptr_t)mod.addr + mod.size;
+		auto start = (uint64_t)mod.addr;
+		auto end = (uint64_t)mod.addr + mod.size;
 
 		logf("@ Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
-		for (uintptr_t addr = start; addr < end; addr++) {
+		for (uint64_t addr = start; addr < end; addr++) {
 			measure_addr2sym((char*)addr);
 		}
 		if (print_timings) {
@@ -426,11 +426,11 @@ public:
 	// seed=-1 => random seed
 	void fuzz_mod_measure (std::string_view filter, int count=10000, int seed=-1) {
 		auto& mod = loaded_modules.find(filter);
-		auto start = (uintptr_t)mod.addr;
-		auto end = (uintptr_t)mod.addr + mod.size;
+		auto start = (uint64_t)mod.addr;
+		auto end = (uint64_t)mod.addr + mod.size;
 		
 		auto rng = seed < 0 ? init_rng() : init_rng((uint64_t)seed);
-		std::uniform_int_distribution<uintptr_t> uniform_rng (start, end);
+		std::uniform_int_distribution<uint64_t> uniform_rng (start, end);
 		
 		logf("@ Fuzz for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
 		for (int i=0; i<count; i++) {

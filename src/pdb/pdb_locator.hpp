@@ -204,6 +204,9 @@ class PDB_Locator {
 	}
 
 public:
+	// global search path across all DbgHelpWrapper sessions
+	static inline std::vector<std::filesystem::path> extra_search_paths;
+
 	PDB_Locator (std::filesystem::path const& filepath): exe_path{filepath} {
 		ZoneScoped;
 
@@ -219,6 +222,9 @@ public:
 		//printf(">> %s ->\n>>> symbol_server_url: %s\n>>> cache_path: %s\n", filepath.c_str(), symbol_server_url.c_str(), cache_path.u8string().c_str());
 	}
 
+	// This way of finding pdbs may not actually match what dbghelp does, but it made sense for me
+	// only file existance is checked, not if file is actually the correct pdb
+	// instead pdb parsing will later check PDB_guid_and_age
 	std::filesystem::path get_pdb_path () {
 		ZoneScoped;
 
@@ -236,6 +242,17 @@ public:
 		if (pdb_path_in_exe.is_absolute()) {
 			if (std::filesystem::exists(pdb_path_in_exe)) {
 				return pdb_path_in_exe;
+			}
+		}
+		
+		// try to emulate extra search paths like dbghelp (?) no testing was done if this actually matches what dbghelp does
+		std::filesystem::path pdb_filename = exe_path.filename();
+		pdb_filename.replace_extension({".pdb"});
+
+		for (auto& search_path : extra_search_paths) {
+			auto pdb_path = search_path / pdb_filename;
+			if (std::filesystem::exists(pdb_path)) {
+				return pdb_path;
 			}
 		}
 		
@@ -276,7 +293,7 @@ class ExportTableQuery {
 	std::vector<Function> functions_sorted;
 	
 	static __forceinline int _cmp (Function const& l, Function const& r) {
-		return std::less<uintptr_t>()(l.address, r.address);
+		return std::less<uint64_t>()(l.address, r.address);
 	}
 	static __forceinline bool _less (Function const& l, Function const& r) {
 		return l.address < r.address;
@@ -302,20 +319,21 @@ public:
 		}
 	}
 
-	const char* query (uintptr_t mod_raddr, uint32_t* out_idx) {
-		if (mod_raddr >= INT_MAX) {
+	const char* query (uint64_t mod_rva, uint64_t* out_sym_rva, uint32_t* out_idx) {
+		if (mod_rva >= INT_MAX) {
 			assert(false); // If exe is ever over 4GB, likely exports can't be in upper addresses
 			return nullptr;
 		}
 
-		auto dummy = Function{ (uint32_t)mod_raddr, 0 };
+		auto dummy = Function{ (uint32_t)mod_rva, 0 };
 		auto it = std::upper_bound(functions_sorted.begin(), functions_sorted.end(), dummy, _less);
 		if (it <= functions_sorted.begin())
 			return nullptr;
 		it--;
 		
-		assert(mod_raddr >= it->address);
+		assert(mod_rva >= it->address);
 
+		*out_sym_rva = it->address;
 		*out_idx = (uint32_t)(it - functions_sorted.begin());
 		return names[it->mangled_name];
 	}

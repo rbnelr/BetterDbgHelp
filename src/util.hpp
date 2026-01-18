@@ -88,6 +88,32 @@ inline bool ends_with(std::string_view str, std::string_view suffix) {
 	return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
 }
 
+inline std::wstring str2wstr (const std::string& str) {
+	int size_needed = MultiByteToWideChar(CP_ACP, 0, &str[0], (int)str.size(), NULL, 0);
+	std::wstring wstr(size_needed, L'\0');
+	auto res = MultiByteToWideChar(CP_ACP, 0, &str[0], (int)str.size(), wstr.data(), size_needed);
+	if (res <= 0) {
+		return std::wstring();
+	}
+	return wstr;
+}
+
+std::wstring GetEnvVar (const wchar_t* name) {
+	DWORD len = GetEnvironmentVariableW(name, nullptr, 0);
+	if (len == 0) {
+		return L"";
+	}
+
+	std::wstring value(len, L'\0');
+	DWORD written = GetEnvironmentVariableW(name, &value[0], len);
+	if (written == 0 || written >= len) {
+		return L"";
+	}
+
+	value.resize(written);
+	return value;
+}
+
 template <typename K, typename V, typename K2>
 inline V* try_get (std::unordered_map<K, V>& map, K2 const& key) {
 	auto it = map.find(key);
@@ -425,6 +451,30 @@ struct StrAlloc {
 
 		memcpy(cur, ptr, len);
 		cur += len;
+
+		return offset;
+	}
+
+	sid push_format (const char* format, ...) {
+		va_list vl;
+		va_start(vl, format);
+
+		std::string ret;
+
+		int count = vsnprintf(nullptr, 0, format, vl);
+		if (count < 0)
+			return -1;
+
+		sid offset = _grow(count+1);
+		auto* cur = v.data() + offset;
+
+		int count2 = vsnprintf(cur, count+1, format, vl);
+		if (count2 < 0)
+			return -1;
+		assert(count2 == count);
+		assert(cur[count] == '\0');
+
+		va_end(vl);
 
 		return offset;
 	}

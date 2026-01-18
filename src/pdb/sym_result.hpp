@@ -323,7 +323,7 @@ struct SymResult {
 			return true;
 		return strcmp(l, r) == 0;
 	}
-	void print_diff (const char* mod_name, intptr_t rel_addr, SymResult const& r) const {
+	void print_diff (const char* mod_name, int64_t rel_addr, SymResult const& r) const {
 		if (r.valid())
 			logf("!!! [%s+%llx] (%s) Result Mismatch:\n", mod_name, rel_addr, r.sym_name);
 		else

@@ -24,7 +24,7 @@ class AddressIndex {
 		}
 	};
 	
-	std::vector<intptr_t, align_alloc<intptr_t>> addresses;
+	std::vector<int64_t, align_alloc<int64_t>> addresses;
 	std::vector<Block, align_alloc<Block>> blocks;
 	std::vector<uint32_t, align_alloc<uint32_t>> block_indices;
 	
@@ -53,13 +53,13 @@ public:
 
 		// use signed 64 bit addresses as they are more convenient, should never overflow
 		Block* cur_block = nullptr;
-		intptr_t block_address = 0;
-		intptr_t block_max_addr = 0;
+		int64_t block_address = 0;
+		int64_t block_max_addr = 0;
 		uint32_t block_elem_index;
 		uint32_t idx_in_block = BLOCKSZ; // causes initial block push
 		
 		for (uint32_t i=0; i<count; i++) {
-			intptr_t addr = (intptr_t)get_addr(i);
+			int64_t addr = (int64_t)get_addr(i);
 
 			// if all slots are filled (or initial case)
 			// or if offset would be ==MAX_OFFSET, start new block
@@ -74,7 +74,7 @@ public:
 
 				block_max_addr = block_address + MAX_OFFSET;
 			}
-			intptr_t offset = addr - block_address;
+			int64_t offset = addr - block_address;
 
 			assert(offset < MAX_OFFSET);
 			cur_block->offsets[idx_in_block] = (int16_t)offset;
@@ -82,7 +82,7 @@ public:
 		}
 	}
 
-	__forceinline uint32_t upper_bound (intptr_t addr) {
+	__forceinline uint32_t upper_bound (int64_t addr) {
 		auto it = std::upper_bound(addresses.begin(), addresses.end(), addr);
 		if (it <= addresses.begin()) // addr before first item
 			return 0;
@@ -101,14 +101,14 @@ public:
 
 		uint32_t upper_bound_idx = block_indices[block_idx];
 
-		intptr_t block_addr = *it;
-		intptr_t local_addr64 = addr - block_addr;
+		int64_t block_addr = *it;
+		int64_t local_addr64 = addr - block_addr;
 
 		// whenever we find see address we want to build into a block, but it is out of range for the block (past 16 bit range)
 		// we begin a new block instead, the new block is at the address we saw, so there are gaps between blocks!
 		// so this can happen and unfortunately breaks our simd logic
 		// can either clamp it and run it through simd, or early out by looking at new block
-		int16_t local_addr = (int16_t)std::min(local_addr64, (intptr_t)(MAX_OFFSET-1));
+		int16_t local_addr = (int16_t)std::min(local_addr64, (int64_t)(MAX_OFFSET-1));
 		__m256i simd_addr = _mm256_set1_epi16(local_addr);
 		
 		__m256i mask0 = _mm256_cmpgt_epi16(values0, simd_addr);

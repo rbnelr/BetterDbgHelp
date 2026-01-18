@@ -9,13 +9,13 @@ struct LoadedModule {
 	std::filesystem::path path;
 	std::string ansi_path;
 
-	uintptr_t base_addr;
+	uint64_t base_addr;
 	size_t size;
 
 	std::unique_ptr<FastPdbLookup> pdb;
 	std::unique_ptr<ExportTableQuery> exports;
 
-	LoadedModule (std::filesystem::path&& path, uintptr_t base_addr, size_t size) {
+	LoadedModule (std::filesystem::path&& path, uint64_t base_addr, size_t size) {
 		this->path = std::move(path);
 		ansi_path = this->path.string();
 		this->base_addr = base_addr;
@@ -38,18 +38,28 @@ struct LoadedModule {
 		return exports.get();
 	}
 };
+// Holds the cached pdb or export table lookup data for the .exe and all loaded .dll of a process
 struct ModuleCache {
+	HANDLE hprocess;
+	std::vector<LoadedModule> sorted;
+	
 	TimerMeasurement ttry_get_and_cache_module = TimerMeasurement("try_get_and_cache_module");
 	TimerMeasurement tload_pdb = TimerMeasurement("load_pdb");
 
-	std::vector<LoadedModule> sorted;
-		
+	ModuleCache (HANDLE hprocess): hprocess{hprocess} {
+
+	}
+	void clear () {
+		sorted.clear();
+		sorted.shrink_to_fit();
+	}
+
 	LoadedModule* cache (LoadedModule&& m) {
 		auto base_addr = m.base_addr;
 		sorted.push_back(std::move(m));
 		// re-sort
 		std::sort(sorted.begin(), sorted.end(), [] (LoadedModule const& l, LoadedModule const& r) {
-			return std::less<uintptr_t>()(l.base_addr, r.base_addr);
+			return std::less<uint64_t>()(l.base_addr, r.base_addr);
 		});
 
 		for (auto& m : sorted) {
@@ -59,7 +69,7 @@ struct ModuleCache {
 		return nullptr;
 	}
 
-	LoadedModule* find_module_for_addr (HANDLE inspectee, uintptr_t addr) {
+	LoadedModule* find_module_for_addr (uint64_t addr) {
 		//ZoneScoped;
 
 		// Linear search shoule be fast enough for the moment
@@ -69,10 +79,10 @@ struct ModuleCache {
 			}
 		}
 			
-		return try_get_and_cache_module(inspectee, addr);
+		return try_get_and_cache_module(addr);
 	}
 
-	LoadedModule* try_get_and_cache_module (HANDLE inspectee, uintptr_t addr) {
+	LoadedModule* try_get_and_cache_module (uint64_t addr) {
 		ZoneScopedC(0xffff00);
 
 		LoadedModule* loaded = nullptr;
@@ -80,7 +90,7 @@ struct ModuleCache {
 			TimerMeasZone(ttry_get_and_cache_module);
 			HMODULE modules[1024];
 			DWORD needed = 0;
-			if (!EnumProcessModules(inspectee, modules, sizeof(modules), &needed) || needed > sizeof(modules)) { // TODO: properly handle error
+			if (!EnumProcessModules(hprocess, modules, sizeof(modules), &needed) || needed > sizeof(modules)) { // TODO: properly handle error
 				print_err_throw("EnumProcessModules");
 			}
 
@@ -95,12 +105,12 @@ struct ModuleCache {
 				auto& mod = modules[i];
 
 				MODULEINFO info = {};
-				if (GetModuleInformation(inspectee, mod, &info, sizeof(info))) {
-					auto base = (uintptr_t)info.lpBaseOfDll;
+				if (GetModuleInformation(hprocess, mod, &info, sizeof(info))) {
+					auto base = (uint64_t)info.lpBaseOfDll;
 					auto size = (size_t)info.SizeOfImage;
 					if (addr >= base && addr < base + size) {
-						wchar_t name[1024];
-						auto nameLength = GetModuleFileNameExW(inspectee, mod, name, sizeof(name));
+						wchar_t name[MAX_PATH];
+						auto nameLength = GetModuleFileNameExW(hprocess, mod, name, sizeof(name));
 						if (nameLength > 0) {
 							auto path = std::wstring_view(name, nameLength);
 							loaded = cache(LoadedModule(std::filesystem::path(path), base, size));
@@ -113,15 +123,11 @@ struct ModuleCache {
 		if (loaded) {
 			TimerMeasZone(tload_pdb);
 
-			_inspectee = inspectee;
+			_hprocess = hprocess;
 			_mod_base = loaded->base_addr;
 
 			loaded->load_pdb();
 		}
 		return loaded;
-	}
-
-	void clear () {
-		sorted.clear();
 	}
 };

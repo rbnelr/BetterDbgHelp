@@ -8,7 +8,7 @@
 #include <cstdlib>
 
 // HACK: for the moment so I can check things during pdb parsing against dbghelp
-inline HANDLE _inspectee = INVALID_HANDLE_VALUE;
+inline HANDLE _hprocess = INVALID_HANDLE_VALUE;
 inline uint64_t _mod_base = 0;
 
 struct Stats {
@@ -27,7 +27,7 @@ template <typename K, typename V>
 using hashmap = ankerl::unordered_dense::map<K, V>;
 
 struct Symbol {
-	uintptr_t base_addr = 0; // relative to module
+	uint64_t base_addr = 0; // relative to module
 	uint32_t size = 0;
 	StrAlloc::sid name = -1;
 	
@@ -44,10 +44,10 @@ struct Symbol {
 	BinAlloc::bid p_lineinfo = -1;
 	BinAlloc::bid p_inlinesites = -1;
 
-	__forceinline uintptr_t get_addr () const {
+	__forceinline uint64_t get_addr () const {
 		return base_addr;
 	}
-	static __forceinline Symbol dummy (uintptr_t base_addr) { // needed for std::upper_bound
+	static __forceinline Symbol dummy (uint64_t base_addr) { // needed for std::upper_bound
 		return Symbol { base_addr };
 	}
 };
@@ -109,10 +109,10 @@ public:
 		}
 	}
 
-	Symbol* find_symbol_for_addr (uintptr_t addr, uint32_t* out_sym_idx) {
+	Symbol* find_symbol_for_addr (uint64_t addr, uint32_t* out_sym_idx) {
 		//ZoneScoped;
 		
-		uint32_t idx = symbol_index.upper_bound((intptr_t)addr);
+		uint32_t idx = symbol_index.upper_bound((int64_t)addr);
 		if (idx <= 0) {
 			// first symbol after addr is first symbol, search failed
 			return nullptr;
@@ -123,27 +123,28 @@ public:
 		return binalloc.get_unchecked<Symbol>(symbols[idx]);
 	}
 
-	bool find_source_loc_for_addr (Symbol* sym, uintptr_t addr, SourceLoc* out_src_loc) {
+	bool find_source_loc_for_addr (Symbol* sym, uint64_t addr, SourceLoc* out_src_loc) {
 		//ZoneScoped;
 		
+		auto* lineinfo = binalloc.get<char>(sym->p_lineinfo);
+		if (!lineinfo)
+			return false;
+
 		assert(addr >= sym->base_addr);
 		if (addr >= sym->base_addr + sym->size) {
 			// past symbol address range, no valid line number
 			return false;
 		}
-		uintptr_t sym_raddr = addr - sym->base_addr;
+		uint64_t sym_raddr = addr - sym->base_addr;
 		
-		auto* lineinfo = binalloc.get<char>(sym->p_lineinfo);
-		if (!lineinfo)
-			return false;
 		return lineinfo::find_line_for_addr(lineinfo, sym_raddr, stralloc, out_src_loc);
 	}
 	
-	int trace_inlinesites_for_addr (Symbol* sym, uintptr_t addr, SourceLocAndFn* out_locs, int num_locs) {
+	int trace_inlinesites_for_addr (Symbol* sym, uint64_t addr, SourceLocAndFn* out_locs, int num_locs) {
 		//ZoneScoped;
 		assert(sym->inline_depth > 0); // only call when actually needed!
 
-		uintptr_t proc_raddr = addr - sym->base_addr;
+		uint64_t proc_raddr = addr - sym->base_addr;
 
 		int depth = 0;
 		
@@ -158,6 +159,7 @@ public:
 				out_locs[depth].fnname = stralloc[site->fnname];
 				out_locs[depth].filepath = encoded_loc.filepath;
 				out_locs[depth].lineno = encoded_loc.lineno;
+				out_locs[depth].line_start_offset = encoded_loc.line_start_offset;
 				depth++;
 
 				// site->pChildren != null: recurse into subtree
@@ -313,15 +315,12 @@ class PdbReader {
 	struct Section {
 		std::string name;
 
-		uintptr_t base_addr;
+		uint64_t base_addr;
 		size_t size;
 	};
 	std::vector<Section> sections_sorted;
-	
-	// deduplicate symbols with identical addresses, as functions can be merged, pick first one
-	// currently in these cases I still regularily pick different symbols compared to dbghelp, I kinda gave up for the moment
-	// I pick the first one, I remember seeing no apparent pattern (first one, last one etc.), but I may have messed up
-	hashmap<uintptr_t, int> extracted_symbol_addresses;
+
+	//std::vector<pdb_module_information*> modules;
 
 #define EXTRACT_ALL_NAMES 0
 #if !EXTRACT_ALL_NAMES
@@ -708,8 +707,12 @@ class PdbReader {
 			// read symbol stream for each module, this contains function symbols and all lineinfo
 			read_module_symbol_stream(module_index, mi);
 			module_index++;
+
+			//modules.push_back(mi);
 		}
 		assert(ptr == end);
+
+		process_trampolines();
 	}
 
 	void read_section_header_dump () {
@@ -734,7 +737,7 @@ class PdbReader {
 			assert(sections_sorted[i].base_addr > sections_sorted[i-1].base_addr + sections_sorted[i-1].size);
 		}
 	}
-	[[msvc::forceinline]] bool resolve_rva (u32 offs, u16 seg, uintptr_t* out_addr) {
+	[[msvc::forceinline]] bool resolve_rva (u32 offs, u16 seg, uint64_t* out_rva) {
 		if (seg > 0) {
 			// Sometimes global symbols have section ids to invalid sections, no idea why this happens
 			// ex: __guard_fids_table, __guard_flags, __guard_iat_table, __guard_longjmp_table, __enclave_config, __guard_eh_cont_table
@@ -742,19 +745,28 @@ class PdbReader {
 				return false;
 			}
 			auto seg_addr = sections_sorted[seg-1].base_addr;
-			*out_addr = (uintptr_t)offs + (uintptr_t)seg_addr;
-			assert(*out_addr < seg_addr + sections_sorted[seg-1].size);
+			assert(offs <= sections_sorted[seg-1].size);
+			*out_rva = (uint64_t)offs + (uint64_t)seg_addr;
 		}
 		else {
 			// Special __ImageBase symbol has seg==0, so offs already is rva
 			// I have not observed any other cases
 			assert(offs == 0);
-			*out_addr = (uintptr_t)offs;
+			*out_rva = (uint64_t)offs;
 		}
 		return true;
 	}
 	
-	
+	// deduplicate symbols with identical addresses, as functions can be merged, pick first one
+	// currently in these cases I still regularily pick different symbols compared to dbghelp, I kinda gave up for the moment
+	// I pick the first one, I remember seeing no apparent pattern (first one, last one etc.), but I may have messed up
+	hashmap<uint64_t, int> extracted_symbol_addresses;
+	struct Trampoline {
+		TRAMPOLINESYM sym;
+		s16 module_index;
+	};
+	std::vector<Trampoline> trampolines;
+
 	// Did I not comment this 3 times already?
 	// Anyway, there are cases where lineinfo exists with a different address then the functions it covers:
 	// ex: __security_check_cookie: src\vctools\crt\vcstartup\src\gs\amd64\amdsecgs.asm
@@ -770,9 +782,9 @@ class PdbReader {
 		codeview_subsection_header* subsec;
 		codeview_line_header* header () { return (codeview_line_header*)(subsec+1); }
 	};
-	std::map<uintptr_t, C13Lineinfo> module_c13_lineinfo;
+	std::map<uint64_t, C13Lineinfo> module_c13_lineinfo;
 	
-	codeview_subsection_header* find_single_overlapping_lineinfo (Symbol const& sym, uintptr_t* out_lineinfo_addr) {
+	codeview_subsection_header* find_single_overlapping_lineinfo (Symbol const& sym, uint64_t* out_lineinfo_addr) {
 		if (module_c13_lineinfo.empty()) return nullptr;
 
 		// upper_bound returns first item larger than input (usually one past end of the range of equal items)
@@ -1041,14 +1053,14 @@ class PdbReader {
 				if (header->flags != 0)
 					return; // CV_LINES_HAVE_COLUMNS not implemented
 				
-				uintptr_t sec_offs = sections_sorted[header->contribution_section_id-1].base_addr;
-				uintptr_t module_raddr = header->contribution_offset + sec_offs;
+				uint64_t sec_offs = sections_sorted[header->contribution_section_id-1].base_addr;
+				uint64_t rva = header->contribution_offset + sec_offs;
 				
 				// Why are there always conflicting sets of data in PDBs?
 				// Even this basic C13 Data tends to exist for the same function multiple times (which tend to have conflicing contents as well)
 				// Picking the first one seems to have been working ok
 				auto check_duplicates = [&] () {
-					auto it = module_c13_lineinfo.find(module_raddr);
+					auto it = module_c13_lineinfo.find(rva);
 					if (it != module_c13_lineinfo.end()) {
 						logf("> Conflicing C13 Lineinfo\n");
 
@@ -1093,7 +1105,7 @@ class PdbReader {
 				};
 
 				//check_duplicates();
-				module_c13_lineinfo.try_emplace(module_raddr, C13Lineinfo{ subsec });
+				module_c13_lineinfo.try_emplace(rva, C13Lineinfo{ subsec });
 				
 				// Line => Code range that has the same line number
 				// Block => Consecutive lines (in compiled binary) where all come from the same file
@@ -1178,35 +1190,36 @@ class PdbReader {
 
 				//int entry_offs = (int)((char*)sym - sym_info);
 				//logf("> %7d [%4x] %d %s\n", entry_offs, sym->kind, sym->length, SYM_ENUM_e_str(sym->kind));
-
+				
 				auto push_symbol = [this, module_index, file_checksum_ptr]
-						(u32 offs, u32 size, u16 seg, uint32_t flags, SymTagEnum tag, const char* name) -> int {
-					uintptr_t module_raddr = offs + sections_sorted[seg-1].base_addr;
+						(u32 offs, u32 size, u16 seg, SymTagEnum tag, const char* name, bool get_lineinfo=false) -> int {
+					uint64_t rva = offs + sections_sorted[seg-1].base_addr;
 					
-					//if (module_raddr == 0x56f0) {
+					//if (rva == 1057460) {
 					//	printf("");
 					//}
 
-					if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
+					if (extracted_symbol_addresses.find(rva) == extracted_symbol_addresses.end()) {
 						auto bid = lookup.binalloc.push<Symbol>(Symbol());
 
 						Symbol s = {};
-						s.base_addr = module_raddr;
+						s.base_addr = rva;
 						s.size = size;
 						s.name = lookup.stralloc.push(name);
 						s.module_index = module_index;
-						//s.si_flags = flags;
 						s.si_tag = tag;
 
-						uintptr_t lineinfo_base_addr;
-						auto* lineinfo = find_single_overlapping_lineinfo(s, &lineinfo_base_addr);
-						if (lineinfo) {
-							int32_t symbol_offset = (int32_t)((intptr_t)module_raddr - (intptr_t)lineinfo_base_addr);
-							s.p_lineinfo = lineinfo::encode_c13_lineinfo(lineinfo, symbol_offset,
-							[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
-								auto* cksm = (codeview_file_checksum*)(file_checksum_ptr + offset_in_file_checksums);
-								return extract_name(cksm->offset_in_string_table);
-							}, lookup.binalloc, lookup.stats);
+						if (get_lineinfo) {
+							uint64_t lineinfo_base_addr;
+							auto* lineinfo = find_single_overlapping_lineinfo(s, &lineinfo_base_addr);
+							if (lineinfo) {
+								int32_t symbol_offset = (int32_t)((int64_t)rva - (int64_t)lineinfo_base_addr);
+								s.p_lineinfo = lineinfo::encode_c13_lineinfo(lineinfo, symbol_offset,
+								[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
+									auto* cksm = (codeview_file_checksum*)(file_checksum_ptr + offset_in_file_checksums);
+									return extract_name(cksm->offset_in_string_table);
+								}, lookup.binalloc, lookup.stats);
+							}
 						}
 
 						*lookup.binalloc.get<Symbol>(bid) = s;
@@ -1214,7 +1227,7 @@ class PdbReader {
 						int idx = (int)lookup.symbols.size();
 						lookup.symbols.push_back(bid);
 
-						extracted_symbol_addresses.emplace(module_raddr, idx);
+						extracted_symbol_addresses.emplace(rva, idx);
 						return idx;
 					}
 
@@ -1235,23 +1248,40 @@ class PdbReader {
 					//	logf(">> S_EXPORT: %s\n", s->name);
 					//} break;
 
+					// I think these are dllimport function thunks
 					case S_THUNK32: {
 						auto* s = (THUNKSYM32*)sym;
 						//logf(">> S_THUNK32: %s\n", s->name);
 
-						cur_symbol = push_symbol(s->off, s->len, s->seg, 0, SymTagEnum::SymTagThunk, (const char*)s->name);
+						cur_symbol = push_symbol(s->off, s->len, s->seg, SymTagEnum::SymTagThunk, (const char*)s->name);
 					} break;
+					// These are tricky:
+					// (I stupidly only used release mode executables in my testing until the very end so I never found these)
+					// In debug mode, all functions calls in your exe go through an indrection (a big table of jmp instructions called thunks, just like how dllimport functions work)
+					// afaik this is to support things like edit and continue and incremental linking, so allowing patching function binaries with new versions without invalidating all the code that might be calling the old ones
+					// my code was already handling the function body itself, but I was extremly confused when I took function pointers in my executable and tried to find the symbol only to get nothing in my own implementation
+					// while dbghelp returned the function name (wrapped in ILT+<offset>(<func_name>))
+					// dbghelp probably finds these on lookup, then does a second lookup to find the thunk target (which would be slow)
+					// Instead I could add a fallback lookup whenever symbol lookup fails (might be tricky)
+					// or I simply add special TRAMPOLINE symbols instead, TODO: see what other info dbghelp returns here (size? lineinfo?)
+					case S_TRAMPOLINE: {
+						auto* s = (TRAMPOLINESYM*)sym;
+						//logf(">> S_TRAMPOLINE: %6llx\n", s->offThunk);
+						
+						trampolines.emplace_back(*s, module_index);
+					} break;
+
 					case S_GPROC32: case S_LPROC32:
 					case S_GPROC32_ID: case S_LPROC32_ID: {
 						auto* proc = (PROCSYM32*)sym;
 						
-						uintptr_t module_raddr = proc->off + sections_sorted[proc->seg-1].base_addr;
-						//logf(">> %s %4d|%8x => %4llx, %4x flags%4x %s\n", sym->kind == S_LPROC32 ? "S_LPROC32":"S_GPROC32", proc->seg, proc->off, module_raddr, proc->len, proc->flags.bAll, proc->name);
+						//uint64_t rva = proc->off + sections_sorted[proc->seg-1].base_addr;
+						//logf(">> %s %4d|%8x => %4llx, %4x flags%4x %s\n", sym->kind == S_LPROC32 ? "S_LPROC32":"S_GPROC32", proc->seg, proc->off, rva, proc->len, proc->flags.bAll, proc->name);
 
-						uint32_t flags = 0;
+						//uint32_t flags = 0;
 						//if (proc->flags.CV_PFLAG_NEVER) flags |= SYMFLAG_FUNC_NO_RETURN;
 						
-						cur_symbol = push_symbol(proc->off, proc->len, proc->seg, flags, SymTagEnum::SymTagFunction, (const char*)proc->name);
+						cur_symbol = push_symbol(proc->off, proc->len, proc->seg, SymTagEnum::SymTagFunction, (const char*)proc->name, true);
 					} break;
 					case S_INLINESITE: {
 						auto* inl = (INLINESITESYM*)sym;
@@ -1322,6 +1352,65 @@ class PdbReader {
 		module_c13_lineinfo.clear();
 		module_inlinee_c13.clear();
 	}
+	void process_trampolines () {
+		if (trampolines.empty())
+			return;
+
+		// Don't know how to actually get start of "ILT" for Trampoline naming like "ILT+1555(<func name>)"
+		// but first trampoline seems to be that start address
+		auto& first_tramp = trampolines.front();
+		uint64_t first_rva = first_tramp.sym.offThunk + sections_sorted[first_tramp.sym.sectThunk-1].base_addr;
+		
+		for (auto& tramp : trampolines) {
+			//auto* mi = modules[tramp.module_index];
+
+			uint64_t rva = tramp.sym.offThunk + sections_sorted[tramp.sym.sectThunk-1].base_addr;
+			uint64_t target_rva = tramp.sym.offTarget + sections_sorted[tramp.sym.sectTarget-1].base_addr;
+
+			if (extracted_symbol_addresses.find(rva) == extracted_symbol_addresses.end()) {
+				auto bid = lookup.binalloc.push<Symbol>(Symbol());
+
+				auto targ = extracted_symbol_addresses.find(target_rva);
+				if (targ != extracted_symbol_addresses.end()) {
+					assert(first_tramp.sym.sectThunk == tramp.sym.sectThunk);
+					uint32_t offset_in_name = (uint32_t)(rva - first_rva);
+
+					auto& targ_sym = lookup.get_sym(targ->second);
+
+					char name_buf[MAX_SYM_NAME+1];
+					int name_len = snprintf(name_buf, MAX_SYM_NAME+1, "ILT+%u(%s)", offset_in_name, lookup.stralloc[targ_sym.name]);
+					
+					auto name = lookup.stralloc.push(name_buf, name_len);
+
+					//// Warning: has to be done in this order as stralloc pushes invalidate stralloc lookups
+					//// TODO: this needs a way to avoid terminators to actually concatenate
+					//         can't just combine all into one push_format, as it resizes in the middle, which invalidates targ_sym.name we pass in...
+					//StrAlloc::sid name = lookup.stralloc.push_format("ILT+%u(", offset_in_name);
+					//lookup.stralloc.push( lookup.stralloc[targ_sym.name] );
+					//lookup.stralloc.push(")");
+
+					auto* test = lookup.stralloc[name];
+
+					Symbol s = {};
+					s.base_addr = rva;
+					s.size = tramp.sym.cbThunk;
+					s.name = name;
+					s.module_index = tramp.module_index;
+					s.si_tag = SymTagEnum::SymTagPublicSymbol;
+
+					*lookup.binalloc.get<Symbol>(bid) = s;
+
+					int idx = (int)lookup.symbols.size();
+					lookup.symbols.push_back(bid);
+
+					extracted_symbol_addresses.emplace(rva, idx);
+				}
+				else {
+					assert(false);
+				}
+			}
+		}
+	}
 	
 	void read_symbol_record_stream_before_modules () {
 		ZoneScoped;
@@ -1335,13 +1424,13 @@ class PdbReader {
 				SymTagEnum tag, const char* name, const char* _sym_type, u32 _flags) [[msvc::forceinline]] {
 			//logf("%s: %4d|%8x, %4x %s\n", _sym_type, seg, offs, _flags, name);
 			
-			uintptr_t module_raddr;
-			if (!resolve_rva(offs, seg, &module_raddr))
+			uint64_t rva;
+			if (!resolve_rva(offs, seg, &rva))
 				return;
 			
-			if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
+			if (extracted_symbol_addresses.find(rva) == extracted_symbol_addresses.end()) {
 				Symbol s = {};
-				s.base_addr = module_raddr;
+				s.base_addr = rva;
 				s.size = size;
 				s.name = trim_mangled_name(name);
 				s.si_tag = tag;
@@ -1351,7 +1440,7 @@ class PdbReader {
 				int idx = (int)lookup.symbols.size();
 				lookup.symbols.push_back(bid);
 
-				extracted_symbol_addresses.emplace(module_raddr, idx);
+				extracted_symbol_addresses.emplace(rva, idx);
 			}
 		};
 		
@@ -1365,10 +1454,10 @@ class PdbReader {
 				case S_LDATA32: case S_GDATA32: case S_LMANDATA: case S_GMANDATA: {
 					auto* s = (DATASYM32*)sym;
 					
-					uintptr_t _module_raddr = 0;
-					resolve_rva(s->off, s->seg, &_module_raddr);
+					uint64_t _rva = 0;
+					resolve_rva(s->off, s->seg, &_rva);
 
-					//if (_module_raddr == 0x31f0) {
+					//if (_rva == 0x31f0) {
 					//	printf("");
 					//}
 
@@ -1379,9 +1468,9 @@ class PdbReader {
 					//auto size = s->seg == 0 && s->off == 0 ? (uint32_t)sizeof(IMAGE_DOS_HEADER) : (uint32_t)1;
 					//
 					//int computed_size = -1;
-					//uintptr_t module_raddr;
-					//if (resolve_rva(s->off, s->seg, &module_raddr))
-					//	computed_size = _sym_size_from_typind(module_raddr, s->typind);
+					//uint64_t rva;
+					//if (resolve_rva(s->off, s->seg, &rva))
+					//	computed_size = _sym_size_from_typind(rva, s->typind);
 					//if (computed_size >= 0)
 					//	size = (uint32_t)computed_size;
 
@@ -1412,18 +1501,18 @@ class PdbReader {
 				SymTagEnum tag, const char* name, const char* _sym_type, u32 _flags) [[msvc::forceinline]] {
 			//logf("%s: %4d|%8x, %4x %s\n", _sym_type, seg, offs, _flags, name);
 			
-			uintptr_t module_raddr;
-			if (!resolve_rva(offs, seg, &module_raddr))
+			uint64_t rva;
+			if (!resolve_rva(offs, seg, &rva))
 				return;
 			
-			//if (module_raddr == 0x56f0) {
+			//if (rva == 0x56f0) {
 			//	printf("");
 			//}
 
-			if (extracted_symbol_addresses.find(module_raddr) == extracted_symbol_addresses.end()) {
+			if (extracted_symbol_addresses.find(rva) == extracted_symbol_addresses.end()) {
 				
 				Symbol s = {};
-				s.base_addr = module_raddr;
+				s.base_addr = rva;
 				s.size = size;
 				s.name = trim_mangled_name(name);
 				s.si_tag = tag;
@@ -1433,7 +1522,7 @@ class PdbReader {
 				int idx = (int)lookup.symbols.size();
 				lookup.symbols.push_back(bid);
 
-				extracted_symbol_addresses.emplace(module_raddr, idx);
+				extracted_symbol_addresses.emplace(rva, idx);
 			}
 		};
 		
@@ -1460,10 +1549,10 @@ class PdbReader {
 				case S_LDATA32: case S_GDATA32: case S_LMANDATA: case S_GMANDATA: {
 					auto* s = (DATASYM32*)sym;
 					
-					uintptr_t _module_raddr = 0;
-					resolve_rva(s->off, s->seg, &_module_raddr);
+					uint64_t _rva = 0;
+					resolve_rva(s->off, s->seg, &_rva);
 
-					//if (_module_raddr == 0x31f0) {
+					//if (_rva == 0x31f0) {
 					//	printf("");
 					//}
 
@@ -1474,9 +1563,9 @@ class PdbReader {
 					//auto size = s->seg == 0 && s->off == 0 ? (uint32_t)sizeof(IMAGE_DOS_HEADER) : (uint32_t)1;
 					//
 					//int computed_size = -1;
-					//uintptr_t module_raddr;
-					//if (resolve_rva(s->off, s->seg, &module_raddr))
-					//	computed_size = _sym_size_from_typind(module_raddr, s->typind);
+					//uint64_t rva;
+					//if (resolve_rva(s->off, s->seg, &rva))
+					//	computed_size = _sym_size_from_typind(rva, s->typind);
 					//if (computed_size >= 0)
 					//	size = (uint32_t)computed_size;
 
@@ -1769,7 +1858,7 @@ class PdbReader {
 		
 		typedef BinAlloc::bid Id;
 		auto _cmp = [&] (Id l, Id r) -> int {
-			return std::less<uintptr_t>()(lookup.binalloc.get_unchecked<Symbol>(l)->get_addr(), lookup.binalloc.get_unchecked<Symbol>(r)->get_addr());
+			return std::less<uint64_t>()(lookup.binalloc.get_unchecked<Symbol>(l)->get_addr(), lookup.binalloc.get_unchecked<Symbol>(r)->get_addr());
 		};
 		//auto _less = [&] (Id l, Id r) -> bool {
 		//	return binalloc.get<Symbol>(l)->get_addr() < binalloc.get<Symbol>(r)->get_addr();
@@ -1791,6 +1880,9 @@ class PdbReader {
 		typeid2name.reserve(128);
 		IPI_id2name.reserve(128);
 
+		extracted_symbol_addresses.reserve(4096);
+		trampolines.reserve(128);
+		
 		lookup.symbols.reserve(1024);
 
 		_inlinesites.reserve();
@@ -1801,19 +1893,19 @@ class PdbReader {
 		logf(">>> [%llx] %4d %4d %s\n", pSymInfo->Address, pSymInfo->Index, pSymInfo->Tag, pSymInfo->Name);
 		return TRUE;
 	}
-	void _dbghelp_get_sym (uint64_t module_raddr) {
-		auto address = (DWORD64)(_mod_base + module_raddr);
+	void _dbghelp_get_sym (uint64_t rva) {
+		auto address = (DWORD64)(_mod_base + rva);
 
-		auto res1 = real_dbghelp.SymSearch(_inspectee, _mod_base, 0, 0, NULL, address, PsymEnumeratesymbolsCallback, NULL, SYMSEARCH_ALLITEMS);
+		auto res1 = real_dbghelp.SymSearch(_hprocess, _mod_base, 0, 0, NULL, address, PsymEnumeratesymbolsCallback, NULL, SYMSEARCH_ALLITEMS);
 		
 		SYMBOL_INFO_PACKAGE buf;
 		buf.si = {};
 		buf.si.SizeOfStruct = sizeof(buf.si);
 		buf.si.MaxNameLen = MAX_SYM_NAME;
 
-		auto res2 = real_dbghelp.SymFromAddr(_inspectee, address, nullptr, &buf.si);
+		auto res2 = real_dbghelp.SymFromAddr(_hprocess, address, nullptr, &buf.si);
 	}
-	int _sym_size_from_typind (uint64_t module_raddr, CV_typ_t typind) {
+	int _sym_size_from_typind (uint64_t rva, CV_typ_t typind) {
 		SYMBOL_INFO_PACKAGE buf;
 		buf.si = {};
 		buf.si.SizeOfStruct = sizeof(buf.si);
@@ -1821,10 +1913,10 @@ class PdbReader {
 
 		DWORD Displacement = 0;
 
-		auto res1 = real_dbghelp.SymFromAddr(_inspectee, (DWORD64)(_mod_base + module_raddr), nullptr, &buf.si);
+		auto res1 = real_dbghelp.SymFromAddr(_hprocess, (DWORD64)(_mod_base + rva), nullptr, &buf.si);
 		
 		ULONG64 len = -1;
-		auto res2 = real_dbghelp.SymGetTypeInfo(_inspectee, _mod_base, buf.si.TypeIndex, TI_GET_LENGTH, &len);
+		auto res2 = real_dbghelp.SymGetTypeInfo(_hprocess, _mod_base, buf.si.TypeIndex, TI_GET_LENGTH, &len);
 
 		int dbghelp_size = len != -1 ? (int)len : -1;
 		int my_size = -1;
@@ -1966,7 +2058,7 @@ public:
 		//print_dump_names();
 		//stralloc.print_dump();
 
-		//print_symbols();
+		//lookup.print_symbols();
 		//_dbghelp_get_sym(0x1B370);
 
 		//logf("PDB read.\n");

@@ -6,7 +6,7 @@
 ////
 
 extern "C" {
-	__declspec(dllexport) BOOL __stdcall hook_EnumDirTree (
+	BOOL __stdcall hook_EnumDirTree (
 		HANDLE                hProcess,
 		PCSTR                 RootPath,
 		PCSTR                 InputPathName,
@@ -16,7 +16,7 @@ extern "C" {
 	) {
 		return real_dbghelp.EnumDirTree(hProcess, RootPath, InputPathName, OutputPathBuffer, cb, data);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_EnumDirTreeW (
+	BOOL __stdcall hook_EnumDirTreeW (
 		HANDLE                 hProcess,
 		PCWSTR                 RootPath,
 		PCWSTR                 InputPathName,
@@ -26,49 +26,49 @@ extern "C" {
 	) {
 		return real_dbghelp.EnumDirTreeW(hProcess, RootPath, InputPathName, OutputPathBuffer, cb, data);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_EnumerateLoadedModules (
+	BOOL __stdcall hook_EnumerateLoadedModules (
 		HANDLE                       hProcess,
 		PENUMLOADED_MODULES_CALLBACK EnumLoadedModulesCallback,
 		PVOID                        UserContext
 	) {
 		return real_dbghelp.EnumerateLoadedModules(hProcess, EnumLoadedModulesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_EnumerateLoadedModules64 (
+	BOOL __stdcall hook_EnumerateLoadedModules64 (
 		HANDLE                         hProcess,
 		PENUMLOADED_MODULES_CALLBACK64 EnumLoadedModulesCallback,
 		PVOID                          UserContext
 	) {
 		return real_dbghelp.EnumerateLoadedModules64(hProcess, EnumLoadedModulesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_EnumerateLoadedModulesEx (
+	BOOL __stdcall hook_EnumerateLoadedModulesEx (
 		HANDLE                         hProcess,
 		PENUMLOADED_MODULES_CALLBACK64 EnumLoadedModulesCallback,
 		PVOID                          UserContext
 	) {
 		return real_dbghelp.EnumerateLoadedModulesEx(hProcess, EnumLoadedModulesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_EnumerateLoadedModulesExW (
+	BOOL __stdcall hook_EnumerateLoadedModulesExW (
 		HANDLE                          hProcess,
 		PENUMLOADED_MODULES_CALLBACKW64 EnumLoadedModulesCallback,
 		PVOID                           UserContext
 	) {
 		return real_dbghelp.EnumerateLoadedModulesExW(hProcess, EnumLoadedModulesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_EnumerateLoadedModulesW64 (
+	BOOL __stdcall hook_EnumerateLoadedModulesW64 (
 		HANDLE                          hProcess,
 		PENUMLOADED_MODULES_CALLBACKW64 EnumLoadedModulesCallback,
 		PVOID                           UserContext
 	) {
 		return real_dbghelp.EnumerateLoadedModulesW64(hProcess, EnumLoadedModulesCallback, UserContext);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_FindDebugInfoFile (
+	HANDLE __stdcall hook_FindDebugInfoFile (
 		PCSTR FileName,
 		PCSTR SymbolPath,
 		PSTR  DebugFilePath
 	) {
 		return real_dbghelp.FindDebugInfoFile(FileName, SymbolPath, DebugFilePath);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_FindDebugInfoFileEx (
+	HANDLE __stdcall hook_FindDebugInfoFileEx (
 		PCSTR                     FileName,
 		PCSTR                     SymbolPath,
 		PSTR                      DebugFilePath,
@@ -77,7 +77,7 @@ extern "C" {
 	) {
 		return real_dbghelp.FindDebugInfoFileEx(FileName, SymbolPath, DebugFilePath, Callback, CallerData);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_FindDebugInfoFileExW (
+	HANDLE __stdcall hook_FindDebugInfoFileExW (
 		PCWSTR                     FileName,
 		PCWSTR                     SymbolPath,
 		PWSTR                      DebugFilePath,
@@ -86,14 +86,14 @@ extern "C" {
 	) {
 		return real_dbghelp.FindDebugInfoFileExW(FileName, SymbolPath, DebugFilePath, Callback, CallerData);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_FindExecutableImage (
+	HANDLE __stdcall hook_FindExecutableImage (
 		PCSTR FileName,
 		PCSTR SymbolPath,
 		PSTR  ImageFilePath
 	) {
 		return real_dbghelp.FindExecutableImage(FileName, SymbolPath, ImageFilePath);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_FindExecutableImageEx (
+	HANDLE __stdcall hook_FindExecutableImageEx (
 		PCSTR                   FileName,
 		PCSTR                   SymbolPath,
 		PSTR                    ImageFilePath,
@@ -102,7 +102,7 @@ extern "C" {
 	) {
 		return real_dbghelp.FindExecutableImageEx(FileName, SymbolPath, ImageFilePath, Callback, CallerData);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_FindExecutableImageExW (
+	HANDLE __stdcall hook_FindExecutableImageExW (
 		PCWSTR                   FileName,
 		PCWSTR                   SymbolPath,
 		PWSTR                    ImageFilePath,
@@ -111,15 +111,15 @@ extern "C" {
 	) {
 		return real_dbghelp.FindExecutableImageExW(FileName, SymbolPath, ImageFilePath, Callback, CallerData);
 	}
-	__declspec(dllexport) DWORD __stdcall hook_GetSymLoadError () {
+	DWORD __stdcall hook_GetSymLoadError () {
 		return real_dbghelp.GetSymLoadError();
 	}
-	__declspec(dllexport) DWORD __stdcall hook_GetTimestampForLoadedLibrary (
+	DWORD __stdcall hook_GetTimestampForLoadedLibrary (
 		HMODULE Module
 	) {
 		return real_dbghelp.GetTimestampForLoadedLibrary(Module);
 	}
-	__declspec(dllexport) PVOID __stdcall hook_ImageDirectoryEntryToData (
+	PVOID __stdcall hook_ImageDirectoryEntryToData (
 		PVOID   Base,
 		BOOLEAN MappedAsImage,
 		USHORT  DirectoryEntry,
@@ -127,7 +127,7 @@ extern "C" {
 	) {
 		return real_dbghelp.ImageDirectoryEntryToData(Base, MappedAsImage, DirectoryEntry, Size);
 	}
-	__declspec(dllexport) PVOID __stdcall hook_ImageDirectoryEntryToDataEx (
+	PVOID __stdcall hook_ImageDirectoryEntryToDataEx (
 		PVOID                 Base,
 		BOOLEAN               MappedAsImage,
 		USHORT                DirectoryEntry,
@@ -136,19 +136,19 @@ extern "C" {
 	) {
 		return real_dbghelp.ImageDirectoryEntryToDataEx(Base, MappedAsImage, DirectoryEntry, Size, FoundHeader);
 	}
-	__declspec(dllexport) PIMAGE_NT_HEADERS __stdcall hook_ImageNtHeader (
+	PIMAGE_NT_HEADERS __stdcall hook_ImageNtHeader (
 		PVOID Base
 	) {
 		return real_dbghelp.ImageNtHeader(Base);
 	}
-	__declspec(dllexport) PIMAGE_SECTION_HEADER __stdcall hook_ImageRvaToSection (
+	PIMAGE_SECTION_HEADER __stdcall hook_ImageRvaToSection (
 		PIMAGE_NT_HEADERS NtHeaders,
 		PVOID             Base,
 		ULONG             Rva
 	) {
 		return real_dbghelp.ImageRvaToSection(NtHeaders, Base, Rva);
 	}
-	__declspec(dllexport) PVOID __stdcall hook_ImageRvaToVa (
+	PVOID __stdcall hook_ImageRvaToVa (
 		PIMAGE_NT_HEADERS     NtHeaders,
 		PVOID                 Base,
 		ULONG                 Rva,
@@ -156,20 +156,20 @@ extern "C" {
 	) {
 		return real_dbghelp.ImageRvaToVa(NtHeaders, Base, Rva, LastRvaSection);
 	}
-	__declspec(dllexport) LPAPI_VERSION __stdcall hook_ImagehlpApiVersion () {
+	LPAPI_VERSION __stdcall hook_ImagehlpApiVersion () {
 		return real_dbghelp.ImagehlpApiVersion();
 	}
-	__declspec(dllexport) LPAPI_VERSION __stdcall hook_ImagehlpApiVersionEx (
+	LPAPI_VERSION __stdcall hook_ImagehlpApiVersionEx (
 		LPAPI_VERSION AppVersion
 	) {
 		return real_dbghelp.ImagehlpApiVersionEx(AppVersion);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_MakeSureDirectoryPathExists (
+	BOOL __stdcall hook_MakeSureDirectoryPathExists (
 		PCSTR DirPath
 	) {
 		return real_dbghelp.MakeSureDirectoryPathExists(DirPath);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_MiniDumpReadDumpStream (
+	BOOL __stdcall hook_MiniDumpReadDumpStream (
 		PVOID               BaseOfDump,
 		ULONG               StreamNumber,
 		PMINIDUMP_DIRECTORY* Dir,
@@ -178,7 +178,7 @@ extern "C" {
 	) {
 		return real_dbghelp.MiniDumpReadDumpStream(BaseOfDump, StreamNumber, Dir, StreamPointer, StreamSize);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_MiniDumpWriteDump (
+	BOOL __stdcall hook_MiniDumpWriteDump (
 		HANDLE                            hProcess,
 		DWORD                             ProcessId,
 		HANDLE                            hFile,
@@ -189,26 +189,26 @@ extern "C" {
 	) {
 		return real_dbghelp.MiniDumpWriteDump(hProcess, ProcessId, hFile, DumpType, ExceptionParam, UserStreamParam, CallbackParam);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SearchTreeForFile (
+	BOOL __stdcall hook_SearchTreeForFile (
 		PCSTR RootPath,
 		PCSTR InputPathName,
 		PSTR  OutputPathBuffer
 	) {
 		return real_dbghelp.SearchTreeForFile(RootPath, InputPathName, OutputPathBuffer);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SearchTreeForFileW (
+	BOOL __stdcall hook_SearchTreeForFileW (
 		PCWSTR RootPath,
 		PCWSTR InputPathName,
 		PWSTR  OutputPathBuffer
 	) {
 		return real_dbghelp.SearchTreeForFileW(RootPath, InputPathName, OutputPathBuffer);
 	}
-	__declspec(dllexport) void __stdcall hook_SetSymLoadError (
+	void __stdcall hook_SetSymLoadError (
 		DWORD error
 	) {
 		return real_dbghelp.SetSymLoadError(error);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_StackWalk (
+	BOOL __stdcall hook_StackWalk (
 		DWORD                          MachineType,
 		HANDLE                         hProcess,
 		HANDLE                         hThread,
@@ -221,7 +221,7 @@ extern "C" {
 	) {
 		return real_dbghelp.StackWalk(MachineType, hProcess, hThread, StackFrame, ContextRecord, ReadMemoryRoutine, FunctionTableAccessRoutine, GetModuleBaseRoutine, TranslateAddress);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_StackWalk64 (
+	BOOL __stdcall hook_StackWalk64 (
 		DWORD                            MachineType,
 		HANDLE                           hProcess,
 		HANDLE                           hThread,
@@ -234,7 +234,7 @@ extern "C" {
 	) {
 		return real_dbghelp.StackWalk64(MachineType, hProcess, hThread, StackFrame, ContextRecord, ReadMemoryRoutine, FunctionTableAccessRoutine, GetModuleBaseRoutine, TranslateAddress);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_StackWalkEx (
+	BOOL __stdcall hook_StackWalkEx (
 		DWORD                            MachineType,
 		HANDLE                           hProcess,
 		HANDLE                           hThread,
@@ -248,7 +248,7 @@ extern "C" {
 	) {
 		return real_dbghelp.StackWalkEx(MachineType, hProcess, hThread, StackFrame, ContextRecord, ReadMemoryRoutine, FunctionTableAccessRoutine, GetModuleBaseRoutine, TranslateAddress, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymAddSourceStream (
+	BOOL __stdcall hook_SymAddSourceStream (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCSTR   StreamFile,
@@ -257,7 +257,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymAddSourceStream(hProcess, Base, StreamFile, Buffer, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymAddSourceStreamA (
+	BOOL __stdcall hook_SymAddSourceStreamA (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCSTR   StreamFile,
@@ -266,7 +266,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymAddSourceStreamA(hProcess, Base, StreamFile, Buffer, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymAddSourceStreamW (
+	BOOL __stdcall hook_SymAddSourceStreamW (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCWSTR  FileSpec,
@@ -275,7 +275,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymAddSourceStreamW(hProcess, Base, FileSpec, Buffer, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymAddSymbol (
+	BOOL __stdcall hook_SymAddSymbol (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		PCSTR   Name,
@@ -285,7 +285,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymAddSymbol(hProcess, BaseOfDll, Name, Address, Size, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymAddSymbolW (
+	BOOL __stdcall hook_SymAddSymbolW (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		PCWSTR  Name,
@@ -295,7 +295,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymAddSymbolW(hProcess, BaseOfDll, Name, Address, Size, Flags);
 	}
-	__declspec(dllexport) DWORD __stdcall hook_SymCompareInlineTrace (
+	DWORD __stdcall hook_SymCompareInlineTrace (
 		HANDLE  hProcess,
 		DWORD64 Address1,
 		DWORD   InlineContext1,
@@ -305,7 +305,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymCompareInlineTrace(hProcess, Address1, InlineContext1, RetAddress1, Address2, RetAddress2);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymDeleteSymbol (
+	BOOL __stdcall hook_SymDeleteSymbol (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		PCSTR   Name,
@@ -314,7 +314,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymDeleteSymbol(hProcess, BaseOfDll, Name, Address, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymDeleteSymbolW (
+	BOOL __stdcall hook_SymDeleteSymbolW (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		PCWSTR  Name,
@@ -323,7 +323,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymDeleteSymbolW(hProcess, BaseOfDll, Name, Address, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumLines (
+	BOOL __stdcall hook_SymEnumLines (
 		HANDLE                  hProcess,
 		ULONG64                 Base,
 		PCSTR                   Obj,
@@ -333,7 +333,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumLines(hProcess, Base, Obj, File, EnumLinesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumLinesW (
+	BOOL __stdcall hook_SymEnumLinesW (
 		HANDLE                   hProcess,
 		ULONG64                  Base,
 		PCWSTR                   Obj,
@@ -343,20 +343,20 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumLinesW(hProcess, Base, Obj, File, EnumLinesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumProcesses (
+	BOOL __stdcall hook_SymEnumProcesses (
 		PSYM_ENUMPROCESSES_CALLBACK EnumProcessesCallback,
 		PVOID                       UserContext
 	) {
 		return real_dbghelp.SymEnumProcesses(EnumProcessesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSourceFileTokens (
+	BOOL __stdcall hook_SymEnumSourceFileTokens (
 		HANDLE                        hProcess,
 		ULONG64                       Base,
 		PENUMSOURCEFILETOKENSCALLBACK Callback
 	) {
 		return real_dbghelp.SymEnumSourceFileTokens(hProcess, Base, Callback);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSourceFiles (
+	BOOL __stdcall hook_SymEnumSourceFiles (
 		HANDLE                        hProcess,
 		ULONG64                       ModBase,
 		PCSTR                         Mask,
@@ -365,7 +365,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSourceFiles(hProcess, ModBase, Mask, cbSrcFiles, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSourceFilesW (
+	BOOL __stdcall hook_SymEnumSourceFilesW (
 		HANDLE                         hProcess,
 		ULONG64                        ModBase,
 		PCWSTR                         Mask,
@@ -374,7 +374,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSourceFilesW(hProcess, ModBase, Mask, cbSrcFiles, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSourceLines (
+	BOOL __stdcall hook_SymEnumSourceLines (
 		HANDLE                  hProcess,
 		ULONG64                 Base,
 		PCSTR                   Obj,
@@ -386,7 +386,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSourceLines(hProcess, Base, Obj, File, Line, Flags, EnumLinesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSourceLinesW (
+	BOOL __stdcall hook_SymEnumSourceLinesW (
 		HANDLE                   hProcess,
 		ULONG64                  Base,
 		PCWSTR                   Obj,
@@ -398,7 +398,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSourceLinesW(hProcess, Base, Obj, File, Line, Flags, EnumLinesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSymbols (
+	BOOL __stdcall hook_SymEnumSymbols (
 		HANDLE                         hProcess,
 		ULONG64                        BaseOfDll,
 		PCSTR                          Mask,
@@ -407,7 +407,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSymbols(hProcess, BaseOfDll, Mask, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSymbolsEx (
+	BOOL __stdcall hook_SymEnumSymbolsEx (
 		HANDLE                         hProcess,
 		ULONG64                        BaseOfDll,
 		PCSTR                          Mask,
@@ -417,7 +417,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSymbolsEx(hProcess, BaseOfDll, Mask, EnumSymbolsCallback, UserContext, Options);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSymbolsExW (
+	BOOL __stdcall hook_SymEnumSymbolsExW (
 		HANDLE                          hProcess,
 		ULONG64                         BaseOfDll,
 		PCWSTR                          Mask,
@@ -427,7 +427,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSymbolsExW(hProcess, BaseOfDll, Mask, EnumSymbolsCallback, UserContext, Options);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSymbolsForAddr (
+	BOOL __stdcall hook_SymEnumSymbolsForAddr (
 		HANDLE                         hProcess,
 		DWORD64                        Address,
 		PSYM_ENUMERATESYMBOLS_CALLBACK EnumSymbolsCallback,
@@ -435,7 +435,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSymbolsForAddr(hProcess, Address, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSymbolsForAddrW (
+	BOOL __stdcall hook_SymEnumSymbolsForAddrW (
 		HANDLE                          hProcess,
 		DWORD64                         Address,
 		PSYM_ENUMERATESYMBOLS_CALLBACKW EnumSymbolsCallback,
@@ -443,7 +443,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSymbolsForAddrW(hProcess, Address, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumSymbolsW (
+	BOOL __stdcall hook_SymEnumSymbolsW (
 		HANDLE                          hProcess,
 		ULONG64                         BaseOfDll,
 		PCWSTR                          Mask,
@@ -452,7 +452,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumSymbolsW(hProcess, BaseOfDll, Mask, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumTypes (
+	BOOL __stdcall hook_SymEnumTypes (
 		HANDLE                         hProcess,
 		ULONG64                        BaseOfDll,
 		PSYM_ENUMERATESYMBOLS_CALLBACK EnumSymbolsCallback,
@@ -460,7 +460,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumTypes(hProcess, BaseOfDll, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumTypesByName (
+	BOOL __stdcall hook_SymEnumTypesByName (
 		HANDLE                         hProcess,
 		ULONG64                        BaseOfDll,
 		PCSTR                          mask,
@@ -469,7 +469,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumTypesByName(hProcess, BaseOfDll, mask, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumTypesByNameW (
+	BOOL __stdcall hook_SymEnumTypesByNameW (
 		HANDLE                          hProcess,
 		ULONG64                         BaseOfDll,
 		PCWSTR                          mask,
@@ -478,7 +478,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumTypesByNameW(hProcess, BaseOfDll, mask, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumTypesW (
+	BOOL __stdcall hook_SymEnumTypesW (
 		HANDLE                          hProcess,
 		ULONG64                         BaseOfDll,
 		PSYM_ENUMERATESYMBOLS_CALLBACKW EnumSymbolsCallback,
@@ -486,28 +486,28 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumTypesW(hProcess, BaseOfDll, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumerateModules (
+	BOOL __stdcall hook_SymEnumerateModules (
 		HANDLE                    hProcess,
 		PSYM_ENUMMODULES_CALLBACK EnumModulesCallback,
 		PVOID                     UserContext
 	) {
 		return real_dbghelp.SymEnumerateModules(hProcess, EnumModulesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumerateModules64 (
+	BOOL __stdcall hook_SymEnumerateModules64 (
 		HANDLE                      hProcess,
 		PSYM_ENUMMODULES_CALLBACK64 EnumModulesCallback,
 		PVOID                       UserContext
 	) {
 		return real_dbghelp.SymEnumerateModules64(hProcess, EnumModulesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumerateModulesW64 (
+	BOOL __stdcall hook_SymEnumerateModulesW64 (
 		HANDLE                       hProcess,
 		PSYM_ENUMMODULES_CALLBACKW64 EnumModulesCallback,
 		PVOID                        UserContext
 	) {
 		return real_dbghelp.SymEnumerateModulesW64(hProcess, EnumModulesCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumerateSymbols (
+	BOOL __stdcall hook_SymEnumerateSymbols (
 		HANDLE                    hProcess,
 		ULONG                     BaseOfDll,
 		PSYM_ENUMSYMBOLS_CALLBACK EnumSymbolsCallback,
@@ -515,7 +515,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumerateSymbols(hProcess, BaseOfDll, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumerateSymbols64 (
+	BOOL __stdcall hook_SymEnumerateSymbols64 (
 		HANDLE                      hProcess,
 		ULONG64                     BaseOfDll,
 		PSYM_ENUMSYMBOLS_CALLBACK64 EnumSymbolsCallback,
@@ -523,7 +523,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumerateSymbols64(hProcess, BaseOfDll, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumerateSymbolsW (
+	BOOL __stdcall hook_SymEnumerateSymbolsW (
 		HANDLE                     hProcess,
 		ULONG                      BaseOfDll,
 		PSYM_ENUMSYMBOLS_CALLBACKW EnumSymbolsCallback,
@@ -531,7 +531,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumerateSymbolsW(hProcess, BaseOfDll, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymEnumerateSymbolsW64 (
+	BOOL __stdcall hook_SymEnumerateSymbolsW64 (
 		HANDLE                       hProcess,
 		ULONG64                      BaseOfDll,
 		PSYM_ENUMSYMBOLS_CALLBACK64W EnumSymbolsCallback,
@@ -539,7 +539,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymEnumerateSymbolsW64(hProcess, BaseOfDll, EnumSymbolsCallback, UserContext);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_SymFindDebugInfoFile (
+	HANDLE __stdcall hook_SymFindDebugInfoFile (
 		HANDLE                    hProcess,
 		PCSTR                     FileName,
 		PSTR                      DebugFilePath,
@@ -548,7 +548,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFindDebugInfoFile(hProcess, FileName, DebugFilePath, Callback, CallerData);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_SymFindDebugInfoFileW (
+	HANDLE __stdcall hook_SymFindDebugInfoFileW (
 		HANDLE                     hProcess,
 		PCWSTR                     FileName,
 		PWSTR                      DebugFilePath,
@@ -557,7 +557,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFindDebugInfoFileW(hProcess, FileName, DebugFilePath, Callback, CallerData);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_SymFindExecutableImage (
+	HANDLE __stdcall hook_SymFindExecutableImage (
 		HANDLE                  hProcess,
 		PCSTR                   FileName,
 		PSTR                    ImageFilePath,
@@ -566,7 +566,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFindExecutableImage(hProcess, FileName, ImageFilePath, Callback, CallerData);
 	}
-	__declspec(dllexport) HANDLE __stdcall hook_SymFindExecutableImageW (
+	HANDLE __stdcall hook_SymFindExecutableImageW (
 		HANDLE                   hProcess,
 		PCWSTR                   FileName,
 		PWSTR                    ImageFilePath,
@@ -575,7 +575,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFindExecutableImageW(hProcess, FileName, ImageFilePath, Callback, CallerData);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymFindFileInPath (
+	BOOL __stdcall hook_SymFindFileInPath (
 		HANDLE                  hprocess,
 		PCSTR                   SearchPath,
 		PCSTR                   FileName,
@@ -589,7 +589,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFindFileInPath(hprocess, SearchPath, FileName, id, two, three, flags, FoundFile, callback, context);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymFindFileInPathW (
+	BOOL __stdcall hook_SymFindFileInPathW (
 		HANDLE                   hprocess,
 		PCWSTR                   SearchPath,
 		PCWSTR                   FileName,
@@ -603,7 +603,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFindFileInPathW(hprocess, SearchPath, FileName, id, two, three, flags, FoundFile, callback, context);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymFromIndex (
+	BOOL __stdcall hook_SymFromIndex (
 		HANDLE       hProcess,
 		ULONG64      BaseOfDll,
 		DWORD        Index,
@@ -611,7 +611,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFromIndex(hProcess, BaseOfDll, Index, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymFromIndexW (
+	BOOL __stdcall hook_SymFromIndexW (
 		HANDLE        hProcess,
 		ULONG64       BaseOfDll,
 		DWORD         Index,
@@ -619,21 +619,21 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFromIndexW(hProcess, BaseOfDll, Index, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymFromName (
+	BOOL __stdcall hook_SymFromName (
 		HANDLE       hProcess,
 		PCSTR        Name,
 		PSYMBOL_INFO Symbol
 	) {
 		return real_dbghelp.SymFromName(hProcess, Name, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymFromNameW (
+	BOOL __stdcall hook_SymFromNameW (
 		HANDLE        hProcess,
 		PCWSTR        Name,
 		PSYMBOL_INFOW Symbol
 	) {
 		return real_dbghelp.SymFromNameW(hProcess, Name, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymFromToken (
+	BOOL __stdcall hook_SymFromToken (
 		HANDLE       hProcess,
 		DWORD64      Base,
 		DWORD        Token,
@@ -641,7 +641,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFromToken(hProcess, Base, Token, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymFromTokenW (
+	BOOL __stdcall hook_SymFromTokenW (
 		HANDLE        hProcess,
 		DWORD64       Base,
 		DWORD         Token,
@@ -649,19 +649,19 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFromTokenW(hProcess, Base, Token, Symbol);
 	}
-	__declspec(dllexport) PVOID __stdcall hook_SymFunctionTableAccess (
+	PVOID __stdcall hook_SymFunctionTableAccess (
 		HANDLE hProcess,
 		DWORD  AddrBase
 	) {
 		return real_dbghelp.SymFunctionTableAccess(hProcess, AddrBase);
 	}
-	__declspec(dllexport) PVOID __stdcall hook_SymFunctionTableAccess64 (
+	PVOID __stdcall hook_SymFunctionTableAccess64 (
 		HANDLE  hProcess,
 		DWORD64 AddrBase
 	) {
 		return real_dbghelp.SymFunctionTableAccess64(hProcess, AddrBase);
 	}
-	__declspec(dllexport) PVOID __stdcall hook_SymFunctionTableAccess64AccessRoutines (
+	PVOID __stdcall hook_SymFunctionTableAccess64AccessRoutines (
 		HANDLE                         hProcess,
 		DWORD64                        AddrBase,
 		PREAD_PROCESS_MEMORY_ROUTINE64 ReadMemoryRoutine,
@@ -669,12 +669,12 @@ extern "C" {
 	) {
 		return real_dbghelp.SymFunctionTableAccess64AccessRoutines(hProcess, AddrBase, ReadMemoryRoutine, GetModuleBaseRoutine);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetExtendedOption (
+	BOOL __stdcall hook_SymGetExtendedOption (
 		IMAGEHLP_EXTENDED_OPTIONS option
 	) {
 		return real_dbghelp.SymGetExtendedOption(option);
 	}
-	__declspec(dllexport) ULONG __stdcall hook_SymGetFileLineOffsets64 (
+	ULONG __stdcall hook_SymGetFileLineOffsets64 (
 		HANDLE   hProcess,
 		PCSTR    ModuleName,
 		PCSTR    FileName,
@@ -683,21 +683,21 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetFileLineOffsets64(hProcess, ModuleName, FileName, Buffer, BufferLines);
 	}
-	__declspec(dllexport) PCHAR __stdcall hook_SymGetHomeDirectory (
+	PCHAR __stdcall hook_SymGetHomeDirectory (
 		DWORD  type,
 		PSTR   dir,
 		size_t size
 	) {
 		return real_dbghelp.SymGetHomeDirectory(type, dir, size);
 	}
-	__declspec(dllexport) PWSTR __stdcall hook_SymGetHomeDirectoryW (
+	PWSTR __stdcall hook_SymGetHomeDirectoryW (
 		DWORD  type,
 		PWSTR  dir,
 		size_t size
 	) {
 		return real_dbghelp.SymGetHomeDirectoryW(type, dir, size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLineFromAddr (
+	BOOL __stdcall hook_SymGetLineFromAddr (
 		HANDLE         hProcess,
 		DWORD          dwAddr,
 		PDWORD         pdwDisplacement,
@@ -705,7 +705,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetLineFromAddr(hProcess, dwAddr, pdwDisplacement, Line);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLineFromName (
+	BOOL __stdcall hook_SymGetLineFromName (
 		HANDLE         hProcess,
 		PCSTR          ModuleName,
 		PCSTR          FileName,
@@ -715,7 +715,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetLineFromName(hProcess, ModuleName, FileName, dwLineNumber, plDisplacement, Line);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLineFromName64 (
+	BOOL __stdcall hook_SymGetLineFromName64 (
 		HANDLE           hProcess,
 		PCSTR            ModuleName,
 		PCSTR            FileName,
@@ -725,7 +725,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetLineFromName64(hProcess, ModuleName, FileName, dwLineNumber, plDisplacement, Line);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLineFromNameW64 (
+	BOOL __stdcall hook_SymGetLineFromNameW64 (
 		HANDLE            hProcess,
 		PCWSTR            ModuleName,
 		PCWSTR            FileName,
@@ -735,83 +735,83 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetLineFromNameW64(hProcess, ModuleName, FileName, dwLineNumber, plDisplacement, Line);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLineNext (
+	BOOL __stdcall hook_SymGetLineNext (
 		HANDLE         hProcess,
 		PIMAGEHLP_LINE Line
 	) {
 		return real_dbghelp.SymGetLineNext(hProcess, Line);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLineNext64 (
+	BOOL __stdcall hook_SymGetLineNext64 (
 		HANDLE           hProcess,
 		PIMAGEHLP_LINE64 Line
 	) {
 		return real_dbghelp.SymGetLineNext64(hProcess, Line);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLineNextW64 (
+	BOOL __stdcall hook_SymGetLineNextW64 (
 		HANDLE            hProcess,
 		PIMAGEHLP_LINEW64 Line
 	) {
 		return real_dbghelp.SymGetLineNextW64(hProcess, Line);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLinePrev (
+	BOOL __stdcall hook_SymGetLinePrev (
 		HANDLE         hProcess,
 		PIMAGEHLP_LINE Line
 	) {
 		return real_dbghelp.SymGetLinePrev(hProcess, Line);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLinePrev64 (
+	BOOL __stdcall hook_SymGetLinePrev64 (
 		HANDLE           hProcess,
 		PIMAGEHLP_LINE64 Line
 	) {
 		return real_dbghelp.SymGetLinePrev64(hProcess, Line);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetLinePrevW64 (
+	BOOL __stdcall hook_SymGetLinePrevW64 (
 		HANDLE            hProcess,
 		PIMAGEHLP_LINEW64 Line
 	) {
 		return real_dbghelp.SymGetLinePrevW64(hProcess, Line);
 	}
-	__declspec(dllexport) DWORD __stdcall hook_SymGetModuleBase (
+	DWORD __stdcall hook_SymGetModuleBase (
 		HANDLE hProcess,
 		DWORD  dwAddr
 	) {
 		return real_dbghelp.SymGetModuleBase(hProcess, dwAddr);
 	}
-	__declspec(dllexport) DWORD64 __stdcall hook_SymGetModuleBase64 (
+	DWORD64 __stdcall hook_SymGetModuleBase64 (
 		HANDLE  hProcess,
 		DWORD64 qwAddr
 	) {
 		return real_dbghelp.SymGetModuleBase64(hProcess, qwAddr);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetModuleInfo (
+	BOOL __stdcall hook_SymGetModuleInfo (
 		HANDLE           hProcess,
 		DWORD            dwAddr,
 		PIMAGEHLP_MODULE ModuleInfo
 	) {
 		return real_dbghelp.SymGetModuleInfo(hProcess, dwAddr, ModuleInfo);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetModuleInfo64 (
+	BOOL __stdcall hook_SymGetModuleInfo64 (
 		HANDLE             hProcess,
 		DWORD64            qwAddr,
 		PIMAGEHLP_MODULE64 ModuleInfo
 	) {
 		return real_dbghelp.SymGetModuleInfo64(hProcess, qwAddr, ModuleInfo);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetModuleInfoW (
+	BOOL __stdcall hook_SymGetModuleInfoW (
 		HANDLE            hProcess,
 		DWORD             dwAddr,
 		PIMAGEHLP_MODULEW ModuleInfo
 	) {
 		return real_dbghelp.SymGetModuleInfoW(hProcess, dwAddr, ModuleInfo);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetModuleInfoW64 (
+	BOOL __stdcall hook_SymGetModuleInfoW64 (
 		HANDLE              hProcess,
 		DWORD64             qwAddr,
 		PIMAGEHLP_MODULEW64 ModuleInfo
 	) {
 		return real_dbghelp.SymGetModuleInfoW64(hProcess, qwAddr, ModuleInfo);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetOmaps (
+	BOOL __stdcall hook_SymGetOmaps (
 		HANDLE   hProcess,
 		DWORD64  BaseOfDll,
 		POMAP* OmapTo,
@@ -821,10 +821,10 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetOmaps(hProcess, BaseOfDll, OmapTo, cOmapTo, OmapFrom, cOmapFrom);
 	}
-	__declspec(dllexport) DWORD __stdcall hook_SymGetOptions () {
+	DWORD __stdcall hook_SymGetOptions () {
 		return real_dbghelp.SymGetOptions();
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetScope (
+	BOOL __stdcall hook_SymGetScope (
 		HANDLE       hProcess,
 		ULONG64      BaseOfDll,
 		DWORD        Index,
@@ -832,7 +832,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetScope(hProcess, BaseOfDll, Index, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetScopeW (
+	BOOL __stdcall hook_SymGetScopeW (
 		HANDLE        hProcess,
 		ULONG64       BaseOfDll,
 		DWORD         Index,
@@ -840,21 +840,21 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetScopeW(hProcess, BaseOfDll, Index, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSearchPath (
+	BOOL __stdcall hook_SymGetSearchPath (
 		HANDLE hProcess,
 		PSTR   SearchPath,
 		DWORD  SearchPathLength
 	) {
 		return real_dbghelp.SymGetSearchPath(hProcess, SearchPath, SearchPathLength);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSearchPathW (
+	BOOL __stdcall hook_SymGetSearchPathW (
 		HANDLE hProcess,
 		PWSTR  SearchPath,
 		DWORD  SearchPathLength
 	) {
 		return real_dbghelp.SymGetSearchPathW(hProcess, SearchPath, SearchPathLength);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFile (
+	BOOL __stdcall hook_SymGetSourceFile (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCSTR   Params,
@@ -864,7 +864,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceFile(hProcess, Base, Params, FileSpec, FilePath, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileChecksum (
+	BOOL __stdcall hook_SymGetSourceFileChecksum (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCSTR   FileSpec,
@@ -875,7 +875,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceFileChecksum(hProcess, Base, FileSpec, pCheckSumType, pChecksum, checksumSize, pActualBytesWritten);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileChecksumW (
+	BOOL __stdcall hook_SymGetSourceFileChecksumW (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCWSTR  FileSpec,
@@ -886,7 +886,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceFileChecksumW(hProcess, Base, FileSpec, pCheckSumType, pChecksum, checksumSize, pActualBytesWritten);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileFromToken (
+	BOOL __stdcall hook_SymGetSourceFileFromToken (
 		HANDLE hProcess,
 		PVOID  Token,
 		PCSTR  Params,
@@ -895,7 +895,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceFileFromToken(hProcess, Token, Params, FilePath, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileFromTokenW (
+	BOOL __stdcall hook_SymGetSourceFileFromTokenW (
 		HANDLE hProcess,
 		PVOID  Token,
 		PCWSTR Params,
@@ -904,7 +904,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceFileFromTokenW(hProcess, Token, Params, FilePath, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileToken (
+	BOOL __stdcall hook_SymGetSourceFileToken (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCSTR   FileSpec,
@@ -913,7 +913,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceFileToken(hProcess, Base, FileSpec, Token, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileTokenW (
+	BOOL __stdcall hook_SymGetSourceFileTokenW (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCWSTR  FileSpec,
@@ -922,7 +922,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceFileTokenW(hProcess, Base, FileSpec, Token, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceFileW (
+	BOOL __stdcall hook_SymGetSourceFileW (
 		HANDLE  hProcess,
 		ULONG64 Base,
 		PCWSTR  Params,
@@ -932,7 +932,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceFileW(hProcess, Base, Params, FileSpec, FilePath, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceVarFromToken (
+	BOOL __stdcall hook_SymGetSourceVarFromToken (
 		HANDLE hProcess,
 		PVOID  Token,
 		PCSTR  Params,
@@ -942,7 +942,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceVarFromToken(hProcess, Token, Params, VarName, Value, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSourceVarFromTokenW (
+	BOOL __stdcall hook_SymGetSourceVarFromTokenW (
 		HANDLE hProcess,
 		PVOID  Token,
 		PCWSTR Params,
@@ -952,7 +952,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSourceVarFromTokenW(hProcess, Token, Params, VarName, Value, Size);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymFromAddr (
+	BOOL __stdcall hook_SymGetSymFromAddr (
 		HANDLE           hProcess,
 		DWORD            dwAddr,
 		PDWORD           pdwDisplacement,
@@ -960,7 +960,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSymFromAddr(hProcess, dwAddr, pdwDisplacement, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymFromAddr64 (
+	BOOL __stdcall hook_SymGetSymFromAddr64 (
 		HANDLE             hProcess,
 		DWORD64            qwAddr,
 		PDWORD64           pdwDisplacement,
@@ -968,45 +968,45 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSymFromAddr64(hProcess, qwAddr, pdwDisplacement, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymFromName (
+	BOOL __stdcall hook_SymGetSymFromName (
 		HANDLE           hProcess,
 		PCSTR            Name,
 		PIMAGEHLP_SYMBOL Symbol
 	) {
 		return real_dbghelp.SymGetSymFromName(hProcess, Name, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymFromName64 (
+	BOOL __stdcall hook_SymGetSymFromName64 (
 		HANDLE             hProcess,
 		PCSTR              Name,
 		PIMAGEHLP_SYMBOL64 Symbol
 	) {
 		return real_dbghelp.SymGetSymFromName64(hProcess, Name, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymNext (
+	BOOL __stdcall hook_SymGetSymNext (
 		HANDLE           hProcess,
 		PIMAGEHLP_SYMBOL Symbol
 	) {
 		return real_dbghelp.SymGetSymNext(hProcess, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymNext64 (
+	BOOL __stdcall hook_SymGetSymNext64 (
 		HANDLE             hProcess,
 		PIMAGEHLP_SYMBOL64 Symbol
 	) {
 		return real_dbghelp.SymGetSymNext64(hProcess, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymPrev (
+	BOOL __stdcall hook_SymGetSymPrev (
 		HANDLE           hProcess,
 		PIMAGEHLP_SYMBOL Symbol
 	) {
 		return real_dbghelp.SymGetSymPrev(hProcess, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymPrev64 (
+	BOOL __stdcall hook_SymGetSymPrev64 (
 		HANDLE             hProcess,
 		PIMAGEHLP_SYMBOL64 Symbol
 	) {
 		return real_dbghelp.SymGetSymPrev64(hProcess, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymbolFile (
+	BOOL __stdcall hook_SymGetSymbolFile (
 		HANDLE hProcess,
 		PCSTR  SymPath,
 		PCSTR  ImageFile,
@@ -1018,7 +1018,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSymbolFile(hProcess, SymPath, ImageFile, Type, SymbolFile, cSymbolFile, DbgFile, cDbgFile);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetSymbolFileW (
+	BOOL __stdcall hook_SymGetSymbolFileW (
 		HANDLE hProcess,
 		PCWSTR SymPath,
 		PCWSTR ImageFile,
@@ -1030,7 +1030,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetSymbolFileW(hProcess, SymPath, ImageFile, Type, SymbolFile, cSymbolFile, DbgFile, cDbgFile);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetTypeFromName (
+	BOOL __stdcall hook_SymGetTypeFromName (
 		HANDLE       hProcess,
 		ULONG64      BaseOfDll,
 		PCSTR        Name,
@@ -1038,7 +1038,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetTypeFromName(hProcess, BaseOfDll, Name, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetTypeFromNameW (
+	BOOL __stdcall hook_SymGetTypeFromNameW (
 		HANDLE        hProcess,
 		ULONG64       BaseOfDll,
 		PCWSTR        Name,
@@ -1046,7 +1046,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetTypeFromNameW(hProcess, BaseOfDll, Name, Symbol);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetTypeInfo (
+	BOOL __stdcall hook_SymGetTypeInfo (
 		HANDLE                    hProcess,
 		DWORD64                   ModBase,
 		ULONG                     TypeId,
@@ -1055,14 +1055,14 @@ extern "C" {
 	) {
 		return real_dbghelp.SymGetTypeInfo(hProcess, ModBase, TypeId, GetType, pInfo);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymGetTypeInfoEx (
+	BOOL __stdcall hook_SymGetTypeInfoEx (
 		HANDLE                         hProcess,
 		DWORD64                        ModBase,
 		PIMAGEHLP_GET_TYPE_INFO_PARAMS Params
 	) {
 		return real_dbghelp.SymGetTypeInfoEx(hProcess, ModBase, Params);
 	}
-	__declspec(dllexport) DWORD __stdcall hook_SymLoadModule (
+	DWORD __stdcall hook_SymLoadModule (
 		HANDLE hProcess,
 		HANDLE hFile,
 		PCSTR  ImageName,
@@ -1072,7 +1072,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymLoadModule(hProcess, hFile, ImageName, ModuleName, BaseOfDll, SizeOfDll);
 	}
-	__declspec(dllexport) DWORD64 __stdcall hook_SymLoadModule64 (
+	DWORD64 __stdcall hook_SymLoadModule64 (
 		HANDLE  hProcess,
 		HANDLE  hFile,
 		PCSTR   ImageName,
@@ -1082,7 +1082,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymLoadModule64(hProcess, hFile, ImageName, ModuleName, BaseOfDll, SizeOfDll);
 	}
-	__declspec(dllexport) DWORD64 __stdcall hook_SymLoadModuleEx (
+	DWORD64 __stdcall hook_SymLoadModuleEx (
 		HANDLE        hProcess,
 		HANDLE        hFile,
 		PCSTR         ImageName,
@@ -1094,7 +1094,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymLoadModuleEx(hProcess, hFile, ImageName, ModuleName, BaseOfDll, DllSize, Data, Flags);
 	}
-	__declspec(dllexport) DWORD64 __stdcall hook_SymLoadModuleExW (
+	DWORD64 __stdcall hook_SymLoadModuleExW (
 		HANDLE        hProcess,
 		HANDLE        hFile,
 		PCWSTR        ImageName,
@@ -1106,7 +1106,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymLoadModuleExW(hProcess, hFile, ImageName, ModuleName, BaseOfDll, DllSize, Data, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymMatchFileName (
+	BOOL __stdcall hook_SymMatchFileName (
 		PCSTR FileName,
 		PCSTR Match,
 		PSTR* FileNameStop,
@@ -1114,7 +1114,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymMatchFileName(FileName, Match, FileNameStop, MatchStop);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymMatchFileNameW (
+	BOOL __stdcall hook_SymMatchFileNameW (
 		PCWSTR FileName,
 		PCWSTR Match,
 		PWSTR* FileNameStop,
@@ -1122,92 +1122,92 @@ extern "C" {
 	) {
 		return real_dbghelp.SymMatchFileNameW(FileName, Match, FileNameStop, MatchStop);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymMatchString (
+	BOOL __stdcall hook_SymMatchString (
 		PCSTR string,
 		PCSTR expression,
 		BOOL  fCase
 	) {
 		return real_dbghelp.SymMatchString(string, expression, fCase);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymMatchStringA (
+	BOOL __stdcall hook_SymMatchStringA (
 		PCSTR string,
 		PCSTR expression,
 		BOOL  fCase
 	) {
 		return real_dbghelp.SymMatchStringA(string, expression, fCase);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymMatchStringW (
+	BOOL __stdcall hook_SymMatchStringW (
 		PCWSTR string,
 		PCWSTR expression,
 		BOOL   fCase
 	) {
 		return real_dbghelp.SymMatchStringW(string, expression, fCase);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymNext (
+	BOOL __stdcall hook_SymNext (
 		HANDLE       hProcess,
 		PSYMBOL_INFO si
 	) {
 		return real_dbghelp.SymNext(hProcess, si);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymNextW (
+	BOOL __stdcall hook_SymNextW (
 		HANDLE        hProcess,
 		PSYMBOL_INFOW siw
 	) {
 		return real_dbghelp.SymNextW(hProcess, siw);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymPrev (
+	BOOL __stdcall hook_SymPrev (
 		HANDLE       hProcess,
 		PSYMBOL_INFO si
 	) {
 		return real_dbghelp.SymPrev(hProcess, si);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymPrevW (
+	BOOL __stdcall hook_SymPrevW (
 		HANDLE        hProcess,
 		PSYMBOL_INFOW siw
 	) {
 		return real_dbghelp.SymPrevW(hProcess, siw);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymRefreshModuleList (
+	BOOL __stdcall hook_SymRefreshModuleList (
 		HANDLE hProcess
 	) {
 		return real_dbghelp.SymRefreshModuleList(hProcess);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymRegisterCallback (
+	BOOL __stdcall hook_SymRegisterCallback (
 		HANDLE                      hProcess,
 		PSYMBOL_REGISTERED_CALLBACK CallbackFunction,
 		PVOID                       UserContext
 	) {
 		return real_dbghelp.SymRegisterCallback(hProcess, CallbackFunction, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymRegisterCallback64 (
+	BOOL __stdcall hook_SymRegisterCallback64 (
 		HANDLE                        hProcess,
 		PSYMBOL_REGISTERED_CALLBACK64 CallbackFunction,
 		ULONG64                       UserContext
 	) {
 		return real_dbghelp.SymRegisterCallback64(hProcess, CallbackFunction, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymRegisterCallbackW64 (
+	BOOL __stdcall hook_SymRegisterCallbackW64 (
 		HANDLE                        hProcess,
 		PSYMBOL_REGISTERED_CALLBACK64 CallbackFunction,
 		ULONG64                       UserContext
 	) {
 		return real_dbghelp.SymRegisterCallbackW64(hProcess, CallbackFunction, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymRegisterFunctionEntryCallback (
+	BOOL __stdcall hook_SymRegisterFunctionEntryCallback (
 		HANDLE                     hProcess,
 		PSYMBOL_FUNCENTRY_CALLBACK CallbackFunction,
 		PVOID                      UserContext
 	) {
 		return real_dbghelp.SymRegisterFunctionEntryCallback(hProcess, CallbackFunction, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymRegisterFunctionEntryCallback64 (
+	BOOL __stdcall hook_SymRegisterFunctionEntryCallback64 (
 		HANDLE                       hProcess,
 		PSYMBOL_FUNCENTRY_CALLBACK64 CallbackFunction,
 		ULONG64                      UserContext
 	) {
 		return real_dbghelp.SymRegisterFunctionEntryCallback64(hProcess, CallbackFunction, UserContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSearch (
+	BOOL __stdcall hook_SymSearch (
 		HANDLE                         hProcess,
 		ULONG64                        BaseOfDll,
 		DWORD                          Index,
@@ -1220,7 +1220,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSearch(hProcess, BaseOfDll, Index, SymTag, Mask, Address, EnumSymbolsCallback, UserContext, Options);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSearchW (
+	BOOL __stdcall hook_SymSearchW (
 		HANDLE                          hProcess,
 		ULONG64                         BaseOfDll,
 		DWORD                           Index,
@@ -1233,69 +1233,57 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSearchW(hProcess, BaseOfDll, Index, SymTag, Mask, Address, EnumSymbolsCallback, UserContext, Options);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSetContext (
+	BOOL __stdcall hook_SymSetContext (
 		HANDLE                hProcess,
 		PIMAGEHLP_STACK_FRAME StackFrame,
 		PIMAGEHLP_CONTEXT     Context
 	) {
 		return real_dbghelp.SymSetContext(hProcess, StackFrame, Context);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSetExtendedOption (
+	BOOL __stdcall hook_SymSetExtendedOption (
 		IMAGEHLP_EXTENDED_OPTIONS option,
 		BOOL                      value
 	) {
 		return real_dbghelp.SymSetExtendedOption(option, value);
 	}
-	__declspec(dllexport) PCHAR __stdcall hook_SymSetHomeDirectory (
+	PCHAR __stdcall hook_SymSetHomeDirectory (
 		HANDLE hProcess,
 		PCSTR  dir
 	) {
 		return real_dbghelp.SymSetHomeDirectory(hProcess, dir);
 	}
-	__declspec(dllexport) PWSTR __stdcall hook_SymSetHomeDirectoryW (
+	PWSTR __stdcall hook_SymSetHomeDirectoryW (
 		HANDLE hProcess,
 		PCWSTR dir
 	) {
 		return real_dbghelp.SymSetHomeDirectoryW(hProcess, dir);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSetParentWindow (
+	BOOL __stdcall hook_SymSetParentWindow (
 		HWND hwnd
 	) {
 		return real_dbghelp.SymSetParentWindow(hwnd);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSetScopeFromAddr (
+	BOOL __stdcall hook_SymSetScopeFromAddr (
 		HANDLE  hProcess,
 		ULONG64 Address
 	) {
 		return real_dbghelp.SymSetScopeFromAddr(hProcess, Address);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSetScopeFromIndex (
+	BOOL __stdcall hook_SymSetScopeFromIndex (
 		HANDLE  hProcess,
 		ULONG64 BaseOfDll,
 		DWORD   Index
 	) {
 		return real_dbghelp.SymSetScopeFromIndex(hProcess, BaseOfDll, Index);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSetScopeFromInlineContext (
+	BOOL __stdcall hook_SymSetScopeFromInlineContext (
 		HANDLE  hProcess,
 		ULONG64 Address,
 		ULONG   InlineContext
 	) {
 		return real_dbghelp.SymSetScopeFromInlineContext(hProcess, Address, InlineContext);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSetSearchPath (
-		HANDLE hProcess,
-		PCSTR  SearchPath
-	) {
-		return real_dbghelp.SymSetSearchPath(hProcess, SearchPath);
-	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSetSearchPathW (
-		HANDLE hProcess,
-		PCWSTR SearchPath
-	) {
-		return real_dbghelp.SymSetSearchPathW(hProcess, SearchPath);
-	}
-	__declspec(dllexport) PCSTR __stdcall hook_SymSrvDeltaName (
+	PCSTR __stdcall hook_SymSrvDeltaName (
 		HANDLE hProcess,
 		PCSTR  SymPath,
 		PCSTR  Type,
@@ -1304,7 +1292,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvDeltaName(hProcess, SymPath, Type, File1, File2);
 	}
-	__declspec(dllexport) PCWSTR __stdcall hook_SymSrvDeltaNameW (
+	PCWSTR __stdcall hook_SymSrvDeltaNameW (
 		HANDLE hProcess,
 		PCWSTR SymPath,
 		PCWSTR Type,
@@ -1313,21 +1301,21 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvDeltaNameW(hProcess, SymPath, Type, File1, File2);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSrvGetFileIndexInfo (
+	BOOL __stdcall hook_SymSrvGetFileIndexInfo (
 		PCSTR              File,
 		PSYMSRV_INDEX_INFO Info,
 		DWORD              Flags
 	) {
 		return real_dbghelp.SymSrvGetFileIndexInfo(File, Info, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSrvGetFileIndexInfoW (
+	BOOL __stdcall hook_SymSrvGetFileIndexInfoW (
 		PCWSTR              File,
 		PSYMSRV_INDEX_INFOW Info,
 		DWORD               Flags
 	) {
 		return real_dbghelp.SymSrvGetFileIndexInfoW(File, Info, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSrvGetFileIndexString (
+	BOOL __stdcall hook_SymSrvGetFileIndexString (
 		HANDLE hProcess,
 		PCSTR  SrvPath,
 		PCSTR  File,
@@ -1337,7 +1325,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvGetFileIndexString(hProcess, SrvPath, File, Index, Size, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSrvGetFileIndexStringW (
+	BOOL __stdcall hook_SymSrvGetFileIndexStringW (
 		HANDLE hProcess,
 		PCWSTR SrvPath,
 		PCWSTR File,
@@ -1347,7 +1335,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvGetFileIndexStringW(hProcess, SrvPath, File, Index, Size, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSrvGetFileIndexes (
+	BOOL __stdcall hook_SymSrvGetFileIndexes (
 		PCSTR  File,
 		GUID* Id,
 		PDWORD Val1,
@@ -1356,7 +1344,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvGetFileIndexes(File, Id, Val1, Val2, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSrvGetFileIndexesW (
+	BOOL __stdcall hook_SymSrvGetFileIndexesW (
 		PCWSTR File,
 		GUID* Id,
 		PDWORD Val1,
@@ -1365,7 +1353,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvGetFileIndexesW(File, Id, Val1, Val2, Flags);
 	}
-	__declspec(dllexport) PCSTR __stdcall hook_SymSrvGetSupplement (
+	PCSTR __stdcall hook_SymSrvGetSupplement (
 		HANDLE hProcess,
 		PCSTR  SymPath,
 		PCSTR  Node,
@@ -1373,7 +1361,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvGetSupplement(hProcess, SymPath, Node, File);
 	}
-	__declspec(dllexport) PCWSTR __stdcall hook_SymSrvGetSupplementW (
+	PCWSTR __stdcall hook_SymSrvGetSupplementW (
 		HANDLE hProcess,
 		PCWSTR SymPath,
 		PCWSTR Node,
@@ -1381,19 +1369,19 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvGetSupplementW(hProcess, SymPath, Node, File);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSrvIsStore (
+	BOOL __stdcall hook_SymSrvIsStore (
 		HANDLE hProcess,
 		PCSTR  path
 	) {
 		return real_dbghelp.SymSrvIsStore(hProcess, path);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymSrvIsStoreW (
+	BOOL __stdcall hook_SymSrvIsStoreW (
 		HANDLE hProcess,
 		PCWSTR path
 	) {
 		return real_dbghelp.SymSrvIsStoreW(hProcess, path);
 	}
-	__declspec(dllexport) PCSTR __stdcall hook_SymSrvStoreFile (
+	PCSTR __stdcall hook_SymSrvStoreFile (
 		HANDLE hProcess,
 		PCSTR  SrvPath,
 		PCSTR  File,
@@ -1401,7 +1389,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvStoreFile(hProcess, SrvPath, File, Flags);
 	}
-	__declspec(dllexport) PCWSTR __stdcall hook_SymSrvStoreFileW (
+	PCWSTR __stdcall hook_SymSrvStoreFileW (
 		HANDLE hProcess,
 		PCWSTR SrvPath,
 		PCWSTR File,
@@ -1409,7 +1397,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvStoreFileW(hProcess, SrvPath, File, Flags);
 	}
-	__declspec(dllexport) PCSTR __stdcall hook_SymSrvStoreSupplement (
+	PCSTR __stdcall hook_SymSrvStoreSupplement (
 		HANDLE hProcess,
 		PCSTR  SrvPath,
 		PCSTR  Node,
@@ -1418,7 +1406,7 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvStoreSupplement(hProcess, SrvPath, Node, File, Flags);
 	}
-	__declspec(dllexport) PCWSTR __stdcall hook_SymSrvStoreSupplementW (
+	PCWSTR __stdcall hook_SymSrvStoreSupplementW (
 		HANDLE hProcess,
 		PCWSTR SymPath,
 		PCWSTR Node,
@@ -1427,33 +1415,33 @@ extern "C" {
 	) {
 		return real_dbghelp.SymSrvStoreSupplementW(hProcess, SymPath, Node, File, Flags);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymUnDName (
+	BOOL __stdcall hook_SymUnDName (
 		PIMAGEHLP_SYMBOL sym,
 		PSTR             UnDecName,
 		DWORD            UnDecNameLength
 	) {
 		return real_dbghelp.SymUnDName(sym, UnDecName, UnDecNameLength);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymUnDName64 (
+	BOOL __stdcall hook_SymUnDName64 (
 		PIMAGEHLP_SYMBOL64 sym,
 		PSTR               UnDecName,
 		DWORD              UnDecNameLength
 	) {
 		return real_dbghelp.SymUnDName64(sym, UnDecName, UnDecNameLength);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymUnloadModule (
+	BOOL __stdcall hook_SymUnloadModule (
 		HANDLE hProcess,
 		DWORD  BaseOfDll
 	) {
 		return real_dbghelp.SymUnloadModule(hProcess, BaseOfDll);
 	}
-	__declspec(dllexport) BOOL __stdcall hook_SymUnloadModule64 (
+	BOOL __stdcall hook_SymUnloadModule64 (
 		HANDLE  hProcess,
 		DWORD64 BaseOfDll
 	) {
 		return real_dbghelp.SymUnloadModule64(hProcess, BaseOfDll);
 	}
-	__declspec(dllexport) DWORD __stdcall hook_UnDecorateSymbolName (
+	DWORD __stdcall hook_UnDecorateSymbolName (
 		PCSTR name,
 		PSTR  outputString,
 		DWORD maxStringLength,
@@ -1461,7 +1449,7 @@ extern "C" {
 	) {
 		return real_dbghelp.UnDecorateSymbolName(name, outputString, maxStringLength, flags);
 	}
-	__declspec(dllexport) DWORD __stdcall hook_UnDecorateSymbolNameW (
+	DWORD __stdcall hook_UnDecorateSymbolNameW (
 		PCWSTR name,
 		PWSTR  outputString,
 		DWORD  maxStringLength,

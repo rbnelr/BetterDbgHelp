@@ -5,15 +5,15 @@
 struct SourceLoc {
 	const char* filepath;
 	uint32_t    lineno;
-
-	bool operator== (SourceLoc const& r) const {
-		return strcmp(filepath, r.filepath)==0 && lineno == r.lineno;
-	}
+	// code offset of found line to lineinfo start
+	// (which has been made relative to the symbol base_address for lineinfo for symbol or its inlinesites)
+	uint64_t    line_start_offset;
 };
 struct SourceLocAndFn {
 	const char* fnname = nullptr;
 	const char* filepath = nullptr;
 	uint32_t    lineno = 0;
+	uint64_t    line_start_offset; // code offset of found line to lineinfo start
 };
 
 namespace lineinfo {
@@ -195,7 +195,7 @@ namespace lineinfo {
 			} while (cur < end);
 
 			// align up to 4 bytes
-			cur = (char*)(((uintptr_t)cur + 0b11) & ~0b11);
+			cur = (char*)(((uint64_t)cur + 0b11) & ~0b11);
 		} while (!block->is_last);
 	}
 
@@ -206,7 +206,7 @@ namespace lineinfo {
 			FUNC extract_checksums_str, BinAlloc& alloc, Stats& stats
 		) {
 		// Normally one Line header exists per function
-		// with the section and offset being equal, ie. the resulting module_raddr being equal
+		// with the section and offset being equal, ie. the resulting rva being equal
 		// so we can assign the lineinfo to the symbol and find lineinfo for a symbol after the symbol lookup
 		// but I saw an exception:
 		// __security_check_cookie : src\vctools\crt\vcstartup\src\gs\amd64\amdsecgs.asm
@@ -276,6 +276,10 @@ namespace lineinfo {
 
 					encoder.push(alloc, prev_range);
 				}
+
+				// NOTE: there seem to be special start_line_number == 0x00F00F00
+				// maybe a bug in their toolchains or a special marker
+				// This isn't a bug on my end, dbghelp shows these too, so I'll report them the same
 
 				prev_range.offset = offset;
 				prev_range.length = 0;
@@ -459,11 +463,12 @@ namespace lineinfo {
 		return encoder.result;
 	}
 
-	inline bool find_line_for_addr (char* data, uintptr_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
-		assert((uintptr_t)data % ALIGN == 0);
+	inline bool find_line_for_addr (char* data, uint64_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
+		assert((uint64_t)data % ALIGN == 0);
 
 		uint32_t found_sourcefile = 0;
 		uint32_t found_lineno = UINT32_MAX;
+		uint64_t found_offset = 0;
 		
 		decode(data, [&] (uint32_t offset, uint32_t end_offset, uint32_t lineno, uint32_t sourcefile, bool is_gap) {
 			if (is_gap) lineno = UINT32_MAX;
@@ -476,6 +481,7 @@ namespace lineinfo {
 		
 			found_sourcefile = sourcefile;
 			found_lineno = lineno;
+			found_offset = offset;
 		
 			if (rel_addr == offset) {
 				return true; // stop iterating
@@ -487,7 +493,8 @@ namespace lineinfo {
 		if (found_lineno != UINT32_MAX) {
 			*out_src_loc = {
 				stralloc[found_sourcefile],
-				found_lineno
+				found_lineno,
+				found_offset,
 			};
 			return true;
 		}
@@ -496,8 +503,8 @@ namespace lineinfo {
 
 	// TODO: due to lineinfo acting weird,
 	// for the moment develop a replacement for binary annotations first, then make it work with lineinfo afterwards
-	inline bool find_line_for_addr_for_inline (char* data, uintptr_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
-		assert((uintptr_t)data % ALIGN == 0);
+	inline bool find_line_for_addr_for_inline (char* data, uint64_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
+		assert((uint64_t)data % ALIGN == 0);
 
 		bool found = false;
 		decode(data, [&] (uint32_t offset, uint32_t end_offset, uint32_t lineno, uint32_t sourcefile, bool is_gap) {
@@ -506,7 +513,8 @@ namespace lineinfo {
 				if (!is_gap && rel_addr >= offset) {
 					*out_src_loc = {
 						stralloc[sourcefile],
-						lineno
+						lineno,
+						offset
 					};
 					found = true;
 					return true; // stop iterating

@@ -366,12 +366,69 @@ void profiling_run_cachemiss () {
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
+inline __declspec(noinline) void mySuperLongFunctionName_asikudghauyfghisudgfhiusdghfiusdghfiuysghdfiudshgf () {
+	printf("");
+}
+
+void test_dll () {
+#if NDEBUG
+	auto* path = "x64/Release/dbghelp.dll";
+#else
+	auto* path = "x64/Debug/dbghelp.dll";
+#endif
+	auto dll = LoadLibraryA(path);
+	auto _SymInitialize = (t_SymInitialize)GetProcAddress(dll, "SymInitialize");
+	auto _SymCleanup = (t_SymCleanup)GetProcAddress(dll, "SymCleanup");
+	auto _SymFromAddr = (t_SymFromAddr)GetProcAddress(dll, "SymFromAddr");
+	auto _SymGetLineFromAddr64 = (t_SymGetLineFromAddr64)GetProcAddress(dll, "SymGetLineFromAddr64");
+	
+	auto proc = GetCurrentProcess();
+
+	//_SymInitialize(proc, "C:\\;D:\\a;E:\\a\\b;", false);
+	_SymInitialize(proc, nullptr, true);
+	
+	auto func_ptr = &mySuperLongFunctionName_asikudghauyfghisudgfhiusdghfiusdghfiuysghdfiudshgf;
+	func_ptr();
+	
+	void* addr0 = &test_dll;
+	void* addr1 = func_ptr;
+	void* addr2 = (void*)0x0000000140117420;
+	void* addr3 = (void*)(0x0000000140117420+20);
+
+	SYMBOL_INFO_PACKAGE buf;
+	buf.si = {};
+	buf.si.SizeOfStruct = sizeof(buf.si);
+	buf.si.MaxNameLen = MAX_SYM_NAME;
+	//buf.si.MaxNameLen = 20;
+	
+	DWORD Displacement = 0;
+	IMAGEHLP_LINE64 line = {};
+	line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+	
+	_SymFromAddr(proc, (DWORD64)addr0, NULL, &buf.si);
+	_SymGetLineFromAddr64(proc, (DWORD64)addr0, &Displacement, &line);
+
+	_SymFromAddr(proc, (DWORD64)addr1, NULL, &buf.si);
+	_SymGetLineFromAddr64(proc, (DWORD64)addr1, &Displacement, &line);
+	
+	_SymFromAddr(proc, (DWORD64)addr2, NULL, &buf.si);
+	_SymGetLineFromAddr64(proc, (DWORD64)addr2, &Displacement, &line);
+
+	_SymFromAddr(proc, (DWORD64)addr3, NULL, &buf.si);
+	_SymGetLineFromAddr64(proc, (DWORD64)addr3, &Displacement, &line);
+
+	_SymCleanup(proc);
+
+	FreeLibrary(dll);
+}
+
 int main(int argc, const char** argv) {
+	test_dll();
 	//example_addresses(true, true, 0);
 	
 	//print_timings = false;
-	example_addresses(true, false, 0);
-	sweep_tests();
+	//example_addresses(true, false, 0);
+	//sweep_tests();
 
 	//profiling_run();
 	//profiling_run_cached();

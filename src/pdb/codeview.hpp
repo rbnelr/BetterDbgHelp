@@ -785,6 +785,7 @@ typedef struct PROCSYM32 {
     CV_PROCFLAGS    flags;      // Proc flags
     unsigned char   name[1];    // Length-prefixed name
 } PROCSYM32;
+
 typedef struct THUNKSYM32 {
     unsigned short  reclen;     // Record length
     unsigned short  rectyp;     // S_THUNK32
@@ -798,6 +799,16 @@ typedef struct THUNKSYM32 {
     unsigned char   name[1];    // Length-prefixed name
     //unsigned char   variant[CV_ZEROLEN]; // variant portion of thunk
 } THUNKSYM32;
+typedef struct TRAMPOLINESYM {  // Trampoline thunk symbol
+    unsigned short  reclen;     // Record length
+    unsigned short  rectyp;     // S_TRAMPOLINE
+    unsigned short  trampType;  // trampoline sym subtype
+    unsigned short  cbThunk;    // size of the thunk
+    CV_uoff32_t     offThunk;   // offset of the thunk
+    CV_uoff32_t     offTarget;  // offset of the target of the thunk
+    unsigned short  sectThunk;  // section index of the thunk
+    unsigned short  sectTarget; // section index of the target of the thunk
+} TRAMPOLINE;
 
 typedef struct SECTIONSYM {
     unsigned short  reclen;             // Record length
