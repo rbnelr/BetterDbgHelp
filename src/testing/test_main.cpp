@@ -428,7 +428,8 @@ void test_dll () {
 #endif
 void test_dll () {
 	run_dll_wrapper_as_resolver = true;
-	example_addresses(true, true, 0);
+	//example_addresses(true, true, 0);
+	example_addresses(true);
 }
 
 int main(int argc, const char** argv) {

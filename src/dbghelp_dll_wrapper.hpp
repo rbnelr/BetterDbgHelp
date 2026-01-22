@@ -3,7 +3,18 @@
 #include "pdb/pdb.hpp"
 #include "pdb/module_lookup.hpp"
 
-#define MODE_VERIFY 1
+// Verification:
+// Optionally verify all implemented dbghelp API calls against real dbghelp.dll
+// Disabling is using compile-time macro for better optimization
+// Currently real dbghelp.dll is still loaded and not-implemented calls are forwarded to it
+//  actually calling a mix of implemented and non-implemented functions should in theory be supported but is completely untested
+// Could consider not loading dbghelp at all and returning error in those cases
+// Could consider adding additional runtime for verification, but there is no good reason to do so right now
+#if NDEBUG
+	#define ENABLE_VERIFICATION 0
+#else
+	#define ENABLE_VERIFICATION 1
+#endif
 
 struct DbgHelpWrapperSession {
 	ModuleCache mod_cache;
@@ -11,28 +22,205 @@ struct DbgHelpWrapperSession {
 	static constexpr int MAX_INLINES = 256;
 
 	struct CachedResult {
-		uint64_t Address = 0;
+		uint64_t address = 0;
 		// store just address not LoadedModule* as mod_cache does not keep stable ptrs
 		uint64_t mod_base = 0;
 
-		// unsafe ptr to unique_ptr<FastPdbLookup> (but currently am not ever manually unloading pdbs)
+		// unsafe ptr to unique_ptr<FastPdbLookup> (but currently pdbs should stay loaded until DbgHelpWrapperSession dtor)
 		FastPdbLookup* pdb = nullptr;
-		// unsafe but stable ptr if FastPdbLookup stays loaded
+		// unsafe ptr
+		ExportTableQuery* export_table = nullptr;
+		// unsafe but stable ptr if FastPdbLookup stays loaded, could also store symbol index here
 		Symbol* sym = nullptr;
+		uint32_t sym_idx = (uint32_t)-1;
 
-		uint32_t num_inlines = 0;
+		// -1: not yet cached
+		// >=0: inlines cached
+		int num_inlines = -1;
 		SourceLocAndFn inlines[MAX_INLINES];
 
+	#if ENABLE_VERIFICATION
 		ULONG dbh_inl_ctx = 0;
+	#endif
+
+		void clear () {
+			address = 0;
+			mod_base = 0;
+			pdb = nullptr;
+			sym = nullptr;
+			sym_idx = (uint32_t)-1;
+			num_inlines = -1;
+
+		#if ENABLE_VERIFICATION
+			dbh_inl_ctx = 0;
+		#endif
+		}
 	};
 
 	CachedResult cached;
 	
 	DbgHelpWrapperSession (HANDLE hProcess): mod_cache{hProcess} {}
 	~DbgHelpWrapperSession () {}
+	
+	// like dbghelp, copy null terminated string or truncate and _don't_ null terminate if max_len too short
+	// return truncated length instead of more useful full length like snprintf would (as dbghelp does for some reason)
+	static ULONG strcpy_trunc (char* dst, char const* src, ULONG max_len) {
+		// strcpy_s has no way of returning actually copied length, so I am forced to do a separate strlen
+		// Interestingly, this truncated copy + return truncated length operation could probably simd accelerated easily
+		// TODO: do so if this shows up at all in the profiler
+		ULONG len = (ULONG)strlen(src);
+		strcpy_s(dst, max_len, src);
+		return std::min(max_len, len);
+	}
 
-	// TODO: cache mod_cache.find_module_for_addr + mod->pdb->find_symbol_for_addr on Address
-	// by simply storing last Address + mod + sym_idx
+	// do base symbol lookup, store as cached
+	void get_and_cache_symbol (DWORD64 Address) {
+		cached.clear();
+
+		auto* mod = mod_cache.find_module_for_addr(Address);
+		if (!mod) {
+			return;
+		}
+
+		// Intentionally only cache if module was found
+		// as dlls in target process can be loaded after program startup
+		// This way failures are not cached and instead further calls would be slower but return updated module loading
+		cached.address = Address;
+		cached.mod_base = mod->base_addr;
+
+		uint64_t query_rva = Address - mod->base_addr;
+		
+		if (mod->pdb) {
+			cached.pdb = mod->pdb.get();
+
+			auto* sym = mod->pdb->find_symbol_for_addr(query_rva, &cached.sym_idx);
+			if (sym) {
+				cached.sym = sym;
+			}
+		}
+		else {
+			// No pdb found, lookup export table instead
+			auto* exports = mod->load_export_table();
+			if (exports) {
+				cached.export_table = exports;
+				
+				if (exports->query_index(query_rva, &cached.sym_idx)) {
+					// sym_idx set if found
+				}
+			}
+		}
+	}
+	// get symbol as cached (run symbol lookup)
+	void get_symbol_lazily (DWORD64 Address) {
+		return get_and_cache_symbol(Address);
+	}
+	// get inlinesites as cached (run trace_inlinesites_for_addr)
+	void get_inlinesites_lazily (DWORD64 Address) {
+		get_symbol_lazily(Address);
+		
+		if (cached.sym) {
+			// common case: pdb existed and symbol was found
+			uint64_t query_rva = Address - cached.mod_base;
+
+			if (cached.sym->inline_depth > 0) {
+				cached.num_inlines = (uint32_t)cached.pdb->trace_inlinesites_for_addr(cached.sym, query_rva, cached.inlines, MAX_INLINES);
+			}
+		}
+	}
+
+	static bool get_symbol_info_from_export_table (
+		CachedResult& cached,
+		DWORD64      Address,
+		PDWORD64     Displacement,
+		PSYMBOL_INFO Symbol
+	) {
+		assert(cached.address == Address);
+		assert(cached.sym == nullptr); // sym_idx is not index in export table if normal symbol was found
+		assert(cached.pdb == nullptr);
+		if (cached.export_table == nullptr || cached.sym_idx == (uint32_t)-1)
+			return false;
+
+		uint64_t sym_rva;
+		auto* mangled_name = cached.export_table->get(cached.sym_idx, &sym_rva);
+		assert(mangled_name);
+
+		Symbol->TypeIndex = 0;
+		Symbol->Reserved[0] = 0;
+		Symbol->Reserved[1] = 0;
+		Symbol->Index = 0;
+		Symbol->Size = 0;
+		Symbol->ModBase = cached.mod_base;
+		Symbol->Flags = 0;
+		Symbol->Value = 0;
+		Symbol->Address = cached.mod_base + sym_rva;
+		Symbol->Register = 0;
+		Symbol->Scope = 0;
+		Symbol->Tag = (ULONG)SymTagEnum::SymTagPublicSymbol;
+
+		if (Displacement)
+			*Displacement = Address - Symbol->Address;
+		
+		Symbol->NameLen = strcpy_trunc(Symbol->Name, mangled_name, Symbol->MaxNameLen);
+		return true;
+	}
+	static bool get_symbol_info (
+		CachedResult& cached,
+		DWORD64      Address,
+		PDWORD64     Displacement,
+		PSYMBOL_INFO Symbol
+	) {
+		if (cached.sym) {
+			// common case: pdb existed and symbol was found
+
+			Symbol->TypeIndex = 0;
+			Symbol->Reserved[0] = 0;
+			Symbol->Reserved[1] = 0;
+			// Not the same index as dbghelp (as the indices are unstable across runs and only used for passing into other api functions)
+			// we could implement other parts of the api using our own index scheme
+			// actually, should return 0 here so that if dbghelp calls that I do not replace are called with this index, it can fail instead of being confused
+			//Symbol->Index = sym_idx;
+			Symbol->Index = 0;
+			// Size for module symbols makes sense, but for global data symbols it has to be "estimated" based on the typeinfo, which I cannot easily replicate
+			// for global function symbols it's even more weird and dbghelp seemingly sometimes computes it based on types extracted from name mangling
+			// Since can't reasonably match it I resort to jus returning 0 in those cases
+			Symbol->Size = cached.sym->size;
+			Symbol->ModBase = cached.mod_base;
+			// Don't bother returning flags, i've only observed very few of them appear and
+			// at least SYMFLAG_EXPORT seems to be determined based on PE export table instead of pdb, which is overcomplicated imho
+			// a full 1-1 match of dbghelp behavior is probably only possibly by caching dbghelp results, which is not my goal
+			Symbol->Flags = 0;
+			Symbol->Value = 0;
+			// HACK: __ImageBase does not return an Address unlike seemingly everything else in dbghelp, super pointless but this matches dbghelp more closely
+			Symbol->Address = cached.sym->base_addr != 0 ? cached.mod_base + cached.sym->base_addr : 0;
+			Symbol->Register = 0;
+			Symbol->Scope = 0;
+			Symbol->Tag = (ULONG)cached.sym->si_tag;
+
+			if (Displacement) {
+				*Displacement = Address - (cached.mod_base + cached.sym->base_addr);
+			}
+			const char* name = cached.pdb->stralloc[cached.sym->name];
+			Symbol->NameLen = strcpy_trunc(Symbol->Name, name, Symbol->MaxNameLen);
+			return true;
+		}
+		else {
+			// slowpath
+
+			if (cached.address != Address) {
+				// not loaded module at address in target process
+				return false;
+			}
+
+			if (cached.pdb) {
+				// pdb was found, but not symbol -> symbol not found
+				return false;
+			}
+
+			// No pdb found, lookup export table instead
+			return get_symbol_info_from_export_table(cached, Address, Displacement, Symbol);
+		}
+		return false;
+	}
 
 	// Search for symbol by Address, fill SYMBOL_INFO and optional Displacement
 	// Displacement: Address offset from symbol base address
@@ -43,81 +231,9 @@ struct DbgHelpWrapperSession {
 		PDWORD64     Displacement,
 		PSYMBOL_INFO Symbol
 	) {
-		auto* mod = mod_cache.find_module_for_addr(Address);
-		if (!mod) {
-			return false;
-		}
-		uint64_t rva = Address - mod->base_addr;
+		get_symbol_lazily(Address);
 		
-		if (!mod->pdb) {
-			auto* exports = mod->load_export_table();
-		
-			if (exports) {
-				uint64_t sym_rva;
-				uint32_t sym_idx;
-				auto* mangled_name = exports->query(rva, &sym_rva, &sym_idx);
-				if (mangled_name) {
-					Symbol->TypeIndex = 0;
-					Symbol->Reserved[0] = 0;
-					Symbol->Reserved[1] = 0;
-					Symbol->Index = 0;
-					Symbol->Size = 0;
-					Symbol->ModBase = mod->base_addr;
-					Symbol->Flags = 0;
-					Symbol->Value = 0;
-					Symbol->Address = mod->base_addr + sym_rva;
-					Symbol->Register = 0;
-					Symbol->Scope = 0;
-					Symbol->Tag = (ULONG)SymTagEnum::SymTagPublicSymbol;
-
-					if (Displacement)
-						*Displacement = Address - Symbol->Address;
-		
-					Symbol->NameLen = strcpy_trunc(Symbol->Name, mangled_name, Symbol->MaxNameLen);
-					return true;
-				}
-			}
-			//res->err = "Module pdb not found and not found in export table";
-			return false;
-		}
-		
-		uint32_t sym_idx;
-		auto* sym = mod->pdb->find_symbol_for_addr(rva, &sym_idx);
-		if (!sym) {
-			//res->err = "Symbol not found";
-			return false;
-		}
-		
-		Symbol->TypeIndex = 0;
-		Symbol->Reserved[0] = 0;
-		Symbol->Reserved[1] = 0;
-		// Not the same index as dbghelp (as the indices are unstable across runs and only used for passing into other api functions)
-		// we could implement other parts of the api using our own index scheme
-		// actually, should return 0 here so that if dbghelp calls that I do not replace are called with this index, it can fail instead of being confused
-		//Symbol->Index = sym_idx;
-		Symbol->Index = 0;
-		// Size for module symbols makes sense, but for global data symbols it has to be "estimated" based on the typeinfo, which I cannot easily replicate
-		// for global function symbols it's even more weird and dbghelp seemingly sometimes computes it based on types extracted from name mangling
-		// Since can't reasonably match it I resort to jus returning 0 in those cases
-		Symbol->Size = sym->size;
-		Symbol->ModBase = mod->base_addr;
-		// Don't bother returning flags, i've only observed very few of them appear and
-		// at least SYMFLAG_EXPORT seems to be determined based on PE export table instead of pdb, which is overcomplicated imho
-		// a full 1-1 match of dbghelp behavior is probably only possibly by caching dbghelp results, which is not my goal
-		Symbol->Flags = 0;
-		Symbol->Value = 0;
-		// HACK: __ImageBase does not return an Address unlike seemingly everything else in dbghelp, super pointless but this matches dbghelp more closely
-		Symbol->Address = sym->base_addr != 0 ? mod->base_addr + sym->base_addr : 0;
-		Symbol->Register = 0;
-		Symbol->Scope = 0;
-		Symbol->Tag = (ULONG)sym->si_tag;
-
-		if (Displacement) {
-			*Displacement = Address - (mod->base_addr + sym->base_addr);
-		}
-		const char* name = mod->pdb->stralloc[sym->name];
-		Symbol->NameLen = strcpy_trunc(Symbol->Name, name, Symbol->MaxNameLen);
-		return true;
+		return get_symbol_info(cached, Address, Displacement, Symbol);
 	}
 	
 	BOOL SymGetLineFromAddr64 (
@@ -126,72 +242,34 @@ struct DbgHelpWrapperSession {
 		PDWORD           pdwDisplacement,
 		PIMAGEHLP_LINE64 Line64
 	) {
-		auto* mod = mod_cache.find_module_for_addr(qwAddr);
-		if (!mod || !mod->pdb) {
-			return false;
-		}
-		uint64_t rva = qwAddr - mod->base_addr;
+		get_symbol_lazily(qwAddr);
 		
-		uint32_t sym_idx;
-		auto* sym = mod->pdb->find_symbol_for_addr(rva, &sym_idx);
-		if (!sym) {
-			//res->err = "Symbol not found";
-			return false;
-		}
-
-		SourceLoc src_loc = {};
-		if (mod->pdb->find_source_loc_for_addr(sym, rva, &src_loc)) {
+		if (cached.sym) {
+			// common case: pdb existed and symbol was found
+			uint64_t query_rva = qwAddr - cached.mod_base;
 			
-			// "This member is reserved for use by the operating system"
-			// we just set it to 0
-			Line64->Key = nullptr;
-			Line64->LineNumber = src_loc.lineno;
-			// For some reason dbghelp returns a non-const char* pointer here, maybe because the string is a copy anyway
-			// but the string is invalidated on the next dbghelp call, so I'm not sure anybody would write into this
-			// for us this means we would technically be forced to do a copy here, but it's unlikely anybody would write into this pointer
-			// TODO: consider actually doing a copy after all
-			Line64->FileName = (char*)src_loc.filepath;
-			// "The address of the first instruction in the line"
-			Line64->Address = mod->base_addr + sym->base_addr + src_loc.line_start_offset;
+			SourceLoc src_loc = {};
+			if (cached.pdb->find_source_loc_for_addr(cached.sym, query_rva, &src_loc)) {
 			
-			if (pdwDisplacement) {
-				*pdwDisplacement = (DWORD)(qwAddr - Line64->Address);
+				// "This member is reserved for use by the operating system"
+				// we just set it to 0
+				Line64->Key = nullptr;
+				Line64->LineNumber = src_loc.lineno;
+				// For some reason dbghelp returns a non-const char* pointer here, maybe because the string is a copy anyway
+				// but the string is invalidated on the next dbghelp call, so I'm not sure anybody would write into this
+				// for us this means we would technically be forced to do a copy here, but it's unlikely anybody would write into this pointer
+				// TODO: consider actually doing a copy after all
+				Line64->FileName = (char*)src_loc.filepath;
+				// "The address of the first instruction in the line"
+				Line64->Address = cached.mod_base + cached.sym->base_addr + src_loc.line_start_offset;
+			
+				if (pdwDisplacement) {
+					*pdwDisplacement = (DWORD)(qwAddr - Line64->Address);
+				}
+				return true;
 			}
-			return true;
 		}
-
 		return false;
-	}
-
-	bool get_inlinesites (DWORD64 Address) {
-		cached.Address = Address;
-		cached.mod_base = 0;
-		cached.pdb = nullptr;
-		cached.sym = nullptr;
-		cached.num_inlines = 0;
-
-		auto* mod = mod_cache.find_module_for_addr(Address);
-		if (!mod || !mod->pdb) {
-			return false;
-		}
-		uint64_t rva = Address - mod->base_addr;
-		
-		uint32_t sym_idx;
-		auto* sym = mod->pdb->find_symbol_for_addr(rva, &sym_idx);
-		if (!sym) {
-			//res->err = "Symbol not found";
-			return false;
-		}
-
-		cached.mod_base = mod->base_addr;
-		cached.pdb = mod->pdb.get();
-		cached.sym = sym;
-
-		if (sym->inline_depth > 0) {
-			cached.num_inlines = (uint32_t)mod->pdb->trace_inlinesites_for_addr(sym, rva, cached.inlines, MAX_INLINES);
-		}
-
-		return true;
 	}
 
 	// Undocumented, but according to tracy code this returns the depth of the inline stack at the instruction at Address
@@ -200,11 +278,12 @@ struct DbgHelpWrapperSession {
 		HANDLE  hProcess,
 		DWORD64 Address
 	) {
-		if (!get_inlinesites(Address)) {
-			return 0;
-		}
+		get_inlinesites_lazily(Address);
 
-		return (DWORD)cached.num_inlines;
+		if (cached.num_inlines >= 0) {
+			return (DWORD)cached.num_inlines;
+		}
+		return 0;
 	}
 	
 	static inline constexpr ULONG ARBITARY_CTX = (ULONG)0xabcd0000u;
@@ -237,14 +316,15 @@ struct DbgHelpWrapperSession {
 			SetLastError(ERROR_BAD_ARGUMENTS);
 			return false;
 		}
+		
+		get_inlinesites_lazily(CurAddress);
 
-		if (!get_inlinesites(StartAddress)) {
-			return false;
+		if (cached.num_inlines >= 0) {
+			*CurContext = (DWORD)ARBITARY_CTX;
+			*CurFrameIndex = (DWORD)0u;
+			return true;
 		}
-
-		*CurContext = (DWORD)ARBITARY_CTX;
-		*CurFrameIndex = (DWORD)0u;
-		return true;
+		return false;
 	}
 
 	// Returns the SYMBOL_INFO for the inlinesite based on the incremented context
@@ -262,12 +342,10 @@ struct DbgHelpWrapperSession {
 		PDWORD64     Displacement,
 		PSYMBOL_INFO Symbol
 	) {
-		if (!get_inlinesites(Address)) {
-			return false;
-		}
+		get_inlinesites_lazily(Address);
 
 		uint32_t idx = InlineContext - ARBITARY_CTX;
-		if (idx >= cached.num_inlines) {
+		if (cached.num_inlines < 0 || idx >= (uint32_t)cached.num_inlines) {
 			// InlineContext out of range, return base symbol like dbghelp seems to be doing
 			return SymFromAddr(hProcess, Address, Displacement, Symbol);
 		}
@@ -306,11 +384,10 @@ struct DbgHelpWrapperSession {
 		PDWORD           pdwDisplacement,
 		PIMAGEHLP_LINE64 Line64
 	) {
-		if (!get_inlinesites(qwAddr)) {
-			return false;
-		}
+		get_inlinesites_lazily(qwAddr);
+
 		uint32_t idx = InlineContext - ARBITARY_CTX;
-		if (idx >= cached.num_inlines) {
+		if (cached.num_inlines < 0 || idx >= (uint32_t)cached.num_inlines) {
 			// InlineContext out of range, return base symbol like dbghelp seems to be doing
 			return SymGetLineFromAddr64(hProcess, qwAddr, pdwDisplacement, Line64);
 		}
@@ -336,14 +413,6 @@ struct DbgHelpWrapperSession {
 			*pdwDisplacement = (DWORD)(qwAddr - Line64->Address);
 		}
 		return true;
-	}
-	
-	// like dbghelp, copy null terminated string or truncate and _don't_ null terminate if max_len too short
-	// return truncated length instead of more useful full length like snprintf would (as dbghelp does for some reason)
-	static ULONG strcpy_trunc (char* dst, char const* src, ULONG max_len) {
-		ULONG len = (ULONG)strlen(src);
-		strcpy_s(dst, max_len, src);
-		return std::min(max_len, len);
 	}
 };
 struct DbgHelpWrapper {
@@ -425,10 +494,11 @@ extern "C" {
 		// I have no idea if I should respect any SymOptions
 		// Tracy only passes SYMOPT_LOAD_LINES (I assume not passing it makes lineinfo and inlinee line info fail?)
 		// SYMOPT_UNDNAME might be another common option, but it's out of scope for me right now
-		// for now do nothing here
+		// for now this is a no-op for us
 
+	#if ENABLE_VERIFICATION
 		real_dbghelp.SymSetOptions(SymOptions);
-		
+	#endif
 		return true;
 	}
 	
@@ -437,9 +507,10 @@ extern "C" {
 		PCSTR  SearchPath
 	) {
 		dbghelp_wrapper.set_search_path(SearchPath);
-
+		
+	#if ENABLE_VERIFICATION
 		real_dbghelp.SymSetSearchPath(hProcess, SearchPath);
-
+	#endif
 		return true;
 	}
 	BOOL __stdcall hook_SymSetSearchPathW (
@@ -447,9 +518,10 @@ extern "C" {
 		PCWSTR SearchPath
 	) {
 		dbghelp_wrapper.set_search_pathW(SearchPath);
-
+		
+	#if ENABLE_VERIFICATION
 		real_dbghelp.SymSetSearchPathW(hProcess, SearchPath);
-
+	#endif
 		return true;
 	}
 
@@ -460,9 +532,10 @@ extern "C" {
 	) {
 		dbghelp_wrapper.set_search_path(UserSearchPath);
 		dbghelp_wrapper.init(hProcess);
-
+		
+	#if ENABLE_VERIFICATION
 		real_dbghelp.SymInitialize(hProcess, UserSearchPath, fInvadeProcess);
-
+	#endif
 		return true;
 	}
 	BOOL __stdcall hook_SymInitializeW (
@@ -472,9 +545,10 @@ extern "C" {
 	) {
 		dbghelp_wrapper.set_search_pathW(UserSearchPath);
 		dbghelp_wrapper.init(hProcess);
-
-		real_dbghelp.SymInitializeW(hProcess, UserSearchPath, fInvadeProcess);
 		
+	#if ENABLE_VERIFICATION
+		real_dbghelp.SymInitializeW(hProcess, UserSearchPath, fInvadeProcess);
+	#endif
 		return true;
 	}
 	
@@ -482,9 +556,10 @@ extern "C" {
 		HANDLE hProcess
 	) {
 		dbghelp_wrapper.cleanup(hProcess);
-
+		
+	#if ENABLE_VERIFICATION
 		real_dbghelp.SymCleanup(hProcess);
-
+	#endif
 		return true;
 	}
 	
@@ -498,6 +573,7 @@ extern "C" {
 		if (dbghelp_wrapper.sess.has_value())
 			res = dbghelp_wrapper.sess->SymFromAddr(hProcess, Address, Displacement, Symbol);
 		
+	#if ENABLE_VERIFICATION
 		SYMBOL_INFO_PACKAGE sym2;
 		sym2.si = {};
 		sym2.si.SizeOfStruct = sizeof(sym2.si);
@@ -510,7 +586,7 @@ extern "C" {
 		//	logf("%s\n", Symbol->Name);
 		//if (res2)
 		//	logf("%s\n", sym2.si.Name);
-
+	#endif
 		return res;
 	}
 	BOOL __stdcall hook_SymFromAddrW (
@@ -519,7 +595,9 @@ extern "C" {
 		PDWORD64      Displacement,
 		PSYMBOL_INFOW Symbol
 	) {
-		return real_dbghelp.SymFromAddrW(hProcess, Address, Displacement, Symbol);
+		// TODO:
+		return false;
+		//return real_dbghelp.SymFromAddrW(hProcess, Address, Displacement, Symbol);
 	}
 	
 	BOOL __stdcall hook_SymGetLineFromAddr64 (
@@ -532,6 +610,7 @@ extern "C" {
 		if (dbghelp_wrapper.sess.has_value())
 			res = dbghelp_wrapper.sess->SymGetLineFromAddr64(hProcess, qwAddr, pdwDisplacement, Line64);
 		
+	#if ENABLE_VERIFICATION
 		DWORD Displacement2 = 0;
 		IMAGEHLP_LINE64 line2 = {};
 		line2.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
@@ -542,7 +621,7 @@ extern "C" {
 		//	logf("> %s:%d +%d\n", Line64->FileName, Line64->LineNumber, *pdwDisplacement);
 		//if (res2)
 		//	logf("> %s:%d +%d\n", line2.FileName, line2.LineNumber, Displacement2);
-
+	#endif
 		return res;
 	}
 	BOOL __stdcall hook_SymGetLineFromAddrW64 (
@@ -551,7 +630,9 @@ extern "C" {
 		PDWORD            pdwDisplacement,
 		PIMAGEHLP_LINEW64 Line
 	) {
-		return real_dbghelp.SymGetLineFromAddrW64(hProcess, dwAddr, pdwDisplacement, Line);
+		// TODO:
+		return false;
+		//return real_dbghelp.SymGetLineFromAddrW64(hProcess, dwAddr, pdwDisplacement, Line);
 	}
 	
 	DWORD __stdcall hook_SymAddrIncludeInlineTrace (
@@ -562,8 +643,9 @@ extern "C" {
 		if (dbghelp_wrapper.sess.has_value())
 			num_inlines = dbghelp_wrapper.sess->SymAddrIncludeInlineTrace(hProcess, Address);
 		
+	#if ENABLE_VERIFICATION
 		DWORD num_inlines2 = real_dbghelp.SymAddrIncludeInlineTrace(hProcess, Address);
-
+	#endif
 		return num_inlines;
 	}
 	
@@ -580,16 +662,17 @@ extern "C" {
 		if (dbghelp_wrapper.sess.has_value())
 			res = dbghelp_wrapper.sess->SymQueryInlineTrace(hProcess, StartAddress, StartContext, StartRetAddress, CurAddress, CurContext, CurFrameIndex);
 		
+	#if ENABLE_VERIFICATION
 		DWORD Context2 = 0;
 		DWORD FrameIndex2 = 0;
 		BOOL res2 = real_dbghelp.SymQueryInlineTrace(hProcess, StartAddress, StartContext, StartRetAddress, CurAddress, &Context2, &FrameIndex2);
 
 		assert(FrameIndex2 == 0);
 		// HACK: to properly test custom inline results against dbghelp, need to remember dbghelp returned context and reconstruct incremented context later
-		if (res && res2 && dbghelp_wrapper.sess->cached.Address == CurAddress) {
+		if (res && res2 && dbghelp_wrapper.sess->cached.address == CurAddress) {
 			dbghelp_wrapper.sess->cached.dbh_inl_ctx = (ULONG)Context2;
 		}
-
+	#endif
 		return res;
 	}
 	
@@ -608,7 +691,8 @@ extern "C" {
 			*Displacement = displacement;
 		}
 		
-		if (dbghelp_wrapper.sess->cached.Address == Address) {
+	#if ENABLE_VERIFICATION
+		if (dbghelp_wrapper.sess->cached.address == Address) {
 			ULONG dbh_InlineContext = dbghelp_wrapper.sess->cached.dbh_inl_ctx;
 			dbh_InlineContext += InlineContext - DbgHelpWrapperSession::ARBITARY_CTX;
 
@@ -641,7 +725,7 @@ extern "C" {
 			//	logf("%s sym+%d\n", sym2.si.Name, sym2.si.Address - (cached.sym->base_addr + cached.mod_base));
 			//printf("");
 		}
-
+	#endif
 		return res;
 	}
 	BOOL __stdcall hook_SymFromInlineContextW (
@@ -651,7 +735,9 @@ extern "C" {
 		PDWORD64      Displacement,
 		PSYMBOL_INFOW Symbol
 	) {
-		return real_dbghelp.SymFromInlineContextW(hProcess, Address, InlineContext, Displacement, Symbol);
+		// TODO:
+		return false;
+		//return real_dbghelp.SymFromInlineContextW(hProcess, Address, InlineContext, Displacement, Symbol);
 	}
 	
 	
@@ -671,7 +757,8 @@ extern "C" {
 			*pdwDisplacement = displacement;
 		}
 		
-		if (dbghelp_wrapper.sess->cached.Address == qwAddr) {
+	#if ENABLE_VERIFICATION
+		if (dbghelp_wrapper.sess->cached.address == qwAddr) {
 			ULONG dbh_InlineContext = dbghelp_wrapper.sess->cached.dbh_inl_ctx;
 			dbh_InlineContext += InlineContext - DbgHelpWrapperSession::ARBITARY_CTX;
 			
@@ -695,7 +782,7 @@ extern "C" {
 			//	logf("> %s:%d +%d\n", line2.FileName, line2.LineNumber, Displacement2);
 			//printf("");
 		}
-
+	#endif
 		return res;
 	}
 	BOOL __stdcall hook_SymGetLineFromInlineContextW (
@@ -706,6 +793,8 @@ extern "C" {
 		PDWORD            pdwDisplacement,
 		PIMAGEHLP_LINEW64 Line
 	) {
-		return real_dbghelp.SymGetLineFromInlineContextW(hProcess, dwAddr, InlineContext, qwModuleBaseAddress, pdwDisplacement, Line);
+		// TODO:
+		return false;
+		//return real_dbghelp.SymGetLineFromInlineContextW(hProcess, dwAddr, InlineContext, qwModuleBaseAddress, pdwDisplacement, Line);
 	}
 }

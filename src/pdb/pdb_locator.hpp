@@ -320,21 +320,34 @@ public:
 	}
 
 	const char* query (uint64_t mod_rva, uint64_t* out_sym_rva, uint32_t* out_idx) {
+		uint32_t idx;
+		if (!query_index(mod_rva, &idx))
+			return nullptr;
+
+		*out_idx = idx;
+		return get(idx, out_sym_rva);
+	}
+	
+	bool query_index (uint64_t mod_rva, uint32_t* out_idx) {
 		if (mod_rva >= INT_MAX) {
 			assert(false); // If exe is ever over 4GB, likely exports can't be in upper addresses
-			return nullptr;
+			return false;
 		}
 
 		auto dummy = Function{ (uint32_t)mod_rva, 0 };
 		auto it = std::upper_bound(functions_sorted.begin(), functions_sorted.end(), dummy, _less);
 		if (it <= functions_sorted.begin())
-			return nullptr;
+			return false;
 		it--;
 		
 		assert(mod_rva >= it->address);
 
-		*out_sym_rva = it->address;
 		*out_idx = (uint32_t)(it - functions_sorted.begin());
-		return names[it->mangled_name];
+		return true;
+	}
+	const char* get (uint32_t idx, uint64_t* out_sym_rva) {
+		auto& func = functions_sorted[idx];
+		*out_sym_rva = func.address;
+		return names[func.mangled_name];
 	}
 };
