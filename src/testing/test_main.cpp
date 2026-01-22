@@ -1,6 +1,14 @@
 #include "util.hpp"
 #include "test_runner.hpp"
 
+// NOTE: tracy seems to not support running in a dll and exe at the same time
+// so the testing application has to have TRACY_ENABLE not set if the dll want it
+// Actually it seems like TRACY_ENABLE in the dll causes problems, as tracy is actually calling our functions for symbol resolution
+// interestingly, if we name our dll dbghelp.dll, it seems to resolve symbols correctly but crash at some point as our dll (like dbghelp originally) is not thread safe
+// I thought naming the dll something like my_dbghelp would fix this, but somehow it's still broken
+// maybe because tracy is importing our exported dbghelp functions
+// so for now put tracy in the exe instead, but from tracy manual: TRACY_DBGHELP_LOCK this could be used to fix it
+
 // from util/logger.hpp; used everywhere instead of printf
 Logger g_logger("output.txt");
 
@@ -304,7 +312,7 @@ void profiling_pdb_parse (int iterations) {
 // so just try to find a good balance that is not to quick to get bad sampling results in tracy, nor too long to have to sit around waiting
 // that's why I play with the iteration counts so much
 void profiling_run () {
-	run_dbghelp = true;
+	run_dbghelp = false;
 	int mult = run_dbghelp ? 1 : 20;
 
 	example_addresses(false, false, 4000 * mult);
@@ -429,7 +437,9 @@ void test_dll () {
 void test_dll () {
 	run_dll_wrapper_as_resolver = true;
 	//example_addresses(true, true, 0);
-	example_addresses(true);
+	//example_addresses(true);
+
+	profiling_run();
 }
 
 int main(int argc, const char** argv) {

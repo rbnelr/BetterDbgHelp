@@ -68,9 +68,23 @@ struct DbgHelpWrapperSession {
 		// strcpy_s has no way of returning actually copied length, so I am forced to do a separate strlen
 		// Interestingly, this truncated copy + return truncated length operation could probably simd accelerated easily
 		// TODO: do so if this shows up at all in the profiler
-		ULONG len = (ULONG)strlen(src);
-		strcpy_s(dst, max_len, src);
-		return std::min(max_len, len);
+
+		// Actually this does not even truncate, I remember testing truncation wth?
+		//ULONG len = (ULONG)strlen(src);
+		//auto err = strcpy_s(dst, max_len, src);
+		//if (err) {
+		//	printf("Error: %s\n", src);
+		//}
+		//return std::min(max_len, len);
+
+		ULONG len = 0;
+		for (; len < max_len && src[len] != '\0'; len++) {
+			dst[len] = src[len];
+		}
+		if (len < max_len)
+			dst[len] = '\0';
+		// return written length without null terminator
+		return len;
 	}
 
 	// do base symbol lookup, store as cached
@@ -486,11 +500,11 @@ struct DbgHelpWrapper {
 			//search_paths.emplace_back(std::filesystem::current_path());
 			PDB_Locator::extra_search_paths.emplace_back(".\\");
 			
-			auto var = GetEnvVar(L"_NT_SYMBOL_PATH");
+			auto var = get_env_var(L"_NT_SYMBOL_PATH");
 			if (!var.empty()) {
 				PDB_Locator::extra_search_paths.emplace_back(std::move(var));
 			}
-			var = GetEnvVar(L"_NT_ALTERNATE_SYMBOL_PATH");
+			var = get_env_var(L"_NT_ALTERNATE_SYMBOL_PATH");
 			if (!var.empty()) {
 				PDB_Locator::extra_search_paths.emplace_back(std::move(var));
 			}
@@ -625,6 +639,10 @@ extern "C" {
 
 		BOOL res2 = real_dbghelp.SymFromAddr(hProcess, Address, &Displacement2, &sym2.si);
 		
+		if (Symbol->NameLen >= Symbol->MaxNameLen) {
+			printf("");
+		}
+
 		//if (res)
 		//	logf("%s\n", Symbol->Name);
 		//if (res2)

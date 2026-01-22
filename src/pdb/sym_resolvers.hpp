@@ -418,7 +418,7 @@ public:
 
 		BOOL res1;
 		{
-			TimerMeasZone(tSymFromAddr);
+			//TimerMeasZone(tSymFromAddr);
 			res1 = real_dbghelp.SymFromAddr(hprocess, (DWORD64)addr, nullptr, &buf.si);
 		}
 		if (!res1) {
@@ -427,7 +427,7 @@ public:
 		
 		BOOL res2;
 		{
-			TimerMeasZone(tSymGetLineFromAddr64);
+			//TimerMeasZone(tSymGetLineFromAddr64);
 
 			IMAGEHLP_LINE64 line = {};
 			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
@@ -442,27 +442,27 @@ public:
 			DWORD inlineNum = 0;
 			if (real_dbghelp.SymAddrIncludeInlineTrace) {
 				{
-					TimerMeasZone(tSymAddrIncludeInlineTrace);
+					//TimerMeasZone(tSymAddrIncludeInlineTrace);
 					inlineNum = real_dbghelp.SymAddrIncludeInlineTrace(hprocess, (DWORD64)addr);
 				}
 
 				DWORD idx;
 				if (inlineNum != 0) {
-					TimerMeasZone(tSymQueryInlineTrace);
+					//TimerMeasZone(tSymQueryInlineTrace);
 					doInline = real_dbghelp.SymQueryInlineTrace(hprocess, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
 				}
 			}
 		
 			if (doInline) {
-				TimerMeasZone(tGetInlines);
+				//TimerMeasZone(tGetInlines);
 				for (DWORD i=0; i<inlineNum; i++) {
 					{
-						TimerMeasZone(tSymFromInlineContext);
+						//TimerMeasZone(tSymFromInlineContext);
 						res1 = real_dbghelp.SymFromInlineContext(hprocess, (DWORD64)addr, ctx, NULL, &buf.si);
 					}
 				
 					if (res1) {
-						TimerMeasZone(tSymGetLineFromInlineContext);
+						//TimerMeasZone(tSymGetLineFromInlineContext);
 
 						IMAGEHLP_LINE64 line = {};
 						line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
@@ -496,13 +496,11 @@ public:
 class SymResolverBetterDebughelp : public SymResolverBase {
 	HANDLE hprocess;
 public:
-	
-#if NDEBUG
-	static inline constexpr auto* path = "x64/Release/dbghelp.dll";
-#else
-	static inline constexpr auto* path = "x64/Debug/dbghelp.dll";
-#endif
-	HMODULE dll = NULL;
+	// set TESTING_DLL_PATH in VS build settings to pick correct Debug/Release/Profiling one
+	static inline constexpr const char* path = TESTING_DLL_PATH;
+
+	//HMODULE dll = NULL;
+	inline static HMODULE dll = NULL;
 	t_SymInitialize               _SymInitialize               = nullptr;
 	t_SymSetOptions               _SymSetOptions               = nullptr;
 	t_SymCleanup                  _SymCleanup                  = nullptr;
@@ -526,7 +524,17 @@ public:
 	SymResolverBetterDebughelp (HANDLE hprocess): hprocess{hprocess} {
 		TimerMeasZone(tDebughelp_init);
 		
-		dll = LoadLibraryA(path);
+		//dll = LoadLibraryA(path);
+		// Load dll lazily for now and keep it loaded
+		// maybe loading and unloading is causing problems when trying to profile with tracy?
+
+		// It seems like in my test code this was fine, but somehow with tracy this was causing random crashes in tracy?
+		// (even after editing tracy code so it does not accidentally call our dbghelp.dll)
+		// NOTE: unload calls FreeLibrary, and the OS refcounts dlls, so this should be actually unloading the real dbghelp.dll for us
+		// weirdly, this is our dll, but my tracy code was in the exe, I have no idea how this even affects each other unless dbghelp does something weird
+		if (!dll)
+			dll = LoadLibraryA(path);
+
 		_SymInitialize               = (t_SymInitialize              )GetProcAddress(dll, "SymInitialize");
 		_SymSetOptions               = (t_SymSetOptions              )GetProcAddress(dll, "SymSetOptions");
 		_SymCleanup                  = (t_SymCleanup                 )GetProcAddress(dll, "SymCleanup");
@@ -565,6 +573,8 @@ public:
 	}
 	virtual ~SymResolverBetterDebughelp () {
 		_SymCleanup(hprocess);
+		
+		//FreeLibrary(dll);
 	}
 
 	virtual bool addr2sym (void* addr, SymResult* res) override {
@@ -650,7 +660,7 @@ public:
 	}
 	
 	virtual void measure_addr2sym (char* addr) override {
-		ZoneScopedC(0xAC563E);
+		ZoneScoped;
 
 		SYMBOL_INFO_PACKAGE buf;
 		buf.si = {};
@@ -663,7 +673,8 @@ public:
 
 		BOOL res1;
 		{
-			TimerMeasZone(tSymFromAddr);
+			//TimerMeasZone(tSymFromAddr);
+			//ZoneScopedN("SymFromAddr");
 			res1 = _SymFromAddr(hprocess, (DWORD64)addr, nullptr, &buf.si);
 		}
 		if (!res1) {
@@ -672,7 +683,8 @@ public:
 		
 		BOOL res2;
 		{
-			TimerMeasZone(tSymGetLineFromAddr64);
+			//TimerMeasZone(tSymGetLineFromAddr64);
+			//ZoneScopedN("SymGetLineFromAddr64");
 
 			IMAGEHLP_LINE64 line = {};
 			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
@@ -687,13 +699,15 @@ public:
 			DWORD inlineNum = 0;
 			if (_SymAddrIncludeInlineTrace) {
 				{
-					TimerMeasZone(tSymAddrIncludeInlineTrace);
+					//TimerMeasZone(tSymAddrIncludeInlineTrace);
+					//ZoneScopedN("SymAddrIncludeInlineTrace");
 					inlineNum = _SymAddrIncludeInlineTrace(hprocess, (DWORD64)addr);
 				}
 
 				DWORD idx;
 				if (inlineNum != 0) {
-					TimerMeasZone(tSymQueryInlineTrace);
+					//TimerMeasZone(tSymQueryInlineTrace);
+					//ZoneScopedN("SymQueryInlineTrace");
 					doInline = _SymQueryInlineTrace(hprocess, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
 				}
 			}
@@ -702,12 +716,14 @@ public:
 				TimerMeasZone(tGetInlines);
 				for (DWORD i=0; i<inlineNum; i++) {
 					{
-						TimerMeasZone(tSymFromInlineContext);
+						//TimerMeasZone(tSymFromInlineContext);
+						//ZoneScopedN("SymFromInlineContext");
 						res1 = _SymFromInlineContext(hprocess, (DWORD64)addr, ctx, NULL, &buf.si);
 					}
 				
 					if (res1) {
-						TimerMeasZone(tSymGetLineFromInlineContext);
+						//TimerMeasZone(tSymGetLineFromInlineContext);
+						//ZoneScopedN("SymGetLineFromInlineContext");
 
 						IMAGEHLP_LINE64 line = {};
 						line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);

@@ -45,9 +45,9 @@ using namespace kiss;
 //#undef BF_TOP
 //#undef ERROR
 
-#define TRACY_MEMORY_PROFILING 1
+#define TRACY_MEMORY_PROFILING 0
 
-#if TRACY_MEMORY_PROFILING
+#if TRACY_ENABLE && TRACY_MEMORY_PROFILING
 // Track standard memory allocation via tracy
 // (VirtualAlloc is tracked seperately)
 void* operator new (std::size_t count) {
@@ -98,7 +98,7 @@ inline std::wstring str2wstr (const std::string& str) {
 	return wstr;
 }
 
-std::wstring GetEnvVar (const wchar_t* name) {
+inline std::wstring get_env_var (const wchar_t* name) {
 	DWORD len = GetEnvironmentVariableW(name, nullptr, 0);
 	if (len == 0) {
 		return L"";

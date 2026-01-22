@@ -12,7 +12,9 @@ BOOL WINAPI DllMain (HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 			real_dbghelp.load_if_not_loaded_yet();
 		} break;
 		case DLL_PROCESS_DETACH: {
-			real_dbghelp.unload();
+			// Don't unload real dll for now, we probably need to refcount since these DLL_PROCESS_ATTACH can be called multiple times (once for each LoadLibrary on the user)
+			// instead we might want to move this to a global variable and use ctor/dtor after all?
+			//real_dbghelp.unload();
 		} break;
 	}
 	return TRUE;

@@ -1512,6 +1512,7 @@ struct DebughelpApi {
 		if (dll_handle != NULL) {
 			FreeLibrary(dll_handle);
 		}
+		dll_handle = NULL;
 	}
 	bool load_if_not_loaded_yet () {
 		if (dll_handle != NULL)
