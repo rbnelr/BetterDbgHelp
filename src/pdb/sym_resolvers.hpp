@@ -4,7 +4,23 @@
 #include "module_lookup.hpp"
 #include "dbghelp_api.hpp"
 
-class SymResolver {
+class SymResolverBase {
+public:
+	virtual ~SymResolverBase () {}
+	
+	virtual bool addr2sym (void* ptr, SymResult* res) = 0;
+	virtual void measure_addr2sym (char* ptr) {}
+	virtual void measure_pdb_parse (void* ptr) {}
+	
+	virtual bool has_symbol_for_addr (void* ptr, SymResult const& dbghelp_res) {
+		return false;
+	}
+	
+	virtual void print_pdb_stats (void* ptr) {}
+	virtual void print_timings () {}
+};
+
+class SymResolver : public SymResolverBase {
 	ModuleCache mod_cache;
 	
 	TimerMeasurement tfind_symbol_for_addr = TimerMeasurement("find_symbol_for_addr");
@@ -14,14 +30,9 @@ class SymResolver {
 
 public:
 	SymResolver (HANDLE hprocess): mod_cache{hprocess} {}
+	virtual ~SymResolver () {}
 	
-	void measure_addr2sym (char* ptr) {
-		SymResult res;
-		measure_addr2sym(ptr, &res);
-		res.dont_optimize_away();
-	}
-	
-	bool addr2sym (void* ptr, SymResult* res) {
+	virtual bool addr2sym (void* ptr, SymResult* res) override {
 		res->clear();
 		uint64_t addr = (uint64_t)ptr;
 
@@ -111,13 +122,19 @@ public:
 
 		return res->valid();
 	}
+	
+	virtual void measure_addr2sym (char* ptr) override {
+		SymResult res;
+		measure_addr2sym(ptr, &res);
+		res.dont_optimize_away();
+	}
 
 	// In cases where multiple symbols exist at one address, we will sometimes pick a different one than dbghelp
 	// This function was meant to test if the symbol dbghelp returned existed in the pdb at all (to differentiate bugs from simply picking the wrong symbol which I can't do anything about afaik)
 	// But originally this required extra logic, and now that I optimized and built custom data structures these extra symbols don't exist anymore
 	// This could be re-implemented at some point
 	// Though instead of implementing this, I'd rather implement a method where all symbols at an address can be iterated instead and let the caller implement the check itself
-	bool has_symbol_for_addr (void* ptr, SymResult const& dbghelp_res) {
+	virtual bool has_symbol_for_addr (void* ptr, SymResult const& dbghelp_res) override {
 		/*
 		uint64_t addr = (uint64_t)ptr;
 		
@@ -137,7 +154,7 @@ public:
 	}
 	
 	__declspec(noinline)
-	void measure_pdb_parse (void* ptr) {
+	virtual void measure_pdb_parse (void* ptr) override {
 		auto* mod = mod_cache.find_module_for_addr((uint64_t)ptr);
 		mod_cache.clear(); // clear cache so this can be called repeatedly
 	}
@@ -239,12 +256,12 @@ public:
 		return _measure_addr2sym(addr, mod, res);
 	}
 	
-	void print_pdb_stats (void* ptr) {
+	virtual void print_pdb_stats (void* ptr) override {
 		auto* mod = mod_cache.find_module_for_addr((uint64_t)ptr);
 		if (mod->pdb) mod->pdb->print_stats();
 	}
 
-	void print_timings () {
+	virtual void print_timings () override {
 		mod_cache.ttry_get_and_cache_module.print();
 		mod_cache.tload_pdb.print();
 		tfind_symbol_for_addr.print();
@@ -357,12 +374,15 @@ public:
 
 			DWORD idx;
 			if (inlineNum != 0) {
+				// returned idx seems to be 0, not sure what it would be used for either
 				doInline = real_dbghelp.SymQueryInlineTrace(hprocess, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
+				//logf("real_dbghelp.SymQueryInlineTrace: doInline=%d, ctx:%x, idx:%d\n", doInline, ctx, idx);
 			}
 		}
 		
 		if (doInline) {
 			res->num_inlines = (int)inlineNum;
+			//res->num_inlines = (int)inlineNum + 2; // reverse engineering: see what SymFromInlineContext return if you keep incrementing ctx
 			for (int i=res->num_inlines-1; i>=0; i--) {
 				res->inlines[i] = {};
 
@@ -454,6 +474,248 @@ public:
 	}
 
 	void print_timings () {
+		tDebughelp_init.print();
+
+		tSymFromAddr.print();
+		tSymGetLineFromAddr64.print();
+
+		tSymAddrIncludeInlineTrace.print();
+		tSymQueryInlineTrace.print();
+		tSymFromInlineContext.print();
+		tSymGetLineFromInlineContext.print();
+		tCombinedAddr2sym.print();
+	}
+};
+
+// This is a bit awkward, I designed my test framework with SymResult and SymResolver and SymResolverDebughelp
+// But now I want to test my dbghelp dll wrapper code which obviously has the same API as dbgehlp
+// So I'm just gonna make a copy SymResolverDebughelp for the moment and have it call my dbghelp instead
+class SymResolverBetterDebughelp : public SymResolverBase {
+	HANDLE hprocess;
+public:
+	
+#if NDEBUG
+	static inline constexpr auto* path = "x64/Release/dbghelp.dll";
+#else
+	static inline constexpr auto* path = "x64/Debug/dbghelp.dll";
+#endif
+	HMODULE dll = NULL;
+	t_SymInitialize               _SymInitialize               = nullptr;
+	t_SymSetOptions               _SymSetOptions               = nullptr;
+	t_SymCleanup                  _SymCleanup                  = nullptr;
+	t_SymFromAddr                 _SymFromAddr                 = nullptr;
+	t_SymGetLineFromAddr64        _SymGetLineFromAddr64        = nullptr;
+	t_SymAddrIncludeInlineTrace   _SymAddrIncludeInlineTrace   = nullptr;
+	t_SymQueryInlineTrace         _SymQueryInlineTrace         = nullptr;
+	t_SymFromInlineContext        _SymFromInlineContext        = nullptr;
+	t_SymGetLineFromInlineContext _SymGetLineFromInlineContext = nullptr;
+
+	TimerMeasurement tDebughelp_init = TimerMeasurement("Debughelp_init");
+	TimerMeasurement tSymFromAddr = TimerMeasurement("SymFromAddr");
+	TimerMeasurement tSymGetLineFromAddr64 = TimerMeasurement("SymGetLineFromAddr64");
+	TimerMeasurement tSymAddrIncludeInlineTrace = TimerMeasurement("SymAddrIncludeInlineTrace");
+	TimerMeasurement tSymQueryInlineTrace = TimerMeasurement("SymQueryInlineTrace");
+	TimerMeasurement tSymFromInlineContext = TimerMeasurement("SymFromInlineContext");
+	TimerMeasurement tSymGetLineFromInlineContext = TimerMeasurement("SymGetLineFromInlineContext");
+	TimerMeasurement tCombinedAddr2sym = TimerMeasurement("CombinedAddr2sym");
+
+	SymResolverBetterDebughelp (HANDLE hprocess): hprocess{hprocess} {
+		TimerMeasZone(tDebughelp_init);
+		
+		dll = LoadLibraryA(path);
+		_SymInitialize               = (t_SymInitialize              )GetProcAddress(dll, "SymInitialize");
+		_SymSetOptions               = (t_SymSetOptions              )GetProcAddress(dll, "SymSetOptions");
+		_SymCleanup                  = (t_SymCleanup                 )GetProcAddress(dll, "SymCleanup");
+		_SymFromAddr                 = (t_SymFromAddr                )GetProcAddress(dll, "SymFromAddr");
+		_SymGetLineFromAddr64        = (t_SymGetLineFromAddr64       )GetProcAddress(dll, "SymGetLineFromAddr64");
+		_SymAddrIncludeInlineTrace   = (t_SymAddrIncludeInlineTrace  )GetProcAddress(dll, "SymAddrIncludeInlineTrace");
+		_SymQueryInlineTrace         = (t_SymQueryInlineTrace        )GetProcAddress(dll, "SymQueryInlineTrace");
+		_SymFromInlineContext        = (t_SymFromInlineContext       )GetProcAddress(dll, "SymFromInlineContext");
+		_SymGetLineFromInlineContext = (t_SymGetLineFromInlineContext)GetProcAddress(dll, "SymGetLineFromInlineContext");
+		
+		std::string search_path;
+		{ // Need to set search_path because dbhelp.dll does not search next to exe for pdb, instead searching this processes working directory
+			char exe_name[1024];
+			DWORD size = sizeof(exe_name);
+			if (!QueryFullProcessImageNameA(hprocess, 0, exe_name, &size)) {
+				print_err_throw("QueryFullProcessImageNameA");
+			}
+
+			std::filesystem::path exe_path = std::string_view(exe_name, size);
+			search_path = exe_path.has_parent_path() ? exe_path.parent_path().string() : ".";
+		}
+
+		DWORD opts = 0;
+		opts |= SYMOPT_LOAD_LINES;         // line info
+		//opts |= SYMOPT_UNDNAME;            // undecorate C++ names, tracy does not use this
+		_SymSetOptions(opts);
+
+		// This means load symbol information for currently loaded modules
+		// Tracy is using this, but then also calling SymLoadModuleEx later (since modules can be loaded later)
+		// In my case I just want to measure symbol resolution performance and I assume the modules I'm interested in are already loaded
+		BOOL fInvadeProcess = TRUE;
+		if (!_SymInitialize(hprocess, search_path.c_str(), fInvadeProcess)) {
+			print_err_throw("SymInitialize");
+		}
+
+	}
+	virtual ~SymResolverBetterDebughelp () {
+		_SymCleanup(hprocess);
+	}
+
+	virtual bool addr2sym (void* addr, SymResult* res) override {
+		res->clear();
+		
+		SYMBOL_INFO_PACKAGE buf;
+		buf.si = {};
+		buf.si.SizeOfStruct = sizeof(buf.si);
+		buf.si.MaxNameLen = MAX_SYM_NAME;
+
+		DWORD Displacement = 0;
+
+		if (!_SymFromAddr(hprocess, (DWORD64)addr, nullptr, &buf.si)) {
+			res->err = "SymFromAddr error";
+			return false;
+		}
+
+		memcpy(&res->info, &buf.si, SymResult::INFO_RELEVANT_SIZE);
+
+		constexpr uint32_t SEEN_FLAGS =
+			SYMFLAG_FUNC_NO_RETURN |
+			SYMFLAG_EXPORT |
+			SYMFLAG_PUBLIC_CODE;
+		assert((res->info.Flags & ~SEEN_FLAGS) == 0);
+		assert(res->info.Value == 0);
+		assert(res->info.Register == 0);
+		assert(res->info.Scope == 0);
+		assert(
+			   res->info.Tag == 5 // SymTagFunction
+			|| res->info.Tag == 7 // SymTagData
+			|| res->info.Tag == 10 // SymTagPublicSymbol
+			|| res->info.Tag == 27 // SymTagThunk
+		);
+
+		// need to copy into per-SymResult string buffer
+		res->module_path = nullptr; // dbghelp.dll does not seem to return this, module_path is mainly for completeness sake, tracy actually determines this itself
+		res->sym_name = res->str_alloc.push(buf.si.Name, buf.si.NameLen);
+		res->src_filepath = nullptr;
+		res->src_lineno = 0;
+		
+		{
+			IMAGEHLP_LINE64 line = {};
+			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+			if (_SymGetLineFromAddr64(hprocess, (DWORD64)addr, &Displacement, &line)) {
+				res->src_filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
+				res->src_lineno = line.LineNumber;
+			}
+		}
+
+		BOOL doInline = FALSE;
+		DWORD ctx = 0;
+		DWORD inlineNum = 0;
+		if (_SymAddrIncludeInlineTrace) {
+			inlineNum = _SymAddrIncludeInlineTrace(hprocess, (DWORD64)addr);
+
+			DWORD idx;
+			if (inlineNum != 0) {
+				doInline = _SymQueryInlineTrace(hprocess, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
+			}
+		}
+		
+		if (doInline) {
+			res->num_inlines = (int)inlineNum;
+			//res->num_inlines = (int)inlineNum + 2; // reverse engineering: see what SymFromInlineContext return if you keep incrementing ctx
+			for (int i=res->num_inlines-1; i>=0; i--) {
+				res->inlines[i] = {};
+
+				if (_SymFromInlineContext(hprocess, (DWORD64)addr, ctx, NULL, &buf.si)) {
+					res->inlines[i].fnname = res->str_alloc.push(buf.si.Name, buf.si.NameLen);
+					
+					IMAGEHLP_LINE64 line = {};
+					line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+					if (_SymGetLineFromInlineContext(hprocess, (DWORD64)addr, ctx, 0, &Displacement, &line)) {
+						res->inlines[i].filepath = res->str_alloc.push(line.FileName, strlen(line.FileName));
+						res->inlines[i].lineno = line.LineNumber;
+					}
+				}
+
+				ctx++;
+			}
+		}
+		return res->valid();
+	}
+	
+	virtual void measure_addr2sym (char* addr) override {
+		ZoneScopedC(0xAC563E);
+
+		SYMBOL_INFO_PACKAGE buf;
+		buf.si = {};
+		buf.si.SizeOfStruct = sizeof(buf.si);
+		buf.si.MaxNameLen = MAX_SYM_NAME;
+
+		//TimerMeasZone(tCombinedAddr2sym);
+
+		DWORD Displacement = 0;
+
+		BOOL res1;
+		{
+			//TimerMeasZone(tSymFromAddr);
+			res1 = _SymFromAddr(hprocess, (DWORD64)addr, nullptr, &buf.si);
+		}
+		if (!res1) {
+			return;
+		}
+		
+		BOOL res2;
+		{
+			//TimerMeasZone(tSymGetLineFromAddr64);
+
+			IMAGEHLP_LINE64 line = {};
+			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+			res2 = _SymGetLineFromAddr64(hprocess, (DWORD64)addr, &Displacement, &line);
+		}
+		
+		{
+			//ZoneScopedNC("inlining", 0xAC563E);
+		
+			BOOL doInline = FALSE;
+			DWORD ctx = 0;
+			DWORD inlineNum = 0;
+			if (_SymAddrIncludeInlineTrace) {
+				{
+					//TimerMeasZone(tSymAddrIncludeInlineTrace);
+					inlineNum = _SymAddrIncludeInlineTrace(hprocess, (DWORD64)addr);
+				}
+
+				DWORD idx;
+				if (inlineNum != 0) {
+					//TimerMeasZone(tSymQueryInlineTrace);
+					doInline = _SymQueryInlineTrace(hprocess, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
+				}
+			}
+		
+			if (doInline) {
+				for (DWORD i=0; i<inlineNum; i++) {
+					{
+						//TimerMeasZone(tSymFromInlineContext);
+						res1 = _SymFromInlineContext(hprocess, (DWORD64)addr, ctx, NULL, &buf.si);
+					}
+				
+					if (res1) {
+						//TimerMeasZone(tSymGetLineFromInlineContext);
+
+						IMAGEHLP_LINE64 line = {};
+						line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+						res2 = _SymGetLineFromInlineContext(hprocess, (DWORD64)addr, ctx, 0, &Displacement, &line);
+					}
+
+					ctx++;
+				}
+			}
+		}
+	}
+
+	virtual void print_timings () override {
 		tDebughelp_init.print();
 
 		tSymFromAddr.print();

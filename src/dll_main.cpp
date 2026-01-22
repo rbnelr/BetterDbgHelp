@@ -3,6 +3,9 @@
 #include "dbghelp_dll_forward.hpp"
 #include "dbghelp_dll_wrapper.hpp"
 
+// from util/logger.hpp; used everywhere instead of printf
+Logger g_logger("BetterDbgHelp-output.txt");
+
 BOOL WINAPI DllMain (HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 	switch (fdwReason) {
 		case DLL_PROCESS_ATTACH: {

@@ -52,7 +52,7 @@ enum class SymTagEnum : uint8_t { // NOTE: type size not specified in the origin
     SymTagManagedType,
     SymTagDimension,
     SymTagCallSite,
-    SymTagInlineSite,
+    SymTagInlineSite, // 32
     SymTagBaseInterface,
     SymTagVectorType,
     SymTagMatrixType,

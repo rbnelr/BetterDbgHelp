@@ -1,6 +1,9 @@
 #include "util.hpp"
 #include "test_runner.hpp"
 
+// from util/logger.hpp; used everywhere instead of printf
+Logger g_logger("output.txt");
+
 void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 	ZoneScoped;
 	
@@ -370,6 +373,7 @@ inline __declspec(noinline) void mySuperLongFunctionName_asikudghauyfghisudgfhiu
 	printf("");
 }
 
+#if 0
 void test_dll () {
 #if NDEBUG
 	auto* path = "x64/Release/dbghelp.dll";
@@ -420,6 +424,11 @@ void test_dll () {
 	_SymCleanup(proc);
 
 	FreeLibrary(dll);
+}
+#endif
+void test_dll () {
+	run_dll_wrapper_as_resolver = true;
+	example_addresses(true, true, 0);
 }
 
 int main(int argc, const char** argv) {

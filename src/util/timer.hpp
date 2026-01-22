@@ -4,6 +4,7 @@
 #include <limits>
 #include <algorithm>
 #include <assert.h>
+#include "util/logger.hpp"
 
 namespace kiss {
 	uint64_t get_timestamp ();
@@ -32,10 +33,10 @@ namespace kiss {
 		~TimerPrintZone () {
 			auto ms = t.elapsed_sec() * 1000.0f;
 			if (divisor == 0) {
-				printf("|Timer %s: total %7.3f ms\n", name, ms);
+				logf("|Timer %s: total %7.3f ms\n", name, ms);
 			}
 			else {
-				printf("|Timer %s: avg %7.3f ms (%dx)\n", name, ms, divisor);
+				logf("|Timer %s: avg %7.3f ms (%dx)\n", name, ms, divisor);
 			}
 		}
 	};
@@ -60,7 +61,7 @@ namespace kiss {
 
 		void print () {
 			auto ms = count > 0 ? (total_sec / (float)count) * 1000000.0f : 0.0f;
-			printf("|Timer %-30s: avg %7.3f us (%dx) min=%7.3f max=%7.3f\n", name, ms, count, min_sec*1000000.0f, max_sec*1000000.0f);
+			logf("|Timer %-30s: avg %7.3f us (%dx) min=%7.3f max=%7.3f\n", name, ms, count, min_sec*1000000.0f, max_sec*1000000.0f);
 		}
 	};
 	struct TimerMeasureZone {

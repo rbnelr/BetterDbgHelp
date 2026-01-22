@@ -1256,7 +1256,7 @@ class PdbReader {
 						cur_symbol = push_symbol(s->off, s->len, s->seg, SymTagEnum::SymTagThunk, (const char*)s->name);
 					} break;
 					// These are tricky:
-					// (I stupidly only used release mode executables in my testing until the very end so I never found these)
+					// (Stupidly, I used onlyrelease mode executables in my testing until now so I never saw these)
 					// In debug mode, all functions calls in your exe go through an indrection (a big table of jmp instructions called thunks, just like how dllimport functions work)
 					// afaik this is to support things like edit and continue and incremental linking, so allowing patching function binaries with new versions without invalidating all the code that might be calling the old ones
 					// my code was already handling the function body itself, but I was extremly confused when I took function pointers in my executable and tried to find the symbol only to get nothing in my own implementation

@@ -1,5 +1,4 @@
 #pragma once
-
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -17,12 +16,22 @@ public:
 	}
 
 	void vlogf (const char* format, va_list args) {
+		// Cannot reuse va_list!, need to use va_copy
+		va_list args2;
+		va_copy(args2, args);
+
 		vfprintf(stdout, format, args);
+		fflush(stdout);
+
+		va_end(args2);
+		
 		vfprintf(log_file, format, args);
+		fflush(log_file);
 	}
 };
 
-inline Logger g_logger("output.txt");
+// define elsewhere
+extern Logger g_logger;
 
 inline void logf (const char* format, ...) {
 	va_list args;

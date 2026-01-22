@@ -1,7 +1,7 @@
 #pragma once
-#ifndef _CRT_SECURE_NO_WARNINGS
-	#define _CRT_SECURE_NO_WARNINGS 1
-#endif
+//#ifndef _CRT_SECURE_NO_WARNINGS
+//	#define _CRT_SECURE_NO_WARNINGS 1
+//#endif
 
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
@@ -17,13 +17,13 @@
 #include <filesystem>
 #include <fstream>
 
+#include "util/logger.hpp"
+#include "util/timer.hpp"
+using namespace kiss;
+
 #include "ankerl/unordered_dense.h"
 
 #include "tracy/Tracy.hpp"
-
-#include "util/timer.hpp"
-#include "util/logger.hpp"
-using namespace kiss;
 
 #ifndef WIN32_LEAN_AND_MEAN
 	#define WIN32_LEAN_AND_MEAN
@@ -480,13 +480,13 @@ struct StrAlloc {
 	}
 
 	void print_dump () const {
-		printf("StrAlloc:\n");
+		logf("StrAlloc:\n");
 
 		char const* cur = v.data();
 		char const* end = cur + v.size();
 
 		while (cur < end) {
-			printf("> [%8llx] %s\n", cur - v.data(), cur);
+			logf("> [%8llx] %s\n", cur - v.data(), cur);
 			cur += strlen(cur)+1;
 		}
 	}

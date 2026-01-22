@@ -7,6 +7,7 @@
 #pragma comment(lib, "Kernel32.lib")
 
 bool run_dbghelp = true;
+bool run_dll_wrapper_as_resolver = false;
 bool clear_cpu_cache = false;
 void _clear_cpu_cache ();
 bool print_timings = true;
@@ -56,7 +57,7 @@ class TestRunner {
 	LoadedModules loaded_modules;
 
 	std::unique_ptr<SymResolverDebughelp> dbghelp;
-	std::unique_ptr<SymResolver> resolver;
+	std::unique_ptr<SymResolverBase> resolver;
 	
 	void start_debugging_child_process (std::string const& exe_filepath, float max_run_time) {
 		ZoneScopedC(0xff0000);
@@ -199,7 +200,12 @@ public:
 		start_debugging_child_process(exe_filepath, max_run_time);
 		if (run_dbghelp)
 			dbghelp = std::make_unique<SymResolverDebughelp>(pi.hProcess);
-		resolver = std::make_unique<SymResolver>(pi.hProcess);
+		if (run_dll_wrapper_as_resolver) {
+			resolver = std::make_unique<SymResolverBetterDebughelp>(pi.hProcess);
+		}
+		else {
+			resolver = std::make_unique<SymResolver>(pi.hProcess);
+		}
 	}
 
 	~TestRunner () {

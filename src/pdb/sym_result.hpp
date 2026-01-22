@@ -2,7 +2,7 @@
 #include "util.hpp"
 #include "pdb.hpp"
 
-class SymResolver;
+class SymResolverBase;
 struct SymResult;
 
 struct MismatchCounts {
@@ -38,7 +38,7 @@ struct MismatchCounts {
 	// horrible way to pass this data
 	struct Data {
 		MismatchCounts* counts = nullptr;
-		SymResolver* resolver;
+		SymResolverBase* resolver;
 		void* addr;
 	};
 	void symbol_mismatch_or_mangled (SymResult const& res, SymResult const& dbghelp_res, Data const& d);

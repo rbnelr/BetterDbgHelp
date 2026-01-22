@@ -72,7 +72,7 @@ no idea why actually, the data is less compact, is it just less branching, or ju
 and compressed annotations are still stored alongside, so inlines should be a lot more bloated and may cause more cache misses? unless prefetcher works well
 -24% total (compared to initial)
 -66% trace inlines (compared to initial)
-wtf, how? opcode did have lots of branching, so I figure this fixes that, but I had assumed the size bloat would counter this
+wtf, how? opcode did have lots of bra3nching, so I figure this fixes that, but I had assumed the size bloat would counter this
 
 ========== load_pdb optimization ==============
 use memory mapped file instead of copying entire into ram (still copying another time due to pdb paging)

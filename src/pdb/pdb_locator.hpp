@@ -219,7 +219,7 @@ public:
 		catch (std::exception& ex) {
 			throw std::runtime_error((exe_path.string() +": ")+ ex.what());
 		}
-		//printf(">> %s ->\n>>> symbol_server_url: %s\n>>> cache_path: %s\n", filepath.c_str(), symbol_server_url.c_str(), cache_path.u8string().c_str());
+		//logf(">> %s ->\n>>> symbol_server_url: %s\n>>> cache_path: %s\n", filepath.c_str(), symbol_server_url.c_str(), cache_path.u8string().c_str());
 	}
 
 	// This way of finding pdbs may not actually match what dbghelp does, but it made sense for me
