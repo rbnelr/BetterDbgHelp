@@ -110,21 +110,44 @@ struct DbgHelpWrapperSession {
 			}
 		}
 	}
-	// get symbol as cached (run symbol lookup)
-	void get_symbol_lazily (DWORD64 Address) {
-		return get_and_cache_symbol(Address);
+
+	// TODO: could make these two functions return pointer to CachedResult, which would enable caching multiple results
+	// tracy does not require caching multiple,
+	// but debuggers may keep track of multiple symbols and stacktraces and get lineinfo later on UI interaction
+	// Though this should only be done if the callers behavior is understood
+	// Another reason would be if multiple "sessions" are needed, we could have both ModuleCache and CachedResult be keyed based on hProcess + Address
+
+	// get symbol from cache (run symbol lookup)
+	void get_symbol_from_cache (DWORD64 Address) {
+		if (cached.address == Address) {
+			// symbol already cached
+			return;
+		}
+		get_and_cache_symbol(Address);
 	}
-	// get inlinesites as cached (run trace_inlinesites_for_addr)
-	void get_inlinesites_lazily (DWORD64 Address) {
-		get_symbol_lazily(Address);
+	// get inlinesites from cache (run trace_inlinesites_for_addr)
+	void get_inlinesites_from_cache (DWORD64 Address) {
+		if (cached.address == Address && cached.num_inlines >= 0) {
+			assert(cached.sym);
+			// fastpath: inlinesites already cached
+			return;
+		}
+
+		get_symbol_from_cache(Address);
 		
 		if (cached.sym) {
-			// common case: pdb existed and symbol was found
+			// pdb existed and symbol was found
+
+			cached.num_inlines = 0;
 			uint64_t query_rva = Address - cached.mod_base;
 
 			if (cached.sym->inline_depth > 0) {
-				cached.num_inlines = (uint32_t)cached.pdb->trace_inlinesites_for_addr(cached.sym, query_rva, cached.inlines, MAX_INLINES);
+				
+		ZoneScoped;
+				cached.num_inlines = cached.pdb->trace_inlinesites_for_addr(cached.sym, query_rva, cached.inlines, MAX_INLINES);
 			}
+
+			assert(cached.num_inlines >= 0);
 		}
 	}
 
@@ -170,7 +193,9 @@ struct DbgHelpWrapperSession {
 		PSYMBOL_INFO Symbol
 	) {
 		if (cached.sym) {
-			// common case: pdb existed and symbol was found
+			// fastpath: pdb existed and symbol was found
+			assert(cached.pdb);
+			assert(cached.address == Address);
 
 			Symbol->TypeIndex = 0;
 			Symbol->Reserved[0] = 0;
@@ -231,7 +256,7 @@ struct DbgHelpWrapperSession {
 		PDWORD64     Displacement,
 		PSYMBOL_INFO Symbol
 	) {
-		get_symbol_lazily(Address);
+		get_symbol_from_cache(Address);
 		
 		return get_symbol_info(cached, Address, Displacement, Symbol);
 	}
@@ -242,10 +267,12 @@ struct DbgHelpWrapperSession {
 		PDWORD           pdwDisplacement,
 		PIMAGEHLP_LINE64 Line64
 	) {
-		get_symbol_lazily(qwAddr);
+		get_symbol_from_cache(qwAddr);
 		
 		if (cached.sym) {
-			// common case: pdb existed and symbol was found
+			// fastpath: pdb existed and symbol was found
+			assert(cached.pdb);
+			assert(cached.address == qwAddr);
 			uint64_t query_rva = qwAddr - cached.mod_base;
 			
 			SourceLoc src_loc = {};
@@ -278,7 +305,7 @@ struct DbgHelpWrapperSession {
 		HANDLE  hProcess,
 		DWORD64 Address
 	) {
-		get_inlinesites_lazily(Address);
+		get_inlinesites_from_cache(Address);
 
 		if (cached.num_inlines >= 0) {
 			return (DWORD)cached.num_inlines;
@@ -317,7 +344,7 @@ struct DbgHelpWrapperSession {
 			return false;
 		}
 		
-		get_inlinesites_lazily(CurAddress);
+		get_inlinesites_from_cache(CurAddress);
 
 		if (cached.num_inlines >= 0) {
 			*CurContext = (DWORD)ARBITARY_CTX;
@@ -342,15 +369,16 @@ struct DbgHelpWrapperSession {
 		PDWORD64     Displacement,
 		PSYMBOL_INFO Symbol
 	) {
-		get_inlinesites_lazily(Address);
+		get_inlinesites_from_cache(Address);
 
 		uint32_t idx = InlineContext - ARBITARY_CTX;
 		if (cached.num_inlines < 0 || idx >= (uint32_t)cached.num_inlines) {
 			// InlineContext out of range, return base symbol like dbghelp seems to be doing
+			// TODO: this does unnecessary checks right now
 			return SymFromAddr(hProcess, Address, Displacement, Symbol);
 		}
 		// dbghelp returns results of the stack top-down
-		idx = cached.num_inlines-1 - idx;
+		idx = (uint32_t)cached.num_inlines-1 - idx;
 
 		auto& inl = cached.inlines[idx];
 		
@@ -384,16 +412,17 @@ struct DbgHelpWrapperSession {
 		PDWORD           pdwDisplacement,
 		PIMAGEHLP_LINE64 Line64
 	) {
-		get_inlinesites_lazily(qwAddr);
+		get_inlinesites_from_cache(qwAddr);
 
 		uint32_t idx = InlineContext - ARBITARY_CTX;
 		if (cached.num_inlines < 0 || idx >= (uint32_t)cached.num_inlines) {
 			// InlineContext out of range, return base symbol like dbghelp seems to be doing
+			// TODO: this does unnecessary checks right now
 			return SymGetLineFromAddr64(hProcess, qwAddr, pdwDisplacement, Line64);
 		}
 
 		// dbghelp returns results of the stack top-down
-		idx = cached.num_inlines-1 - idx;
+		idx = (uint32_t)cached.num_inlines-1 - idx;
 
 		auto& inl = cached.inlines[idx];
 		
@@ -491,6 +520,8 @@ extern "C" {
 	DWORD __stdcall hook_SymSetOptions (
 		DWORD SymOptions
 	) {
+		ZoneScoped;
+
 		// I have no idea if I should respect any SymOptions
 		// Tracy only passes SYMOPT_LOAD_LINES (I assume not passing it makes lineinfo and inlinee line info fail?)
 		// SYMOPT_UNDNAME might be another common option, but it's out of scope for me right now
@@ -506,6 +537,8 @@ extern "C" {
 		HANDLE hProcess,
 		PCSTR  SearchPath
 	) {
+		ZoneScoped;
+
 		dbghelp_wrapper.set_search_path(SearchPath);
 		
 	#if ENABLE_VERIFICATION
@@ -517,6 +550,8 @@ extern "C" {
 		HANDLE hProcess,
 		PCWSTR SearchPath
 	) {
+		ZoneScoped;
+
 		dbghelp_wrapper.set_search_pathW(SearchPath);
 		
 	#if ENABLE_VERIFICATION
@@ -530,6 +565,8 @@ extern "C" {
 		PCSTR  UserSearchPath,
 		BOOL   fInvadeProcess
 	) {
+		ZoneScoped;
+
 		dbghelp_wrapper.set_search_path(UserSearchPath);
 		dbghelp_wrapper.init(hProcess);
 		
@@ -543,6 +580,8 @@ extern "C" {
 		PCWSTR UserSearchPath,
 		BOOL   fInvadeProcess
 	) {
+		ZoneScoped;
+
 		dbghelp_wrapper.set_search_pathW(UserSearchPath);
 		dbghelp_wrapper.init(hProcess);
 		
@@ -555,6 +594,8 @@ extern "C" {
 	BOOL __stdcall hook_SymCleanup (
 		HANDLE hProcess
 	) {
+		ZoneScoped;
+
 		dbghelp_wrapper.cleanup(hProcess);
 		
 	#if ENABLE_VERIFICATION
@@ -569,6 +610,8 @@ extern "C" {
 		PDWORD64     Displacement,
 		PSYMBOL_INFO Symbol
 	) {
+		ZoneScoped;
+
 		BOOL res = false;
 		if (dbghelp_wrapper.sess.has_value())
 			res = dbghelp_wrapper.sess->SymFromAddr(hProcess, Address, Displacement, Symbol);
@@ -606,6 +649,8 @@ extern "C" {
 		PDWORD           pdwDisplacement,
 		PIMAGEHLP_LINE64 Line64
 	) {
+		ZoneScoped;
+
 		BOOL res = false;
 		if (dbghelp_wrapper.sess.has_value())
 			res = dbghelp_wrapper.sess->SymGetLineFromAddr64(hProcess, qwAddr, pdwDisplacement, Line64);
@@ -639,6 +684,8 @@ extern "C" {
 		HANDLE  hProcess,
 		DWORD64 Address
 	) {
+		ZoneScoped;
+
 		DWORD num_inlines = 0;
 		if (dbghelp_wrapper.sess.has_value())
 			num_inlines = dbghelp_wrapper.sess->SymAddrIncludeInlineTrace(hProcess, Address);
@@ -658,6 +705,8 @@ extern "C" {
 		LPDWORD CurContext,
 		LPDWORD CurFrameIndex
 	) {
+		ZoneScoped;
+
 		BOOL res = 0;
 		if (dbghelp_wrapper.sess.has_value())
 			res = dbghelp_wrapper.sess->SymQueryInlineTrace(hProcess, StartAddress, StartContext, StartRetAddress, CurAddress, CurContext, CurFrameIndex);
@@ -683,6 +732,8 @@ extern "C" {
 		PDWORD64     Displacement,
 		PSYMBOL_INFO Symbol
 	) {
+		ZoneScoped;
+
 		DWORD64 displacement;
 		BOOL res = 0;
 		if (dbghelp_wrapper.sess.has_value())
@@ -749,6 +800,8 @@ extern "C" {
 		PDWORD           pdwDisplacement,
 		PIMAGEHLP_LINE64 Line64
 	) {
+		ZoneScoped;
+
 		DWORD displacement;
 		BOOL res = 0;
 		if (dbghelp_wrapper.sess.has_value())
