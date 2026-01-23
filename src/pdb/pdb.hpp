@@ -2054,6 +2054,7 @@ public:
 		read_symbol_record_stream();
 
 		finalize_symbols();
+		lookup.stralloc.v.pad_for_simd();
 
 		//print_dump_names();
 		//stralloc.print_dump();

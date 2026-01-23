@@ -16,6 +16,12 @@
 	#define ENABLE_VERIFICATION 1
 #endif
 
+#if NDEBUG
+	#define REL_FORCEINLINE __forceinline
+#else
+	#define REL_FORCEINLINE
+#endif
+
 struct DbgHelpWrapperSession {
 	ModuleCache mod_cache;
 
@@ -43,7 +49,7 @@ struct DbgHelpWrapperSession {
 		ULONG dbh_inl_ctx = 0;
 	#endif
 
-		void clear () {
+		REL_FORCEINLINE void clear () {
 			address = 0;
 			mod_base = 0;
 			pdb = nullptr;
@@ -65,18 +71,11 @@ struct DbgHelpWrapperSession {
 	// like dbghelp, copy null terminated string or truncate and _don't_ null terminate if max_len too short
 	// return truncated length instead of more useful full length like snprintf would (as dbghelp does for some reason)
 	static ULONG strcpy_trunc (char* dst, char const* src, ULONG max_len) {
-		// strcpy_s has no way of returning actually copied length, so I am forced to do a separate strlen
-		// Interestingly, this truncated copy + return truncated length operation could probably simd accelerated easily
-		// TODO: do so if this shows up at all in the profiler
-
-		// Actually this does not even truncate, I remember testing truncation wth?
-		//ULONG len = (ULONG)strlen(src);
-		//auto err = strcpy_s(dst, max_len, src);
-		//if (err) {
-		//	printf("Error: %s\n", src);
-		//}
-		//return std::min(max_len, len);
-
+		// I'm unsure which C str* function if any do this
+		// strncpy supposedly fills the destination with zeros past the copied string, which we definitely don't want
+		// as the destination buffer tends to be large
+		// strlen + memcpy is not as fast as it could be
+	#if 0
 		ULONG len = 0;
 		for (; len < max_len && src[len] != '\0'; len++) {
 			dst[len] = src[len];
@@ -85,10 +84,24 @@ struct DbgHelpWrapperSession {
 			dst[len] = '\0';
 		// return written length without null terminator
 		return len;
+	#elif 0
+		ULONG len = (ULONG)std::min(strlen(src), (size_t)max_len);
+		memcpy(dst, src, len);
+		if (len < max_len)
+			dst[len] = '\0';
+		return len;
+	#else
+		ULONG written_len = VirtualMemoryVector::fast_strcpy_trunc(dst, max_len, src);
+		assert(written_len <= max_len);
+		if (written_len < max_len) {
+			assert(dst[written_len] == '\0');
+		}
+		return written_len;
+	#endif
 	}
 
 	// do base symbol lookup, store as cached
-	void get_and_cache_symbol (DWORD64 Address) {
+	__declspec(noinline) void get_and_cache_symbol (DWORD64 Address) {
 		cached.clear();
 
 		auto* mod = mod_cache.find_module_for_addr(Address);
@@ -132,7 +145,7 @@ struct DbgHelpWrapperSession {
 	// Another reason would be if multiple "sessions" are needed, we could have both ModuleCache and CachedResult be keyed based on hProcess + Address
 
 	// get symbol from cache (run symbol lookup)
-	void get_symbol_from_cache (DWORD64 Address) {
+	REL_FORCEINLINE void get_symbol_from_cache (DWORD64 Address) {
 		if (cached.address == Address) {
 			// symbol already cached
 			return;
@@ -140,7 +153,7 @@ struct DbgHelpWrapperSession {
 		get_and_cache_symbol(Address);
 	}
 	// get inlinesites from cache (run trace_inlinesites_for_addr)
-	void get_inlinesites_from_cache (DWORD64 Address) {
+	REL_FORCEINLINE void get_inlinesites_from_cache (DWORD64 Address) {
 		if (cached.address == Address && cached.num_inlines >= 0) {
 			assert(cached.sym);
 			// fastpath: inlinesites already cached
@@ -156,8 +169,6 @@ struct DbgHelpWrapperSession {
 			uint64_t query_rva = Address - cached.mod_base;
 
 			if (cached.sym->inline_depth > 0) {
-				
-		ZoneScoped;
 				cached.num_inlines = cached.pdb->trace_inlinesites_for_addr(cached.sym, query_rva, cached.inlines, MAX_INLINES);
 			}
 
@@ -200,7 +211,7 @@ struct DbgHelpWrapperSession {
 		Symbol->NameLen = strcpy_trunc(Symbol->Name, mangled_name, Symbol->MaxNameLen);
 		return true;
 	}
-	static bool get_symbol_info (
+	REL_FORCEINLINE static bool get_symbol_info (
 		CachedResult& cached,
 		DWORD64      Address,
 		PDWORD64     Displacement,
@@ -315,7 +326,7 @@ struct DbgHelpWrapperSession {
 
 	// Undocumented, but according to tracy code this returns the depth of the inline stack at the instruction at Address
 	// Which requires a full pdb INLINESITE walk and full decoding of the "compressed binary annotations" of each site, which already decodes the lineinfo alongside
-	DWORD SymAddrIncludeInlineTrace (
+	REL_FORCEINLINE DWORD SymAddrIncludeInlineTrace (
 		HANDLE  hProcess,
 		DWORD64 Address
 	) {
@@ -343,7 +354,7 @@ struct DbgHelpWrapperSession {
 	//   for the tracy use case we can instead simply use the Address passed into those as a key to find our cached results
 	// CurFrameIndex:
 	//   Return 0 always as explained above
-	BOOL SymQueryInlineTrace (
+	REL_FORCEINLINE BOOL SymQueryInlineTrace (
 		HANDLE  hProcess,
 		DWORD64 StartAddress,
 		DWORD   StartContext,
@@ -376,7 +387,7 @@ struct DbgHelpWrapperSession {
 	//  it is not the function symbol base address that the inlinesite is
 	//  afaik i't can't be anything like a base address for the inlinesite as the pdb does not encode it
 	//  I have not yet tried to investigate further and just return the input Address for now
-	BOOL SymFromInlineContext (
+	REL_FORCEINLINE BOOL SymFromInlineContext (
 		HANDLE       hProcess,
 		DWORD64      Address,
 		ULONG        InlineContext,
@@ -418,7 +429,7 @@ struct DbgHelpWrapperSession {
 		return true;
 	}
 	
-	BOOL SymGetLineFromInlineContext (
+	REL_FORCEINLINE BOOL SymGetLineFromInlineContext (
 		HANDLE           hProcess,
 		DWORD64          qwAddr,
 		ULONG            InlineContext,

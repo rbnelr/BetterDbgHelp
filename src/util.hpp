@@ -233,6 +233,7 @@ public:
 
 	static inline constexpr size_t MAX_CAPACITY = 1llu << 31;
 	static inline constexpr size_t GROW_BLOCK_SIZE = 1024*32;
+	static inline constexpr size_t PAGE_SIZE = 4096;
 
 	const char* data () const { return _data; }
 	char* data () { return _data; }
@@ -285,6 +286,22 @@ public:
 		VirtualAlloc(_data + _capacity, new_capacity-_capacity, MEM_COMMIT, PAGE_READWRITE);
 		_capacity = (int32_t)new_capacity;
 	}
+	__declspec(noinline) void _realloc_single_pages (int32_t min_capacity) {
+		auto new_capacity = (min_capacity + PAGE_SIZE-1) & ~(PAGE_SIZE-1);
+		
+	#if TRACY_MEMORY_PROFILING
+		//if (_capacity > 0) { TracyFree(_data); }
+		//TracyAlloc(_data, new_capacity);
+		size_t offs = _capacity;
+		while (offs < new_capacity) {
+			TracyAlloc(_data + offs, PAGE_SIZE);
+			offs += PAGE_SIZE;
+		}
+	#endif
+
+		VirtualAlloc(_data + _capacity, new_capacity-_capacity, MEM_COMMIT, PAGE_READWRITE);
+		_capacity = (int32_t)new_capacity;
+	}
 	
 	__forceinline int32_t _grow_to_align (size_t size, size_t align) {
 		auto offset = (size_t)_size;
@@ -321,6 +338,76 @@ public:
 		
 		return (int32_t)offset;
 	}
+	
+	// ensure reads past end of used buffer memory are safe
+	// by allocating extra page in the rare case that the read could go past last page
+	void pad_for_simd (int32_t simd_size=64) {
+		auto safe_capacity = _size + simd_size;
+		if (safe_capacity > _capacity) {
+			_realloc_single_pages(safe_capacity);
+		}
+	}
+
+#if 1
+	// fast strlen for strings in this buffer
+	// only safe if v.pad_for_simd() was called! as it reads past the end of src
+	static size_t fast_strlen (const char* str) {
+		size_t len = 0;
+		__m128i zero = _mm_setzero_si128();
+
+		for (;;) {
+			__m128i bytes = _mm_load_si128((__m128i const*)(str + len));
+			__m128i mask = _mm_cmpeq_epi8(bytes, zero);
+			unsigned bitmask = (unsigned)_mm_movemask_epi8(mask);
+			if (bitmask) {
+				len += (uint32_t)_tzcnt_u16((unsigned short)bitmask);
+				break;
+			}
+			len += 16;
+		}
+
+		assert(len == strlen(str));
+		return len;
+	}
+
+	// for dbghelp wrapper:
+	// copy null terminated string with unknown length into fixed size destination buffer
+	// returns written string length excluding null terminator, or max_len if truncated
+	// will not null terminate if strlen(src) >= max_len
+	// will write bytes past null terminator in dst for simd efficiency, but not past max_len
+	// only safe if v.pad_for_simd() was called! as it reads past the end of src
+	static __forceinline uint32_t fast_strcpy_trunc (char* dst, uint32_t max_len, char const* src) {
+		uint32_t len = 0;
+		__m128i zero = _mm_setzero_si128();
+		
+		// read in unalinged simd blocks including reads past the end of src
+		// write out full simd blocks, even if block contains null terminator
+		// loop until max_length reached or
+		// null terminator detected using simd, use bitscan to find real length and terminate
+		while (len+16 <= max_len) {
+			__m128i bytes = _mm_load_si128((__m128i const*)(src + len));
+			__m128i mask = _mm_cmpeq_epi8(bytes, zero);
+			unsigned bitmask = (unsigned)_mm_movemask_epi8(mask);
+
+			_mm_storeu_si128((__m128i*)(dst + len), bytes);
+			
+			if (bitmask) {
+				len += (uint32_t)_tzcnt_u16((unsigned short)bitmask);
+				return len;
+			}
+			len += 16;
+		}
+		
+		// once store would write past max_len, switch to single byte copy
+		while (len < max_len) {
+			dst[len] = src[len];
+			if (src[len] == '\0')
+				break;
+			len++;
+		}
+		return len;
+	}
+#endif
 };
 typedef VirtualMemoryVector MemoryVector;
 #else
@@ -371,6 +458,8 @@ public:
 	}
 };
 #endif
+
+#include <immintrin.h>
 
 struct StrAlloc {
 	typedef int32_t sid; // Strbuf index
