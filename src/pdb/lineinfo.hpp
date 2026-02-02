@@ -359,8 +359,9 @@ namespace lineinfo {
 					code_offset = param1;
 				} break;
 				case BA_OP_ChangeCodeOffsetBase: {
-					assert(false);
-					// Is this never used?
+					// Appears in combase.dll wil::details::in1diag3::FailFast_IfWin32BoolFalse
+					// onecore\internal\sdk\inc\wil\opensource\wil\result_macros.h 4345
+					//assert(false);
 					code_offset_base = param1;
 				} break;
 				case BA_OP_ChangeCodeOffset: {

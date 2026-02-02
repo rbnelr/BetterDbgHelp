@@ -442,8 +442,15 @@ void test_dll () {
 	profiling_run();
 }
 
+// errors in pbd parsing encountered when running as dll hooked into tracy
+// reproduce by simply loading pdb
+void pdb_error_cases () {
+	auto pdb = PdbReader::try_load_lookup_for_exe("C:\\Windows\\System32\\combase.dll");
+}
+
 int main(int argc, const char** argv) {
-	test_dll();
+	pdb_error_cases();
+	//test_dll();
 	//example_addresses(true, true, 0);
 	
 	//print_timings = false;

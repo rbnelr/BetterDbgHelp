@@ -22,11 +22,14 @@ struct LoadedModule {
 		this->size = size;
 	}
 	void load_pdb () {
+		logf("[BetterDbgHelp] Loading pdb for %s.\n", path.string().c_str());
+
 		pdb = PdbReader::try_load_lookup_for_exe(path);
 	}
 
 	ExportTableQuery* load_export_table () {
 		if (!exports) {
+			logf("[BetterDbgHelp] Loading ExportTable for %s.\n", path.string().c_str());
 			//try {
 				exports = std::make_unique<ExportTableQuery>(path);
 			// Image parser should never fail!

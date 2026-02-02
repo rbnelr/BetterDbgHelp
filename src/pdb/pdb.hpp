@@ -52,21 +52,6 @@ struct Symbol {
 	}
 };
 
-/*
-typedef struct INLINESITESYM {
-    unsigned short  reclen;    // Record length
-    unsigned short  rectyp;    // S_INLINESITE
-    unsigned long   pParent;   // pointer to the inliner
-    unsigned long   pEnd;      // pointer to this block's end
-    CV_ItemId       inlinee;   // CV_ItemId of inlinee
-    unsigned char   binaryAnnotations[1];   // an array of compressed binary annotations.
-} INLINESITESYM;
-typedef struct tagInlineeSourceLine {
-    CV_ItemId      inlinee;       // function id.
-    CV_off32_t     fileId;        // offset into file table DEBUG_S_FILECHKSMS
-    CV_off32_t     sourceLineNum; // definition start line number.
-} InlineeSourceLine;
-*/
 struct Inlinesite {
 	StrAlloc::sid fnname;
 	BinAlloc::bid pSibling = -1;
@@ -823,7 +808,10 @@ class PdbReader {
 
 	// Push inlinesites breath-first despite pdb storing them depth-first as lookup was found to be faster this way
 	struct Site {
-		INLINESITESYM* inl;
+		INLINESITESYM_Base* inl;
+		InlineeSourceLine* c13;
+		StrAlloc::sid fnname;
+
 		BinAlloc::bid site_id = -1;
 	};
 	inline static constexpr int MAX_INLINE_DEPTH = 512;
@@ -833,25 +821,40 @@ class PdbReader {
 		// This optimization is -22% to total pdb parsing time
 		std::vector<Site> stack[MAX_INLINE_DEPTH];
 		int written_depth = 0;
+		int cur_valid_depth = 0;
 		
 		void reserve () {
 			for (int i=0; i<16; i++) {
 				stack[i].reserve(64);
 			};
 		}
-		void push (int depth, INLINESITESYM* inl) {
+		void push (int depth, INLINESITESYM_Base* inl, InlineeSourceLine* c13, StrAlloc::sid fnname) {
+			assert(depth >= 0);
 			if (depth >= MAX_INLINE_DEPTH)
 				return; // Ignore this inlinesite if it exceeds max depth
-
+			if (c13 == nullptr || fnname == -1)
+				return; // Ignore invalid sites
+			if (depth > cur_valid_depth)
+				return; // Ignore sites where parent is invalid
+			
 			written_depth = std::max(written_depth, depth+1);
 
-			stack[depth].push_back({ inl });
+			stack[depth].push_back({ inl, c13, fnname });
+
+			// enable children to know if parent is valid
+			cur_valid_depth = depth+1;
+		}
+		void pop (int depth) {
+			if (depth < cur_valid_depth) {
+				cur_valid_depth = depth;
+			}
 		}
 		void clear () {
 			for (int i=0; i<written_depth; i++) {
 				stack[i].clear();
 			}
 			written_depth = 0;
+			cur_valid_depth = 0;
 		}
 	} _inlinesites;
 
@@ -861,25 +864,18 @@ class PdbReader {
 		// iterate breath first to push data
 		for (int depth=0; depth<_inlinesites.written_depth; depth++) {
 			for (auto& site : _inlinesites.stack[depth]) {
-				auto it = module_inlinee_c13.find(site.inl->inlinee);
-				if (it == module_inlinee_c13.end())
-					continue;
+				assert(site.c13);
+				assert(site.fnname != -1);
 
-				auto name_it = IPI_id2name.find(site.inl->inlinee);
-				if (name_it == IPI_id2name.end())
-					continue;
-
-				auto* anno_end = (PCompressedAnnotation)((char*)site.inl + sizeof(u16) + site.inl->reclen); // length field of codeview_symbol_header not contained in length
-				
 				Inlinesite s = {};
-				s.fnname = name_it->second;
+				s.fnname = site.fnname;
 				site.site_id = lookup.binalloc.push(s);
 
 				lookup.stats.num_inlinesites++;
 
 				lineinfo::encode_compressed_annotation(
-					site.inl->binaryAnnotations, anno_end,
-					it->second->fileId, it->second->sourceLineNum,
+					site.inl->get_binaryAnnotations(), site.inl->get_binaryAnnotations_end(),
+					site.c13->fileId, site.c13->sourceLineNum,
 					[this, file_checksum_ptr] (u32 offset_in_file_checksums) -> StrAlloc::sid {
 						auto* cksm = (codeview_file_checksum*)((char*)file_checksum_ptr + offset_in_file_checksums);
 						return extract_name(cksm->offset_in_string_table);
@@ -1187,10 +1183,12 @@ class PdbReader {
 			
 				ptr += sizeof(u16) + sym->length; // length field of codeview_symbol_header not contained in length (but kind is)
 				ptr = align_up(ptr, 4);
-
-				//int entry_offs = (int)((char*)sym - sym_info);
-				//logf("> %7d [%4x] %d %s\n", entry_offs, sym->kind, sym->length, SYM_ENUM_e_str(sym->kind));
 				
+				//{
+				//	int entry_offs = (int)((char*)sym - sym_info);
+				//	logf("> %7d [%4x] %d %s\n", entry_offs, sym->kind, sym->length, SYM_ENUM_e_str(sym->kind));
+				//}
+
 				auto push_symbol = [this, module_index, file_checksum_ptr]
 						(u32 offs, u32 size, u16 seg, SymTagEnum tag, const char* name, bool get_lineinfo=false) -> int {
 					uint64_t rva = offs + sections_sorted[seg-1].base_addr;
@@ -1282,9 +1280,11 @@ class PdbReader {
 						//if (proc->flags.CV_PFLAG_NEVER) flags |= SYMFLAG_FUNC_NO_RETURN;
 						
 						cur_symbol = push_symbol(proc->off, proc->len, proc->seg, SymTagEnum::SymTagFunction, (const char*)proc->name, true);
+						
 					} break;
-					case S_INLINESITE: {
-						auto* inl = (INLINESITESYM*)sym;
+					case S_INLINESITE:
+					case S_INLINESITE2: {
+						auto* inl = (INLINESITESYM_Base*)sym;
 
 						// There is a weird test case I found where both dbghelp and my code return wrong results in a different way
 						// In my case one function name in the inlinee stack is wrong, yet the source line is correct
@@ -1302,12 +1302,13 @@ class PdbReader {
 						auto* parent_entry = (codeview_symbol_header*)(sym_info + inl->pParent);
 						auto* end_entry = (codeview_symbol_header*)(sym_info + inl->pEnd);
 						assert(parent_entry->kind == S_INLINESITE
+							|| parent_entry->kind == S_INLINESITE2
 							|| parent_entry->kind == S_GPROC32
 							|| parent_entry->kind == S_LPROC32
 							|| parent_entry->kind == S_GPROC32_ID
 							|| parent_entry->kind == S_LPROC32_ID
 						);
-						//if (parent_entry->kind == S_INLINESITE) {
+						//if (parent_entry->kind == S_INLINESITE || parent_entry->kind == S_INLINESITE2) {
 						//	assert(parent && parent == (INLINESITESYM*)parent_entry);
 						//}
 						assert(end_entry->kind == S_INLINESITE_END);
@@ -1316,16 +1317,23 @@ class PdbReader {
 						//inl->pEnd // byte offs of INLINESITE_END
 						// inl->inlinee seems to be some kind of id that lets us look up line info, but not sure where that is and if that lineinfo is encoded horribly
 						// no idea what inl->binaryAnnotations is
-						
+
 						//if (cur_symbol >= 0 && symbols[cur_symbol].base_addr == 8864) {
 						//for (int i=0; i<inline_depth; i++) logf("  ");
 						//logf(">> INLINESITE inlinee: [%4x] %s\n", inl->inlinee, stralloc[IPI_id2name.find(inl->inlinee)->second]);
 						//}
+						
+						auto it = module_inlinee_c13.find(inl->inlinee);
+						auto name_it = IPI_id2name.find(inl->inlinee);
+						// Sometimes lineinfo is missing for inlinesites, ex: inlinee = 0x80100011
+						// handle in _inlinesites.push()
+						auto* c13 = it != module_inlinee_c13.end() ? it->second : nullptr;
+						auto name = name_it != IPI_id2name.end() ? name_it->second : -1;
 
-						if (cur_symbol > 0) {
+						if (cur_symbol > 0 && inline_depth >= 0) {
 							//if (_inlinesites.size() <= inline_depth)
 							//	_inlinesites.emplace_back();
-							_inlinesites.push(inline_depth, inl);
+							_inlinesites.push(inline_depth, inl, c13, name);
 						}
 
 						inline_depth++;
@@ -1333,8 +1341,13 @@ class PdbReader {
 					case S_INLINESITE_END: {
 						assert(inline_depth > 0);
 						inline_depth--;
+
+						if (cur_symbol > 0 && inline_depth >= 0) {
+							_inlinesites.pop(inline_depth);
+						}
 					} break;
 					case S_END: {
+
 						assert(inline_depth == 0);
 
 						if (cur_symbol >= 0 && _inlinesites.written_depth > 0) {
@@ -1343,6 +1356,7 @@ class PdbReader {
 						_inlinesites.clear();
 
 						cur_symbol = -1;
+						inline_depth = 0;
 					} break;
 				}
 			}

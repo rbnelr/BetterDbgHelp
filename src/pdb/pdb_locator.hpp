@@ -167,7 +167,7 @@ class PDB_Locator {
 		HRESULT hr = URLOpenBlockingStreamW(NULL, symbol_server_url.c_str(), &stream, 0, NULL);
 		if (stream) stream->Release();
 		if (hr == S_OK) {
-			logf("Downloading pdb from %s to %s.\n", url.c_str(), cache_path.string().c_str());
+			logf("[BetterDbgHelp] Downloading pdb from %s to %s.\n", url.c_str(), cache_path.string().c_str());
 			
 			std::filesystem::create_directories(cache_path.parent_path());
 

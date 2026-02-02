@@ -892,6 +892,37 @@ typedef struct INLINESITESYM {
     CV_ItemId       inlinee;   // CV_ItemId of inlinee
     unsigned char   binaryAnnotations[1];   // an array of compressed binary annotations.
 } INLINESITESYM;
+typedef struct INLINESITESYM2 {
+    unsigned short  reclen;         // Record length
+    unsigned short  rectyp;         // S_INLINESITE2
+    unsigned long   pParent;        // pointer to the inliner
+    unsigned long   pEnd;           // pointer to this block's end
+    CV_ItemId       inlinee;        // CV_ItemId of inlinee
+    unsigned long   invocations;    // entry count
+    unsigned char   binaryAnnotations[1];   // an array of compressed binary annotations.
+} INLINESITESYM2;
+
+struct INLINESITESYM_Base {
+    unsigned short  reclen;
+    unsigned short  rectyp;    // S_INLINESITE or S_INLINESITE2
+    unsigned long   pParent;
+    unsigned long   pEnd;
+    CV_ItemId       inlinee;
+    
+    unsigned char* get_binaryAnnotations () {
+        if (this->rectyp == S_INLINESITE) {
+            return ((INLINESITESYM*)this)->binaryAnnotations;
+        }
+        else {
+            assert(this->rectyp == S_INLINESITE2);
+            return ((INLINESITESYM2*)this)->binaryAnnotations;
+        }
+    }
+    unsigned char* get_binaryAnnotations_end () {
+        // annotation end is record end
+        return (unsigned char*)this + sizeof(u16) + this->reclen; // length field of codeview_symbol_header not contained in length
+    }
+};
 
 typedef struct CV_funcattr_t {
     unsigned char  cxxreturnudt :1;  // true if C++ style ReturnUDT
