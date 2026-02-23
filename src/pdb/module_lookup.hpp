@@ -14,6 +14,11 @@ struct LoadedModule {
 	uint64_t base_addr;
 	size_t size;
 
+	// Loading state is kinda complex because I optimized GetModuleInformation + GetModuleFileNameExW calls
+	// by using modules_by_handle, cache all modules found on first EnumProcessModules immediately
+	// but do not attempt to load all pdbs, as is very unlikely all of them will be hit even by a profiler!
+	bool has_attempted_load = false;
+
 	std::unique_ptr<FastPdbLookup> pdb;
 	std::unique_ptr<ExportTableQuery> exports;
 
@@ -45,6 +50,14 @@ struct LoadedModule {
 		}
 		return exports.get();
 	}
+
+	void attempt_load () {
+		assert(!has_attempted_load && !pdb && !exports);
+		ZoneScopedC(0xffff00);
+
+		load_pdb();
+		has_attempted_load = true;
+	}
 };
 // Holds the cached pdb or export table lookup data for the .exe and all loaded .dll of a process
 struct ModuleCache {
@@ -67,20 +80,34 @@ struct ModuleCache {
 	LoadedModule* find_module_for_addr (uint64_t addr) {
 		//ZoneScoped;
 
+		LoadedModule* mod = nullptr;
+
 		// Try find cached data for module loaded in process
 		// Linear search shoule be fast enough for the moment
 		for (auto& m : sorted_modules) {
 			if (addr >= m->base_addr && addr < m->base_addr + m->size) {
-				return m.get();
+				mod = m.get();
+				break;
 			}
 		}
 		
-		// Module is not cached, try find module for address
-		return try_get_and_cache_module(addr);
+		if (!mod) {
+			// Module is not cached, try find module for address
+			mod = try_get_and_cache_module(addr);
+		}
+		if (mod && !mod->has_attempted_load) {
+			TimerMeasZone(tload_pdb);
+
+			_hprocess = hprocess;
+			_mod_base = mod->base_addr;
+
+			mod->attempt_load();
+		}
+		return mod;
 	}
 
 	LoadedModule* try_get_and_cache_module (uint64_t addr) {
-		ZoneScopedC(0xffff00);
+		ZoneScoped;
 		
 		LoadedModule* newly_found_module_for_address = nullptr;
 		{
@@ -148,15 +175,6 @@ struct ModuleCache {
 			}
 		}
 
-
-		if (newly_found_module_for_address) {
-			TimerMeasZone(tload_pdb);
-
-			_hprocess = hprocess;
-			_mod_base = newly_found_module_for_address->base_addr;
-
-			newly_found_module_for_address->load_pdb();
-		}
 		return newly_found_module_for_address;
 	}
 };
