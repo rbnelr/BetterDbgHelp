@@ -33,7 +33,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		//sym.warmup(exe + 0x21F0);
 		//sym.warmup(ucrtbase + 0x1B370);
 
-		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
+		sym.run_examples_addresses("TinyProgram", show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
 			
@@ -92,7 +92,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		}
 		//sym.warmup(exe + 0x11AC0);
 
-		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
+		sym.run_examples_addresses("Namespaces", show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 
 			at_addr(exe + 0x10D0); // main()
@@ -121,7 +121,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		//sym.warmup(assimp + 0x23990); // assimp, no pdb! (for testing)
 		//sym.warmup(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
 
-		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
+		sym.run_examples_addresses("CppGame", show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
 
@@ -164,7 +164,7 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		//sym.warmup(exe + 0x3011B80);
 		//sym.warmup(ucrtbase + 0x1B370);
 
-		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
+		sym.run_examples_addresses("RustBevyApp", show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
 			at_addr(exe + 5);
 
@@ -468,7 +468,7 @@ int main(int argc, const char** argv) {
 	
 	//print_timings = false;
 	//example_addresses(true, false, 0);
-	sweep_tests();
+	//sweep_tests();
 
 	//profiling_run();
 	//profiling_run_cached();
@@ -507,6 +507,13 @@ int main(int argc, const char** argv) {
 	//	sym.print_pdb_stats(".exe");
 	//	sym.fuzz_mod_measure(".exe", 6000, 5);
 	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+
+	try {
+		ZoneScopedN("rust_bevy_test.exe");
+		TestRunner sym("test_executables/RustBevyApp/rust_bevy_test.exe");
+		sym.print_pdb_stats(".exe");
+		sym.fuzz_mod(".exe", 20000, 5);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
 	return 0;
 }

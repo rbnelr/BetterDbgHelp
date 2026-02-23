@@ -499,7 +499,14 @@ public:
 			float no_load = res->tCombinedAddr2sym.count > 0 ?
 				(res->tCombinedAddr2sym.total_sec - res->mod_cache.tload_pdb.total_sec) / (float)res->tCombinedAddr2sym.count : 0.0f;
 
-			logf("|Speedup: %.2fx  excluding pdb read: %.2fx\n", dbh/total, dbh/no_load);
+			//logf("|Speedup: %.2fx  excluding pdb read: %.2fx\n", dbh/total, dbh/no_load);
+
+			logf("%6.2f us | %6.2f us | %6.2f us | %.0fx |\n",
+				dbh * 1000000.0f,
+				total * 1000000.0f,
+				no_load * 1000000.0f,
+				dbh/no_load
+			);
 		}
 	}
 };

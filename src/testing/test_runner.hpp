@@ -277,14 +277,19 @@ public:
 		dbghelp->addr2sym((void*)addr, res_dbghelp.get());
 		resolver->addr2sym((void*)addr, res.get());
 		
+		// This function is called by sweep_mod for consecutive addresses
+		// every single byte is tested against dbghelp and my resolver, and then if the result for either changes this if executes
 		if (!res->equal(*prev_res) || !res_dbghelp->equal(*prev_res_dbghelp)) {
+			// new result for dbghelp or my resolver
 			if (show) {
+				// print this unique result
 				print_addr("SymResolver.dll", (char*)addr);
 				res->print();
 			}
 
 			auto _old = mismatch_counts.symbol_mismatch_overlap;
 
+			// test both results, effectively showing mismatches only for unique result ranges
 			if (!res->equal(*res_dbghelp, { &mismatch_counts, resolver.get(), (void*)addr }) &&
 				mismatch_counts.symbol_mismatch_overlap == _old // HACK: Avoid showing diff for mismatched due to overlapping symbols, to better find issues I can fix
 				) {
@@ -338,7 +343,7 @@ public:
 	}
 
 	template <typename FUNC>
-	void run_examples_addresses (bool show, bool test, int meas_iterations, FUNC run_examples) {
+	void run_examples_addresses (const char* name, bool show, bool test, int meas_iterations, FUNC run_examples) {
 		using std::placeholders::_1;
 		std::function<void(char*)> fshow = std::bind(&TestRunner::show_addr2sym, this, _1);
 		std::function<void(char*)> fmeas = std::bind(&TestRunner::measure_addr2sym, this, _1);
@@ -367,6 +372,7 @@ public:
 				}
 				resolver->print_timings();
 				if (dbghelp) {
+					logf("| %20s | Example Addresses | ", name);
 					dbghelp->compare_timings(resolver.get());
 				}
 			}
@@ -432,12 +438,30 @@ public:
 			}
 			resolver->print_timings();
 			if (dbghelp) {
+				logf("| %20s | Sweeping Addresses | ", filter.data());
 				dbghelp->compare_timings(resolver.get());
 			}
 		}
 	}
-
+	
 	// seed=-1 => random seed
+	void fuzz_mod (std::string_view filter, int count=10000, int seed=-1) {
+		auto& mod = loaded_modules.find(filter);
+		auto start = (uint64_t)mod.addr;
+		auto end = (uint64_t)mod.addr + mod.size;
+		
+		auto rng = seed < 0 ? init_rng() : init_rng((uint64_t)seed);
+		std::uniform_int_distribution<uint64_t> uniform_rng (start, end);
+		
+		logf("@ Fuzz for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
+		for (int i=0; i<count; i++) {
+			auto addr = uniform_rng(rng);
+			test_addr2sym((char*)addr);
+		}
+
+		mismatch_counts.print();
+	}
+
 	void fuzz_mod_measure (std::string_view filter, int count=10000, int seed=-1) {
 		auto& mod = loaded_modules.find(filter);
 		auto start = (uint64_t)mod.addr;
@@ -463,6 +487,7 @@ public:
 			}
 			resolver->print_timings();
 			if (dbghelp) {
+				logf("| %20s | Fuzzing Addresses | ", filter.data());
 				dbghelp->compare_timings(resolver.get());
 			}
 		}
