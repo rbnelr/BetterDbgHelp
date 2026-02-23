@@ -26,10 +26,11 @@
     <ClInclude Include="src\pdb\codeview.hpp" />
     <ClInclude Include="src\pdb\lineinfo.hpp" />
     <ClInclude Include="src\pdb\module_lookup.hpp" />
-    <ClInclude Include="src\pdb\pdb.hpp" />
+    <ClInclude Include="src\pdb\lookup.hpp" />
     <ClInclude Include="src\pdb\pdb_locator.hpp" />
     <ClInclude Include="src\pdb\sym_resolvers.hpp" />
     <ClInclude Include="src\pdb\sym_result.hpp" />
     <ClInclude Include="src\dbghelp_dll_wrapper.hpp" />
+    <ClInclude Include="src\pdb\pdb_reader.hpp" />
   </ItemGroup>
 </Project>

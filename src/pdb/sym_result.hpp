@@ -1,6 +1,6 @@
 #pragma once
 #include "util.hpp"
-#include "pdb.hpp"
+#include "lookup.hpp"
 
 class SymResolverBase;
 struct SymResult;
@@ -293,9 +293,10 @@ struct SymResult {
 
 
 		//logf("<<TypeInd:%d>> ", info.TypeIndex);
-		logf("<<Tag:%d>> ", info.Tag);
+		//logf("<<Tag:%d>> ", info.Tag);
 
-		logf("%15s!%s ", module_path, sym_name);
+		//logf("%15s!%s ", module_path ? module_path : "[unknown]", sym_name);
+		logf("%s ", sym_name);
 
 		if (has_source()) {
 			logf("%-15s:%d\n", src_filepath, src_lineno);

@@ -1,6 +1,6 @@
 #pragma once
 #include "dbghelp_api.hpp"
-#include "pdb/pdb.hpp"
+#include "pdb/lookup.hpp"
 #include "pdb/module_lookup.hpp"
 
 // Verification:
@@ -23,8 +23,6 @@
 #endif
 
 struct DbgHelpWrapperSession {
-	ModuleCache mod_cache;
-
 	static constexpr int MAX_INLINES = 256;
 
 	struct CachedResult {
@@ -62,11 +60,15 @@ struct DbgHelpWrapperSession {
 		#endif
 		}
 	};
-
+	
+	ModuleCache mod_cache;
 	CachedResult cached;
 	
 	DbgHelpWrapperSession (HANDLE hProcess): mod_cache{hProcess} {}
 	~DbgHelpWrapperSession () {}
+	HANDLE hProcess () const {
+		return mod_cache.hprocess;
+	}
 	
 	// like dbghelp, copy null terminated string or truncate and _don't_ null terminate if max_len too short
 	// return truncated length instead of more useful full length like snprintf would (as dbghelp does for some reason)
@@ -530,7 +532,9 @@ struct DbgHelpWrapper {
 		sess.emplace(hProcess);
 	}
 	void cleanup (HANDLE hProcess) {
-		sess.reset();
+		if (sess->hProcess() == hProcess) {
+			sess.reset();
+		}
 	}
 };
 DbgHelpWrapper dbghelp_wrapper;

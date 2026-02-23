@@ -39,8 +39,9 @@
     <ClInclude Include="src\pdb\codeview.hpp" />
     <ClInclude Include="src\pdb\lineinfo.hpp" />
     <ClInclude Include="src\pdb\module_lookup.hpp" />
-    <ClInclude Include="src\pdb\pdb.hpp" />
+    <ClInclude Include="src\pdb\lookup.hpp" />
     <ClInclude Include="src\pdb\pdb_locator.hpp" />
+    <ClInclude Include="src\pdb\pdb_reader.hpp" />
     <ClInclude Include="src\pdb\sym_resolvers.hpp" />
     <ClInclude Include="src\pdb\sym_result.hpp" />
     <ClInclude Include="src\util.hpp" />
@@ -58,20 +59,20 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Profiling|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>

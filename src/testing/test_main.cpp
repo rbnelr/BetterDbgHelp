@@ -12,6 +12,8 @@
 // from util/logger.hpp; used everywhere instead of printf
 Logger g_logger("output.txt");
 
+bool print_stats = true;
+
 void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 	ZoneScoped;
 	
@@ -23,11 +25,13 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
-		sym.print_pdb_stats(".exe");
-		sym.print_pdb_stats("ucrtbase.dll");
-		
-		sym.warmup(exe + 0x21F0);
-		sym.warmup(ucrtbase + 0x1B370);
+		if (print_stats) {
+			sym.print_pdb_stats(".exe");
+			sym.print_pdb_stats("ucrtbase.dll");
+		}
+
+		//sym.warmup(exe + 0x21F0);
+		//sym.warmup(ucrtbase + 0x1B370);
 
 		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
@@ -83,9 +87,10 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		TestRunner sym("test_executables/Namespaces/Namespaces.exe", 0.5f);
 
 		char* exe = sym.get_addr(".exe");
-		sym.print_pdb_stats(".exe");
-		
-		sym.warmup(exe + 0x11AC0);
+		if (print_stats) {
+			sym.print_pdb_stats(".exe");
+		}
+		//sym.warmup(exe + 0x11AC0);
 
 		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
@@ -108,12 +113,13 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 		char* exe = sym.get_addr(".exe");
 		char* assimp = sym.get_addr("assimp-vc143-mt.dll");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
-		sym.print_pdb_stats(".exe");
-		sym.print_pdb_stats("assimp-vc143-mt.dll");
-		
-		sym.warmup(exe + 0x121FA0);
-		sym.warmup(assimp + 0x23990); // assimp, no pdb! (for testing)
-		sym.warmup(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
+		if (print_stats) {
+			sym.print_pdb_stats(".exe");
+			sym.print_pdb_stats("assimp-vc143-mt.dll");
+		}
+		//sym.warmup(exe + 0x121FA0);
+		//sym.warmup(assimp + 0x23990); // assimp, no pdb! (for testing)
+		//sym.warmup(ucrtbase + 0x1B370); // ucrtbase.dll!__stdio_common_vfprintf
 
 		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
@@ -152,10 +158,11 @@ void example_addresses (bool test=true, bool show=false, int meas_count=1000) {
 
 		char* exe = sym.get_addr(".exe");
 		char* ucrtbase = sym.get_addr("ucrtbase.dll");
-		sym.print_pdb_stats(".exe");
-		
-		sym.warmup(exe + 0x3011B80);
-		sym.warmup(ucrtbase + 0x1B370);
+		if (print_stats) {
+			sym.print_pdb_stats(".exe");
+		}
+		//sym.warmup(exe + 0x3011B80);
+		//sym.warmup(ucrtbase + 0x1B370);
 
 		sym.run_examples_addresses(show, test, meas_count, [=] (std::function<void(char*)> at_addr) {
 			at_addr(exe + 0);
@@ -246,8 +253,8 @@ void profiling_sweep (int mult=1) {
 	try {
 		ZoneScopedN("TinyProgram.exe");
 		TestRunner sym("test_executables/TinyProgram/TinyProgram.exe", 0.5f);
-		for (int i=0; i<mult; i++) sym.sweep_mod_measure(".exe");
-		for (int i=0; i<mult; i++) sym.sweep_mod_measure("ucrtbase.dll");
+		sym.sweep_mod_measure(".exe", mult);
+		sym.sweep_mod_measure("ucrtbase.dll", mult);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 	
 	try {
@@ -312,7 +319,8 @@ void profiling_pdb_parse (int iterations) {
 // so just try to find a good balance that is not to quick to get bad sampling results in tracy, nor too long to have to sit around waiting
 // that's why I play with the iteration counts so much
 void profiling_run () {
-	run_dbghelp = false;
+	run_dbghelp = true;
+	print_stats = false;
 	int mult = run_dbghelp ? 1 : 20;
 
 	example_addresses(false, false, 4000 * mult);
@@ -327,6 +335,7 @@ void profiling_run () {
 void profiling_run_cached () {
 	int count = 2000000;
 	run_dbghelp = false;
+	print_stats = false;
 
 	try {
 		ZoneScopedN("city_builder (cached)");
@@ -345,6 +354,7 @@ void profiling_run_cached () {
 void profiling_run_cachemiss () {
 	int count = 10000;
 	run_dbghelp = false;
+	print_stats = false;
 	
 	clear_cpu_cache = false;
 
@@ -445,11 +455,14 @@ void test_dll () {
 // errors in pbd parsing encountered when running as dll hooked into tracy
 // reproduce by simply loading pdb
 void pdb_error_cases () {
-	auto pdb = PdbReader::try_load_lookup_for_exe("C:\\Windows\\System32\\combase.dll");
+	PdbReader::try_load_lookup_for_exe("C:\\Windows\\System32\\combase.dll");
+
+	ExportTableQuery("C:\\WINDOWS\\SYSTEM32\\profapi.dll");
 }
 
+// hard code which test cases are used for now
 int main(int argc, const char** argv) {
-	pdb_error_cases();
+	//pdb_error_cases();
 	//test_dll();
 	//example_addresses(true, true, 0);
 	
@@ -457,7 +470,7 @@ int main(int argc, const char** argv) {
 	//example_addresses(true, false, 0);
 	//sweep_tests();
 
-	//profiling_run();
+	profiling_run();
 	//profiling_run_cached();
 	//profiling_run_cachemiss();
 
@@ -497,6 +510,11 @@ int main(int argc, const char** argv) {
 
 	return 0;
 }
+
+// Sorry I vibe coded this, so not sure if it actually fully clears the cache or not
+// but it did change profiling results enough to let me optimize with cache misses in mind a bit more
+// real world symbol resolution in tracy is done alongside a complex application being run,
+// so we want be be fast on cold cache even if most testing cases ends up fitting well in cache
 
 // Function to wipe the cache
 void _clear_cpu_cache () {

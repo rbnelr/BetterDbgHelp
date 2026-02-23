@@ -23,6 +23,9 @@ using namespace kiss;
 
 #include "ankerl/unordered_dense.h"
 
+template <typename K, typename V>
+using ankerl_hashmap = ankerl::unordered_dense::map<K, V>;
+
 #include "tracy/Tracy.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN

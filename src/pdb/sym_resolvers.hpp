@@ -21,6 +21,7 @@ public:
 };
 
 class SymResolver : public SymResolverBase {
+friend class SymResolverDebughelp;
 	ModuleCache mod_cache;
 	
 	TimerMeasurement tfind_symbol_for_addr = TimerMeasurement("find_symbol_for_addr");
@@ -29,6 +30,7 @@ class SymResolver : public SymResolverBase {
 	TimerMeasurement tCombinedAddr2sym = TimerMeasurement("CombinedAddr2sym");
 
 public:
+
 	SymResolver (HANDLE hprocess): mod_cache{hprocess} {}
 	virtual ~SymResolver () {}
 	
@@ -200,7 +202,7 @@ public:
 		uint32_t sym_idx;
 		Symbol* sym;
 		{
-			//TimerMeasZone(tfind_symbol_for_addr);
+			TimerMeasZone(tfind_symbol_for_addr);
 			sym = mod->pdb->find_symbol_for_addr(rva, &sym_idx);
 			if (!sym) {
 				res->err = "Symbol not found";
@@ -226,7 +228,7 @@ public:
 
 		SourceLoc src_loc = {};
 		{
-			//TimerMeasZone(tfind_source_loc_for_addr);
+			TimerMeasZone(tfind_source_loc_for_addr);
 			if (mod->pdb->find_source_loc_for_addr(sym, rva, &src_loc)) {
 				res->src_filepath = src_loc.filepath;
 				res->src_lineno = src_loc.lineno;
@@ -234,7 +236,7 @@ public:
 		}
 
 		if (sym->inline_depth > 0) {
-			//TimerMeasZone(ttrace_inlinesites);
+			TimerMeasZone(ttrace_inlinesites);
 			res->num_inlines = mod->pdb->trace_inlinesites_for_addr(sym, rva, res->inlines, SymResult::MAX_INLINES);
 		}
 
@@ -273,7 +275,6 @@ public:
 
 class SymResolverDebughelp {
 	HANDLE hprocess;
-public:
 	
 	TimerMeasurement tDebughelp_init = TimerMeasurement("Debughelp_init");
 	TimerMeasurement tSymFromAddr = TimerMeasurement("SymFromAddr");
@@ -284,6 +285,7 @@ public:
 	TimerMeasurement tSymGetLineFromInlineContext = TimerMeasurement("SymGetLineFromInlineContext");
 	TimerMeasurement tCombinedAddr2sym = TimerMeasurement("CombinedAddr2sym");
 	TimerMeasurement tGetInlines = TimerMeasurement("GetInlines");
+public:
 
 	SymResolverDebughelp (HANDLE hprocess): hprocess{hprocess} {
 		TimerMeasZone(tDebughelp_init);
@@ -418,7 +420,7 @@ public:
 
 		BOOL res1;
 		{
-			//TimerMeasZone(tSymFromAddr);
+			TimerMeasZone(tSymFromAddr);
 			res1 = real_dbghelp.SymFromAddr(hprocess, (DWORD64)addr, nullptr, &buf.si);
 		}
 		if (!res1) {
@@ -427,7 +429,7 @@ public:
 		
 		BOOL res2;
 		{
-			//TimerMeasZone(tSymGetLineFromAddr64);
+			TimerMeasZone(tSymGetLineFromAddr64);
 
 			IMAGEHLP_LINE64 line = {};
 			line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
@@ -442,27 +444,27 @@ public:
 			DWORD inlineNum = 0;
 			if (real_dbghelp.SymAddrIncludeInlineTrace) {
 				{
-					//TimerMeasZone(tSymAddrIncludeInlineTrace);
+					TimerMeasZone(tSymAddrIncludeInlineTrace);
 					inlineNum = real_dbghelp.SymAddrIncludeInlineTrace(hprocess, (DWORD64)addr);
 				}
 
 				DWORD idx;
 				if (inlineNum != 0) {
-					//TimerMeasZone(tSymQueryInlineTrace);
+					TimerMeasZone(tSymQueryInlineTrace);
 					doInline = real_dbghelp.SymQueryInlineTrace(hprocess, (DWORD64)addr, 0, (DWORD64)addr, (DWORD64)addr, &ctx, &idx);
 				}
 			}
 		
 			if (doInline) {
-				//TimerMeasZone(tGetInlines);
+				TimerMeasZone(tGetInlines);
 				for (DWORD i=0; i<inlineNum; i++) {
 					{
-						//TimerMeasZone(tSymFromInlineContext);
+						TimerMeasZone(tSymFromInlineContext);
 						res1 = real_dbghelp.SymFromInlineContext(hprocess, (DWORD64)addr, ctx, NULL, &buf.si);
 					}
 				
 					if (res1) {
-						//TimerMeasZone(tSymGetLineFromInlineContext);
+						TimerMeasZone(tSymGetLineFromInlineContext);
 
 						IMAGEHLP_LINE64 line = {};
 						line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
@@ -487,6 +489,18 @@ public:
 		tSymGetLineFromInlineContext.print();
 		tCombinedAddr2sym.print();
 		tGetInlines.print();
+	}
+	void compare_timings (SymResolverBase* resolver) {
+		SymResolver* res = dynamic_cast<SymResolver*>(resolver);
+		if (res) {
+			float dbh = tCombinedAddr2sym.avg_sec();
+
+			float total = res->tCombinedAddr2sym.avg_sec();
+			float no_load = res->tCombinedAddr2sym.count > 0 ?
+				(res->tCombinedAddr2sym.total_sec - res->mod_cache.tload_pdb.total_sec) / (float)res->tCombinedAddr2sym.count : 0.0f;
+
+			logf("|Speedup: %.2fx  excluding pdb read: %.2fx\n", dbh/total, dbh/no_load);
+		}
 	}
 };
 

@@ -70,32 +70,33 @@ public:
 	template <typename FUNC>
 	bool find_exports (StrAlloc& strs, FUNC func_and_name) {
 		auto& exports = nt_header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-		if (exports.VirtualAddress) {
-			auto* export_directory = (IMAGE_EXPORT_DIRECTORY*)map_rva(exports.VirtualAddress);
-			
-			// list[NumberOfFunctions] of RVA of function addresses
-			// Not sorted!
-			auto* functions = (DWORD*)map_rva(export_directory->AddressOfFunctions);
-			// list[NumberOfNames] of RVA of function name strings
-			auto* names = (DWORD*)map_rva(export_directory->AddressOfNames);
-			// list[NumberOfNames] of RVA of indices into functions, for each name
-			auto* ordinals = (WORD*)map_rva(export_directory->AddressOfNameOrdinals);
-			
-			// export table can have functions without name entry,
-			// which is why we iterate list of ordinals instead to skip nameless function
-			for (DWORD i=0; i<export_directory->NumberOfNames; i++) {
-				auto ord = ordinals[i];
-				auto* name = (const char*)map_rva(names[i]);
-				auto func_rva = functions[ord];
-
-				func_and_name(func_rva, strs.push(name));
-			}
-
-			return true;
+		if (exports.VirtualAddress == 0) {
+			return false;
 		}
-		// don't throw exception
-		// exports.VirtualAddress being null may be expected for .exe (unlike .dll)
-		return false;
+
+		auto* export_directory = (IMAGE_EXPORT_DIRECTORY*)map_rva(exports.VirtualAddress);
+		if (export_directory->NumberOfNames == 0) {
+			return false;
+		}
+		// list[NumberOfFunctions] of RVA of function addresses
+		// Not sorted!
+		auto* functions = (DWORD*)map_rva(export_directory->AddressOfFunctions);
+		// list[NumberOfNames] of RVA of function name strings
+		auto* names = (DWORD*)map_rva(export_directory->AddressOfNames);
+		// list[NumberOfNames] of RVA of indices into functions, for each name
+		auto* ordinals = (WORD*)map_rva(export_directory->AddressOfNameOrdinals);
+			
+		// export table can have functions without name entry,
+		// which is why we iterate list of ordinals instead to skip nameless function
+		for (DWORD i=0; i<export_directory->NumberOfNames; i++) {
+			auto ord = ordinals[i];
+			auto* name = (const char*)map_rva(names[i]);
+			auto func_rva = functions[ord];
+
+			func_and_name(func_rva, strs.push(name));
+		}
+
+		return true;
 	}
 };
 

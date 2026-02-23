@@ -366,6 +366,9 @@ public:
 					logf("---\n");
 				}
 				resolver->print_timings();
+				if (dbghelp) {
+					dbghelp->compare_timings(resolver.get());
+				}
 			}
 		}
 	}
@@ -411,14 +414,16 @@ public:
 		mismatch_counts.print();
 	}
 	
-	void sweep_mod_measure (std::string_view filter) {
+	void sweep_mod_measure (std::string_view filter, int repeat=1) {
 		auto& mod = loaded_modules.find(filter);
 		auto start = (uint64_t)mod.addr;
 		auto end = (uint64_t)mod.addr + mod.size;
 
 		logf("@ Sweep for module %s: [%llx-%llx]\n", mod.path.c_str(), start, end);
-		for (uint64_t addr = start; addr < end; addr++) {
-			measure_addr2sym((char*)addr);
+		for (int i=0; i<repeat; i++) {
+			for (uint64_t addr = start; addr < end; addr++) {
+				measure_addr2sym((char*)addr);
+			}
 		}
 		if (print_timings) {
 			if (dbghelp) {
@@ -426,6 +431,9 @@ public:
 				logf("---\n");
 			}
 			resolver->print_timings();
+			if (dbghelp) {
+				dbghelp->compare_timings(resolver.get());
+			}
 		}
 	}
 
@@ -454,6 +462,9 @@ public:
 				logf("---\n");
 			}
 			resolver->print_timings();
+			if (dbghelp) {
+				dbghelp->compare_timings(resolver.get());
+			}
 		}
 	}
 

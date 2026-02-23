@@ -58,7 +58,10 @@ namespace kiss {
 		}
 
 		TimerMeasurement (const char* name): name{name} {}
-
+		
+		float avg_sec () {
+			return count > 0 ? (total_sec / (float)count) : 0.0f;
+		}
 		void print () {
 			auto ms = count > 0 ? (total_sec / (float)count) * 1000000.0f : 0.0f;
 			logf("|Timer %-30s: avg %7.3f us (%dx) min=%7.3f max=%7.3f\n", name, ms, count, min_sec*1000000.0f, max_sec*1000000.0f);
