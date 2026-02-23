@@ -468,9 +468,9 @@ int main(int argc, const char** argv) {
 	
 	//print_timings = false;
 	//example_addresses(true, false, 0);
-	//sweep_tests();
+	sweep_tests();
 
-	profiling_run();
+	//profiling_run();
 	//profiling_run_cached();
 	//profiling_run_cachemiss();
 

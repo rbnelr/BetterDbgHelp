@@ -6,6 +6,9 @@ class SymResolverBase;
 struct SymResult;
 
 struct MismatchCounts {
+	int total_checks = 0;
+	int total_mismatches = 0;
+
 	int symbol_mismatch = 0;
 	int source_mismatch = 0;
 	int inline_mimatch = 0;
@@ -33,6 +36,7 @@ struct MismatchCounts {
 		//logf("  symbol_name_mangled: %d\n", symbol_name_mangled);
 		logf("  DH_no_source: %d\n", DH_no_source);
 		logf("  other: %d\n", other);
+		logf("= %.1f%% mismatches\n", (float)total_mismatches / (float)total_checks * 100.0f);
 	}
 	
 	// horrible way to pass this data
@@ -177,8 +181,8 @@ struct SymResult {
 		logf("  info.Scope     : %10d\n", info.Scope);
 		logf("  info.Tag       : %10d\n", info.Tag);
 	}
-
-	bool equal (SymResult const& r, MismatchCounts::Data c={}) const {
+	
+	bool _equal (SymResult const& r, MismatchCounts::Data c={}) const {
 		auto* counts = c.counts;
 
 		if (valid() != r.valid()) {
@@ -261,6 +265,16 @@ struct SymResult {
 			// If both throw error it counts as a match as comparing errors may be hard
 		}
 		return true;
+	}
+	bool equal (SymResult const& r, MismatchCounts::Data c={}) const {
+		bool match = _equal(r, c);
+		if (c.counts) {
+			c.counts->total_checks++;
+			if (!match) {
+				c.counts->total_mismatches++;
+			}
+		}
+		return match;
 	}
 	
 	void print_sym () {
