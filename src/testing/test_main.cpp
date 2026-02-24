@@ -467,7 +467,7 @@ int main(int argc, const char** argv) {
 	//example_addresses(true, true, 0);
 	
 	//print_timings = false;
-	//example_addresses(true, false, 0);
+	example_addresses(true, false, 0);
 	//sweep_tests();
 
 	//profiling_run();
@@ -508,12 +508,33 @@ int main(int argc, const char** argv) {
 	//	sym.fuzz_mod_measure(".exe", 6000, 5);
 	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
-	try {
-		ZoneScopedN("rust_bevy_test.exe");
-		TestRunner sym("test_executables/RustBevyApp/rust_bevy_test.exe");
-		sym.print_pdb_stats(".exe");
-		sym.fuzz_mod(".exe", 20000, 5);
-	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+	//try {
+	//	ZoneScopedN("rust_bevy_test.exe");
+	//	TestRunner sym("test_executables/RustBevyApp/rust_bevy_test.exe");
+	//	sym.print_pdb_stats(".exe");
+	//	sym.fuzz_mod(".exe", 20000, 5);
+	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+
+	//try {
+	//	ZoneScopedN("TinyProgram.exe");
+	//	TestRunner sym("test_executables/TinyProgram/TinyProgram.exe", 0.5f);
+	//
+	//	char* exe = sym.get_addr(".exe");
+	//	char* ucrtbase = sym.get_addr("ucrtbase.dll");
+	//
+	//	//sym.warmup(exe + 0x21F0);
+	//	//sym.warmup(ucrtbase + 0x1B370);
+	//
+	//	char* stack_address = (char*)&sym;
+	//
+	//	sym.run_examples_addresses("TinyProgram", true, true, 0, [=] (std::function<void(char*)> at_addr) {
+	//		at_addr(exe + 0x21F0); // main()
+	//		at_addr(ucrtbase + 0x1B370); // __stdio_common_vfprintf
+	//
+	//		at_addr(exe - 50); // likely not allocated and outside any module
+	//		at_addr(stack_address); // allocated, but not module
+	//	});
+	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 
 	return 0;
 }

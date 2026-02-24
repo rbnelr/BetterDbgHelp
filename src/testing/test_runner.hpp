@@ -225,9 +225,13 @@ public:
 	}
 
 	void print_addr (const char* context, char* addr) {
-		auto& mod = get_mod(addr);
-		auto rel_addr = (int64_t)addr - (int64_t)mod.addr;
-		logf("%s: [%s+%llx] ", context, mod.name.c_str(), rel_addr);
+		try {
+			auto& mod = get_mod(addr);
+			auto rel_addr = (int64_t)addr - (int64_t)mod.addr;
+			logf("%s: [%s+%llx] ", context, mod.name.c_str(), rel_addr);
+		} catch (std::exception&) {
+			logf("%s: [unknown] ", context);
+		}
 	}
 
 	void show_addr2sym (char* addr) {
