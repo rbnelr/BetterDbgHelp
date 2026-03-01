@@ -100,12 +100,12 @@ Sadly the Bevy example is at almost 30%, most of which, weirdly, is dbghelp not 
 * util.hpp: `StrAlloc`, `BinAlloc` crude push allocators for efficient allocation of lookup data, return ids=offsets for access
 
 # Known Caveats / TODOs
-* have not added mismatch logging to dll version yet, which will allow testing in real profiling scenarios
 * if app uses many dlls, pdb reading times can eat into performance gains, also lookup data can use lots of RAM -> cache lookup data on disk and read back via memory mapped file!
 * lots of mismatches with LLVM, llvm bug? If bug in my code why does it work so well in c++?
 * embarrassingly I had only tested release-mode executables at the start, added trampoline symbols later but still need to test debug mode more
 * SYMBOL_INFO has some fields not needed by tracy, some cannot be replicated, unclear which use cases they have
 * OMAP data is not implemented, when do executables even have OMAP?
+* Addresses with highest bit set 0xFFFF... seem to be translate to kernel symbols in dbghelp, I'm not handling those
 * pdb reading reliability, need to turn some asserts into errors
 
 # Overview of symbol resolution in PDBs
