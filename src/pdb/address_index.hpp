@@ -29,7 +29,7 @@ class AddressIndex {
 	std::vector<uint32_t, align_alloc<uint32_t>> block_indices;
 	
 public:
-	void print_stats (size_t count, const char* name) {
+	void print_stats (size_t count, const char* name) const {
 		auto used_slots = count;
 		auto num_slots = blocks.size()*BLOCKSZ;
 

@@ -291,11 +291,11 @@ public:
 				res->print();
 			}
 
-			auto _old = mismatch_counts.symbol_mismatch_overlap;
+			//auto _old = mismatch_counts.symbol_mismatch_overlap;
 
 			// test both results, effectively showing mismatches only for unique result ranges
-			if (!res->equal(*res_dbghelp, { &mismatch_counts, resolver.get(), (void*)addr }) &&
-				mismatch_counts.symbol_mismatch_overlap == _old // HACK: Avoid showing diff for mismatched due to overlapping symbols, to better find issues I can fix
+			if (!res->equal(*res_dbghelp, { &mismatch_counts, resolver.get(), (void*)addr })
+				//&& mismatch_counts.symbol_mismatch_overlap == _old // HACK: Avoid showing diff for mismatched due to overlapping symbols, to better find issues I can fix
 				) {
 				
 				auto& mod = get_mod((char*)addr);

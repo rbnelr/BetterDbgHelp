@@ -1809,13 +1809,6 @@ class PdbReader {
 
 public:
 
-	static std::unique_ptr<PdbReader> pdb_for_exe (std::filesystem::path const& exe_path) {
-		PDB_Locator locator(exe_path);
-		auto path = locator.get_pdb_path();
-		auto rsds = locator.get_rsds();
-		return std::make_unique<PdbReader>(std::move(path), rsds);
-	}
-
 	PdbReader (std::filesystem::path&& pdb_path, PDB_Locator::PDB_guid_and_age const& rsds) {
 		ZoneScopedN("parse_pdb");
 
@@ -1887,13 +1880,14 @@ public:
 		//logf("PDB read.\n");
 	}
 	
-	static std::unique_ptr<FastPdbLookup> try_load_lookup_for_exe (std::filesystem::path const& exe_path) {
-		try {
-			auto reader = PdbReader::pdb_for_exe(exe_path);
-			return std::make_unique<FastPdbLookup>( std::move(reader->lookup) );
-		} catch (std::exception& ex) {
-			logf("!!! PDB loading exception: %s\n", ex.what());
-		}
-		return nullptr;
+	static std::unique_ptr<PdbReader> pdb_for_exe (std::filesystem::path const& exe_path) {
+		PDB_Locator locator(exe_path);
+		auto path = locator.get_pdb_path();
+		auto rsds = locator.get_rsds();
+		return std::make_unique<PdbReader>(std::move(path), rsds);
+	}
+	static std::unique_ptr<FastPdbLookup> load_lookup_for_exe (std::filesystem::path const& exe_path) {
+		auto reader = PdbReader::pdb_for_exe(exe_path);
+		return std::make_unique<FastPdbLookup>( std::move(reader->lookup) );
 	}
 };

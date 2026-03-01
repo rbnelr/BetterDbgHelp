@@ -455,13 +455,15 @@ void test_dll () {
 // errors in pbd parsing encountered when running as dll hooked into tracy
 // reproduce by simply loading pdb
 void pdb_error_cases () {
-	PdbReader::try_load_lookup_for_exe("C:\\Windows\\System32\\combase.dll");
+	PdbReader::load_lookup_for_exe("C:\\Windows\\System32\\combase.dll");
 
 	ExportTableQuery("C:\\WINDOWS\\SYSTEM32\\profapi.dll");
 }
 
 // hard code which test cases are used for now
 int main(int argc, const char** argv) {
+	run_dll_wrapper_as_resolver = true;
+
 	//pdb_error_cases();
 	//test_dll();
 	//example_addresses(true, true, 0);

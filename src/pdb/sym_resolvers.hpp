@@ -48,8 +48,7 @@ public:
 		res->module_path = mod->ansi_path.c_str();
 
 		if (!mod->pdb) {
-			auto* exports = mod->load_export_table();
-
+			auto* exports = mod->exports.get();
 			if (exports) {
 				uint64_t sym_rva;
 				uint32_t sym_idx;
@@ -169,8 +168,7 @@ public:
 		res->module_path = mod->ansi_path.c_str();
 
 		if (!mod->pdb) {
-			auto* exports = mod->load_export_table();
-			
+			auto* exports = mod->exports.get();
 			if (exports) {
 				uint64_t sym_rva;
 				uint32_t sym_idx;
@@ -786,8 +784,9 @@ void MismatchCounts::symbol_mismatch_or_mangled (SymResult const& res, SymResult
 	//	}
 	//}
 	
-	if (d.resolver->has_symbol_for_addr(d.addr, dbghelp_res))
-		symbol_mismatch_overlap++;
-	else
-		symbol_mismatch++;
+	//if (d.resolver->has_symbol_for_addr(d.addr, dbghelp_res))
+	//	symbol_mismatch_overlap++;
+	//else
+	//	symbol_mismatch++;
+	symbol_mismatch++;
 }

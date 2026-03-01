@@ -1,9 +1,77 @@
 #pragma once
 #include "util.hpp"
 #include "lookup.hpp"
+#include "dbghelp_api.hpp"
 
 class SymResolverBase;
 struct SymResult;
+
+inline bool nullable_strcmp (const char* l, const char* r) {
+	if ((l == nullptr) != (r == nullptr))
+		return false;
+	if (l == nullptr)
+		return true;
+	return strcmp(l, r) == 0;
+}
+
+/*
+> TypeIndex && Index
+appear to indices that do not correspond to the indices used internally in the pdb, and are unstable across different dbghelp runs
+They may be returned only to allow the user to do faster lookups that direcly go into the dbghelp/DIA caches, which is why I will never be able to replicate them
+For mismatch checking these need to be ignored
+
+> ModBase
+Sometimes is 0 for no reason
+
+> Address
+Virtual start address of symbol, ie sym->base_addr + mod->base_addr
+For inlinesites this is sometimes the function symbol/root callsite start address, but sometimes it is something else I don't understand
+__ImageBase returns 0 instead of mod->base_addr for some stupid reason
+
+> Size
+for module symbols makes sense, but for global data symbols it has to be "estimated" based on the typeinfo, which I cannot easily replicate
+for global function symbols it's even more weird and dbghelp seemingly sometimes computes it based on types extracted from name mangling
+__ImageBase behaves weirdly, Size=64 == sizeof(IMAGE_DOS_HEADER)? It also seems to be the only one where Address=0
+
+> Tag: SymTagEnum
+Function, SymTagData, SymTagPublicSymbol, SymTagThunk, SymTagInlineSite have been observed, I can mostly replicate these
+
+> Flags
+Don't bother returning flags, i've only observed very few of them appear and
+at least SYMFLAG_EXPORT seems to be determined based on PE export table instead of pdb, which is overcomplicated imho
+a full 1-1 match of dbghelp behavior is probably only possibly by caching dbghelp results, which is not my goal
+
+> Value, Register, Scope
+Seen only 0 for these?
+*/
+
+inline void print_diff_SYMBOL_INFO (const SYMBOL_INFO& l, const SYMBOL_INFO& r) {
+	logf(" > SYMBOL_INFO:       custom |      dbghelp\n");
+	//logf("   |TypeIndex : %12d | %12d \n",     l.TypeIndex, r.TypeIndex);
+	//logf("   |Index     : %12d | %12d \n",     l.Index    , r.Index    );
+	logf("   |Size      : %12x | %12x \n",     l.Size     , r.Size     );
+	//logf("   |ModBase   : %12llx | %12llx \n", l.ModBase  , r.ModBase  );
+	logf("   |Flags     : %12x | %12x \n",     l.Flags    , r.Flags    );
+	logf("   |Value     : %12llx | %12llx \n", l.Value    , r.Value    );
+	logf("   |Address   : %12llx | %12llx \n", l.Address  , r.Address  );
+	logf("   |Register  : %12d | %12d \n",     l.Register , r.Register );
+	logf("   |Scope     : %12d | %12d \n",     l.Scope    , r.Scope    );
+	logf("   |Tag       : %12s | %12s \n",     SymTagEnum_str((SymTagEnum)l.Tag), SymTagEnum_str((SymTagEnum)r.Tag));
+}
+inline bool sym_info_equal_diff (const SYMBOL_INFO& l, const SYMBOL_INFO& r) {
+	return true
+		//&& l.TypeIndex    == r.TypeIndex
+		//&& l.Index    == r.Index
+		&& l.Scope    == r.Scope
+		//&& l.Size     == r.Size // Not replicating __ImageBase Size=64 right now
+		&& l.ModBase    == r.ModBase // For some godforsaken reason __stdio_common_vfprintf counts is detected as export symbol and is randomly ModBase=0
+		//&& l.Flags    == r.Flags
+		&& l.Value    == r.Value
+		//&& l.Address  == r.Address
+		&& l.Register == r.Register
+		&& l.Scope    == r.Scope
+		&& l.Tag      == r.Tag;
+}
 
 struct MismatchCounts {
 	int total_checks = 0;
@@ -17,14 +85,14 @@ struct MismatchCounts {
 	int info_flags_mimatch = 0;
 	int info_tag_mimatch = 0;
 
-	int symbol_mismatch_overlap = 0; // different symbol name (but overlapping symbol with correct name existed)
+	//int symbol_mismatch_overlap = 0; // different symbol name (but overlapping symbol with correct name existed)
 	//int symbol_name_mangled = 0; // correct symbol but we did not filer out mangled scoped info (Note: I did not enable demangling, but dbghelp still 'stripped' the name of the mangled parts)
 	int DH_no_source = 0; // we have source info, dbghelp does not
 
 	int other = 0;
 
 	void print () {
-		logf("Mismatches:\n");
+		logf("Mismatches Summay:\n");
 		logf("  symbol_mismatch: %d\n", symbol_mismatch);
 		logf("  source_mismatch: %d\n", source_mismatch);
 		logf("  inline_mimatch: %d\n", inline_mimatch);
@@ -32,11 +100,11 @@ struct MismatchCounts {
 		logf("  info_size_mimatch: %d\n", info_size_mimatch);
 		logf("  info_flags_mimatch: %d\n", info_flags_mimatch);
 		logf("  info_tag_mimatch: %d\n", info_tag_mimatch);
-		logf("  symbol_mismatch_overlap: %d\n", symbol_mismatch_overlap);
+		//logf("  symbol_mismatch_overlap: %d\n", symbol_mismatch_overlap);
 		//logf("  symbol_name_mangled: %d\n", symbol_name_mangled);
 		logf("  DH_no_source: %d\n", DH_no_source);
 		logf("  other: %d\n", other);
-		logf("= %.1f%% mismatches\n", (float)total_mismatches / (float)total_checks * 100.0f);
+		logf("= (%d/%d) %.1f%% mismatches\n", total_mismatches, total_checks, (float)total_mismatches / (float)total_checks * 100.0f);
 	}
 	
 	// horrible way to pass this data
@@ -124,8 +192,8 @@ struct SymResult {
 
 		if (valid()) {
 			// dbghelp.dll not returning module name, assume it's correct
-			//if (my_strcmp(module_path, r.module_path) != 0) return false;
-			if (!my_strcmp(sym_name, r.sym_name)) return false;
+			//if (nullable_strcmp(module_path, r.module_path) != 0) return false;
+			if (!nullable_strcmp(sym_name, r.sym_name)) return false;
 		}
 		else {
 			// If both throw error it counts as a match as comparing errors may be hard
@@ -137,12 +205,12 @@ struct SymResult {
 
 		if (valid()) {
 			// dbghelp.dll not returning module name, assume it's correct
-			//if (my_strcmp(module_path, r.module_path) != 0) return false;
-			if (!my_strcmp(sym_name, r.sym_name)) return false;
+			//if (nullable_strcmp(module_path, r.module_path) != 0) return false;
+			if (!nullable_strcmp(sym_name, r.sym_name)) return false;
 
 			if (has_source() != r.has_source()) return false;
 			if (has_source()) {
-				if (!my_strcmp(src_filepath, r.src_filepath)) return false;
+				if (!nullable_strcmp(src_filepath, r.src_filepath)) return false;
 				if (src_lineno != r.src_lineno) return false;
 			}
 		}
@@ -158,28 +226,17 @@ struct SymResult {
 		//return memcmp(&info, &r.info, INFO_RELEVANT_SIZE) == 0;
 		
 		// TODO: for now just compare the values I actively try to get, later try to achive exact matches
-		return true
-			&& info.Scope == r.info.Scope
-			//&& info.Size == r.info.Size
-			//&& info.Flags == r.info.Flags
-			&& info.Value == r.info.Value
-			&& info.Address == r.info.Address
-			&& info.Register == r.info.Register
-			&& info.Scope == r.info.Scope
-			&& info.Tag == r.info.Tag
-		;
-	}
-	void print_info () const {
-		logf("  info.TypeIndex : %10d\n", info.TypeIndex);
-		logf("  info.Index     : %10d\n", info.Index);
-		logf("  info.Size      : %10x\n", info.Size);
-		logf("  info.ModBase   : %10llx\n", info.ModBase);
-		logf("  info.Flags     : %10x\n", info.Flags);
-		logf("  info.Value     : %10llx\n", info.Value);
-		logf("  info.Address   : %10llx\n", info.Address);
-		logf("  info.Register  : %10d\n", info.Register);
-		logf("  info.Scope     : %10d\n", info.Scope);
-		logf("  info.Tag       : %10d\n", info.Tag);
+		//return true
+		//	&& info.Scope == r.info.Scope
+		//	//&& info.Size == r.info.Size
+		//	//&& info.Flags == r.info.Flags
+		//	&& info.Value == r.info.Value
+		//	&& info.Address == r.info.Address
+		//	&& info.Register == r.info.Register
+		//	&& info.Scope == r.info.Scope
+		//	&& info.Tag == r.info.Tag
+		//;
+		return sym_info_equal_diff(info, r.info);
 	}
 	
 	bool _equal (SymResult const& r, MismatchCounts::Data c={}) const {
@@ -194,7 +251,7 @@ struct SymResult {
 		if (valid()) {
 			// dbghelp.dll not returning module name, assume it's correct
 			//if (my_strcmp(module_path, r.module_path) != 0) return false;
-			if (!my_strcmp(sym_name, r.sym_name)) {
+			if (!nullable_strcmp(sym_name, r.sym_name)) {
 				if (counts) {
 					counts->symbol_mismatch_or_mangled(*this, r, c);
 				}
@@ -228,7 +285,7 @@ struct SymResult {
 				return false;
 			}
 			if (has_source()) {
-				if (!my_strcmp(src_filepath, r.src_filepath)) {
+				if (!nullable_strcmp(src_filepath, r.src_filepath)) {
 					if (counts) {
 						counts->source_mismatch++;
 					}
@@ -251,8 +308,8 @@ struct SymResult {
 			for (int i=0; i<num_inlines; i++) {
 				auto& li = inlines[i];
 				auto& ri = r.inlines[i];
-				if (    !my_strcmp(li.fnname, ri.fnname)
-					 || !my_strcmp(li.filepath, ri.filepath)
+				if (    !nullable_strcmp(li.fnname, ri.fnname)
+					 || !nullable_strcmp(li.filepath, ri.filepath)
 					 || li.lineno != ri.lineno ) {
 					if (counts) {
 						counts->inline_mimatch++;
@@ -330,43 +387,33 @@ struct SymResult {
 			}
 		}
 	}
-
-	static bool my_strcmp (const char* l, const char* r) {
-		if ((l == nullptr) != (r == nullptr))
-			return false;
-		if (l == nullptr)
-			return true;
-		return strcmp(l, r) == 0;
-	}
+	
 	void print_diff (const char* mod_name, int64_t rel_addr, SymResult const& r) const {
 		if (r.valid())
-			logf("!!! [%s+%llx] (%s) Result Mismatch:\n", mod_name, rel_addr, r.sym_name);
+			logf("!! [%s+%llx] (%s) Result Mismatch:\n", mod_name, rel_addr, r.sym_name);
 		else
-			logf("!!! [%s+%llx] (SymResolver: %s) Result Mismatch:\n", mod_name, rel_addr, sym_name);
+			logf("!! [%s+%llx] (SymResolver: %s) Result Mismatch:\n", mod_name, rel_addr, sym_name);
 
 		if (valid() != r.valid()) {
 			if (!  valid()) logf("> SymResolver: %s\n", err);
-			if (!r.valid()) logf("> dbghelp:dll: %s\n", r.err);
+			if (!r.valid()) logf("> dbghelp.dll: %s\n", r.err);
 			return;
 		}
 
 		//if (   strcmp(module_path, r.module_path) != 0
 		//	|| strcmp(sym_name, r.sym_name) != 0 ) {
 		//	logf("> sym:         \"%s!%s\" !=\n", module_path,sym_name);
-		//	logf("> dbghelp:dll: \"%s!%s\"\n", r.module_path,r.sym_name);
+		//	logf("> dbghelp.dll: \"%s!%s\"\n", r.module_path,r.sym_name);
 		//}
-		if (!my_strcmp(sym_name, r.sym_name)) {
+		if (!nullable_strcmp(sym_name, r.sym_name)) {
 			logf("> SymResolver: \"%s!%s\" !=\n", module_path,sym_name);
-			logf("> dbghelp:dll: \"[unknown]!%s\"\n", r.sym_name);
+			logf("> dbghelp.dll: \"[unknown]!%s\"\n", r.sym_name);
 		}
 		if (!info_equal(r)) {
-			logf("> SymResolver:\n");
-			print_info();
-			logf("> dbghelp:dll:\n");
-			r.print_info();
+			print_diff_SYMBOL_INFO(info, r.info);
 		}
 		if (   has_source() != r.has_source()
-			|| !my_strcmp(src_filepath, r.src_filepath) || src_lineno != r.src_lineno) {
+			|| !nullable_strcmp(src_filepath, r.src_filepath) || src_lineno != r.src_lineno) {
 			
 			if (has_source()) {
 				logf("> SymResolver: \"%s:%d\" !=\n", src_filepath,src_lineno);
@@ -376,10 +423,10 @@ struct SymResult {
 			}
 				
 			if (r.has_source()) {
-				logf("> dbghelp:dll: \"%s:%d\"\n", r.src_filepath,r.src_lineno);
+				logf("> dbghelp.dll: \"%s:%d\"\n", r.src_filepath,r.src_lineno);
 			}
 			else {
-				logf("> dbghelp:dll: (No source info)\n");
+				logf("> dbghelp.dll: (No source info)\n");
 			}
 		}
 		
@@ -388,11 +435,11 @@ struct SymResult {
 			auto l = i < num_inlines ? inlines[i] : SourceLocAndFn{};
 			auto dh = i < r.num_inlines ? r.inlines[i] : SourceLocAndFn{};
 
-			if (   !my_strcmp(l.fnname, dh.fnname)
-				|| !my_strcmp(l.filepath, dh.filepath)
+			if (   !nullable_strcmp(l.fnname, dh.fnname)
+				|| !nullable_strcmp(l.filepath, dh.filepath)
 				||  l.lineno != dh.lineno) {
 				logf(" |inl%d SymResolver: %-15s %15s:%d\n", i, l.fnname, l.filepath, l.lineno);
-				logf(" |inl%d dbghelp:dll: %-15s %15s:%d\n", i, dh.fnname, dh.filepath, dh.lineno);
+				logf(" |inl%d dbghelp.dll: %-15s %15s:%d\n", i, dh.fnname, dh.filepath, dh.lineno);
 			}
 		}
 	}
