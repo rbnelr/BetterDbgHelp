@@ -454,25 +454,36 @@ void test_dll () {
 
 // errors in pbd parsing encountered when running as dll hooked into tracy
 // reproduce by simply loading pdb
-void pdb_error_cases () {
-	PdbReader::load_lookup_for_exe("C:\\Windows\\System32\\combase.dll");
+void pdb_testing () {
+	//PdbReader::load_lookup_for_exe("C:\\Windows\\System32\\combase.dll");
+	//ExportTableQuery("C:\\Windows\\System32\\combase.dll");
 
-	ExportTableQuery("C:\\WINDOWS\\SYSTEM32\\profapi.dll");
+	//ExportTableQuery("C:\\WINDOWS\\SYSTEM32\\profapi.dll");
+
+	//ExportTableQuery("C:\\WINDOWS\\SYSTEM32\\ntoskrnl.exe");
+	//PdbReader::load_lookup_for_exe("C:\\WINDOWS\\SYSTEM32\\ntoskrnl.exe");
+
+	{
+		auto q = ExportTableQuery("C:\\WINDOWS\\SYSTEM32\\urlmon.dll");
+
+		uint64_t sym_rva;
+		uint32_t idx;
+		auto name = q.query(0x75eb9, &sym_rva, &idx);
+		assert(strcmp(name, "Ordinal492") == 0);
+	}
 }
 
 // hard code which test cases are used for now
 int main(int argc, const char** argv) {
-	ExportTableQuery("C:\\WINDOWS\\SYSTEM32\\ntoskrnl.exe");
-	PdbReader::load_lookup_for_exe("C:\\WINDOWS\\SYSTEM32\\ntoskrnl.exe");
 
-	run_dll_wrapper_as_resolver = true;
+	//run_dll_wrapper_as_resolver = true;
 
-	//pdb_error_cases();
+	pdb_testing();
 	//test_dll();
 	//example_addresses(true, true, 0);
 	
 	//print_timings = false;
-	example_addresses(true, false, 0);
+	//example_addresses(true, false, 0);
 	//sweep_tests();
 
 	//profiling_run();

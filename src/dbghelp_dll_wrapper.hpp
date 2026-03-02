@@ -168,9 +168,11 @@ struct DbgHelpWrapperSession {
 			return;
 		}
 
+	#if ENABLE_VERIFICATION
 		// Assume Sym* accesses are for same symbol are consecutive for purposes of mismatch counting
 		// any newly cached symbol will count once for mismatches.total_mismatches via flag to allow accurate mismatch rate
 		mismatches.total_checks++;
+	#endif
 
 		get_and_cache_symbol(Address);
 	}

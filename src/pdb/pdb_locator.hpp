@@ -68,7 +68,7 @@ public:
 	}
 
 	template <typename FUNC>
-	bool find_exports (StrAlloc& strs, FUNC func_and_name) {
+	bool find_exports (StrAlloc& strs, FUNC push_func) {
 		auto& exports = nt_header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
 		if (exports.VirtualAddress == 0) {
 			return false;
@@ -78,6 +78,7 @@ public:
 		if (export_directory->NumberOfNames == 0) {
 			return false;
 		}
+
 		// list[NumberOfFunctions] of RVA of function addresses
 		// Not sorted by address! Wait these are sorted alphabetically so the dll loader can do a name lookup, not useful to us though
 		auto* functions = (DWORD*)map_rva(export_directory->AddressOfFunctions);
@@ -86,18 +87,39 @@ public:
 		// list[NumberOfNames] of RVA of indices into functions, for each name
 		auto* ordinals = (WORD*)map_rva(export_directory->AddressOfNameOrdinals);
 
-		// TODO: have this loop copy the names from names+ordinals into a names_by_ordinal[NumberOfFunctions]
-		// Where nameless functions will be NULL, then sort names_by_ordinal + ordinals to allow
-		// binary search by address -> name != NULL ? name : format(ordinal)
+		// Build list of all functions both named ones and ones that can only be called via ordinal
+		std::vector<const char*> names_by_ordinal(export_directory->NumberOfFunctions, nullptr);
 		
-		// export table can have functions without name entry,
-		// which is why we iterate list of ordinals instead to skip nameless function
 		for (DWORD i=0; i<export_directory->NumberOfNames; i++) {
-			auto ord = ordinals[i];
+			WORD ord = ordinals[i];
 			auto* name = (const char*)map_rva(names[i]);
-			auto func_rva = functions[ord];
 
-			func_and_name(func_rva, strs.push(name));
+			// defensive coding
+			if (ord >= 0 && ord < export_directory->NumberOfFunctions) {
+				names_by_ordinal[ord] = name;
+			}
+		}
+
+		char format_buf[128];
+		for (DWORD i=0; i<export_directory->NumberOfFunctions; i++) {
+			DWORD func_rva = functions[i];
+			const char* name = names_by_ordinal[i];
+			DWORD ordinal = export_directory->Base + i;
+			
+			bool is_named = name != nullptr;
+
+			StrAlloc::sid name_str;
+			if (is_named) {
+				// named export function
+				name_str = strs.push(name);
+			}
+			else {
+				// export function by ordinal, format like dbghelp does
+				int len = sprintf_s(format_buf, sizeof(format_buf), "Ordinal%d", ordinal);
+				name_str = strs.push(format_buf, len);
+			}
+
+			push_func(func_rva, name_str, is_named);
 		}
 
 		return true;
@@ -288,21 +310,13 @@ public:
 	}
 };
 
-
-// TODO: Apparently dbghelp can sometimes return things like "Ordinal492"
-// I thought export functions by ordinal are not common anymore, but maybe I can replicate this
-//[BetterDbgHelp] !! Mismatch [urlmon.dll+75eb9] (BuildUserAgentStringMobileHelper):
-//> SymFromAddr
-// >  custom: "BuildUserAgentStringMobileHelper" !=
-// > dbghelp: "Ordinal492"
-// -> Looks like since i return the lower function where 
-
 class ExportTableQuery {
 	StrAlloc names;
 
 	struct Function {
 		uint32_t address;
 		StrAlloc::sid mangled_name;
+		//bool is_named; // Could track this
 	};
 	std::vector<Function> functions_sorted;
 	
@@ -322,7 +336,7 @@ public:
 			names.init();
 			
 			exe.open_image(filepath);
-			exe.find_exports(names, [this] (uint32_t func_rva, StrAlloc::sid mangled_name) {
+			exe.find_exports(names, [this] (uint32_t func_rva, StrAlloc::sid mangled_name, bool is_named) {
 				functions_sorted.emplace_back(func_rva, mangled_name);
 			});
 			
