@@ -18,8 +18,14 @@ public:
 	uint64_t base_addr;
 	size_t size;
 
+	// rust enum would be nice here
+	bool attempted_load = false;
 	std::unique_ptr<FastPdbLookup> pdb = nullptr;
 	std::unique_ptr<ExportTableQuery> exports = nullptr;
+	
+	inline bool is_kernel_module () const {
+		return (base_addr & (1llu << 63)) != 0;
+	}
 
 	LoadedModule (std::filesystem::path&& path, uint64_t base_addr, size_t size) {
 		this->path = std::move(path);
@@ -33,11 +39,23 @@ public:
 		assert(!pdb && !exports);
 		ZoneScopedC(0xffff00);
 		
-		pdb = load_pdb(path);
+		// export tables are enough for kernel addresses
+		if (!is_kernel_module()) {
+			pdb = load_pdb(path);
+		}
 		// fallback to export table
 		if (!pdb) {
 			exports = load_export_table(path);
 		}
+		attempted_load = true;
+	}
+
+	// lazy load, only needed for kernel modules
+	REL_FORCEINLINE void lazy_load () {
+		// This check avoids trying to load pdb over and over if both load_pdb and load_export_table ever fail
+		if (attempted_load)
+			return;
+		load_pdb_or_export_table();
 	}
 	
 	static std::unique_ptr<FastPdbLookup> load_pdb (std::filesystem::path const& path) {
@@ -73,37 +91,116 @@ public:
 
 	ModuleCache (HANDLE hprocess): hprocess{hprocess} {
 
+		cache_process_driver();
 	}
 	void clear () {
 		sorted_modules.clear();
 		sorted_modules.shrink_to_fit();
 		modules_by_handle.clear();
 	}
+
 	
-	// TODO: handle kernel addresses somehow, there is a pdb even for ntoskrnl.exe!
-	static inline bool IsKernelAddress(uint64_t addr) {
-		return (addr >> 63) != 0;
+	void load_module_lookup (LoadedModule* pmod) {
+		TimerMeasZone(tload_pdb);
+
+		_hprocess = hprocess;
+		_mod_base = pmod->base_addr;
+
+		pmod->load_pdb_or_export_table();
+	}
+
+	// I don't fully understand this, but this is what tracy uses to find kernel exe and other files for kernel addresses, like C:\WINDOWS\system32\ntoskrnl.exe
+	// TODO: rewrite to avoid stealing code?
+	void cache_process_driver () {
+		DWORD needed;
+		LPVOID dev[4096];
+		if (EnumDeviceDrivers(dev, sizeof(dev), &needed) != 0) {
+			char windir[MAX_PATH];
+			if (!GetWindowsDirectoryA(windir, sizeof(windir))) memcpy(windir, "c:\\windows", 11);
+			const auto windirlen = strlen(windir);
+
+			const auto sz = needed / sizeof(LPVOID);
+			for (size_t i = 0; i < sz; i++) {
+				char fn[MAX_PATH];
+				const auto len = GetDeviceDriverBaseNameA(dev[i], fn, sizeof(fn));
+				if (len != 0) {
+
+					const auto len = GetDeviceDriverFileNameA(dev[i], fn, sizeof(fn));
+					if (len != 0) {
+						char full[MAX_PATH];
+						char* path = fn;
+
+						if (memcmp(fn, "\\SystemRoot\\", 12) == 0) {
+							memcpy(full, windir, windirlen);
+							strcpy(full + windirlen, fn + 11);
+							path = full;
+						}
+
+						DWORD64 baseOfDll = (DWORD64)dev[i];
+						DWORD dllSize = 0;
+
+						// cache newly seen module
+						auto mod = std::make_unique<LoadedModule>(std::filesystem::path(full), baseOfDll, dllSize);
+						auto* pmod = mod.get();
+						
+						sorted_modules.emplace_back(std::move(mod));
+
+						//load_module_lookup(pmod);
+					}
+				}
+			}
+		}
+
+		// re-sort
+		std::sort(sorted_modules.begin(), sorted_modules.end(),
+		[] (std::unique_ptr<LoadedModule> const& l, std::unique_ptr<LoadedModule> const& r) {
+			return std::less<uint64_t>()(l->base_addr, r->base_addr);
+		});
+
+		for (auto& m : sorted_modules) {
+			printf("%llx %s\n", m->base_addr, m->ansi_filename.c_str());
+		}
 	}
 
 	LoadedModule* find_module_for_addr (uint64_t addr) {
 		//ZoneScoped;
 
-		if (IsKernelAddress(addr)) {
-			// These addresses apparently are actual kernel addresses, but VirtualQueryEx returns nothing for them
-			// bail to avoid wasting time on search + VirtualQueryEx
-
-			// TODO: Implement this, tracy uses CacheProcessDrivers to find these
-			return nullptr;
-		}
-		
 		// Try find cached data for module loaded in process
 		// Linear search shoule be fast enough for the moment
-		for (auto& m : sorted_modules) {
-			if (addr >= m->base_addr && addr < m->base_addr + m->size) {
-				return m.get();
+		// 
+		//if (is_kernel_addr(addr)) {
+		//	// These addresses apparently are actual kernel addresses, but VirtualQueryEx returns nothing for them
+		//	// bail to avoid wasting time on search + VirtualQueryEx
+		//
+		//	// TODO: Implement this, tracy uses CacheProcessDrivers to find these
+		//	return nullptr;
+		//}
+		//
+		//for (auto& m : sorted_modules) {
+		//	if (addr >= m->base_addr && addr < m->base_addr + m->size) {
+		//		return m.get();
+		//	}
+		//}
+
+		// Handle module.size==0, which means assume it goes until next module
+		size_t count = sorted_modules.size();
+		for (size_t i=0; i<count; i++) {
+			if (addr < sorted_modules[i]->base_addr) {
+				if (i > 0) {
+					// prev module is what 
+					auto* mod = sorted_modules[i-1].get();
+					assert(addr >= mod->base_addr);
+
+					if (mod->size == 0 || addr < mod->base_addr + mod->size) {
+						mod->lazy_load();
+						return mod;
+					}
+				}
+				// addr before first module or between modules
+				break;
 			}
 		}
-		
+
 		return try_get_and_cache_module(addr);
 	}
 
@@ -164,14 +261,7 @@ public:
 			return std::less<uint64_t>()(l->base_addr, r->base_addr);
 		});
 
-		{
-			TimerMeasZone(tload_pdb);
-
-			_hprocess = hprocess;
-			_mod_base = pmod->base_addr;
-
-			pmod->load_pdb_or_export_table();
-		}
+		load_module_lookup(pmod);
 		return pmod;
 	}
 };

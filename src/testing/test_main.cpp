@@ -539,6 +539,29 @@ void various () {
 	try {
 		TestRunner sym("test_executables/TinyProgram/TinyProgram.exe", 0.5f);
 
+		// TODO:
+		/*
+		[BetterDbgHelp] Loading ExportTable for C:\WINDOWS\system32\ntoskrnl.exe.
+		[BetterDbgHelp] !! Mismatch [ntoskrnl.exe+2c93c3] ([unknown]):
+		> SymFromAddr
+		 >  custom: "KeReleaseGuardedMutex" !=
+		 > dbghelp: "ExReleaseFastMutex"
+
+
+		 
+[BetterDbgHelp] !! Mismatch [ntoskrnl.exe+4135c0] ([unknown]):
+> SymFromAddr
+	>  custom: "memmove" !=
+	> dbghelp: "RtlMoveMemory"
+			 
+[BetterDbgHelp] !! Mismatch [ntoskrnl.exe+2c9483] ([unknown]):
+> SymFromAddr
+ >  custom: "KeReleaseGuardedMutex" !=
+ > dbghelp: "ExReleaseFastMutex"
+
+ (ctrl+F "ntoskrnl.exe+": 132 total)
+		 */
+
 		sym.show_addr2sym((char*)0xfffff802848bfdb3llu);
 		sym.show_addr2sym((char*)0xfffff802848bf64allu);
 		sym.show_addr2sym((char*)0xfffff802848bd128llu);

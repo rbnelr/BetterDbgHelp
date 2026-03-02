@@ -48,6 +48,12 @@ using ankerl_hashmap = ankerl::unordered_dense::map<K, V>;
 //#undef BF_TOP
 //#undef ERROR
 
+#if NDEBUG
+	#define REL_FORCEINLINE __forceinline
+#else
+	#define REL_FORCEINLINE
+#endif
+
 #define TRACY_MEMORY_PROFILING 0
 
 #if TRACY_ENABLE && TRACY_MEMORY_PROFILING
