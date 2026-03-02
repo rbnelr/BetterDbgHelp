@@ -230,7 +230,8 @@ public:
 			auto rel_addr = (int64_t)addr - (int64_t)mod.addr;
 			logf("%s: [%s+%llx] ", context, mod.name.c_str(), rel_addr);
 		} catch (std::exception&) {
-			logf("%s: [unknown] ", context);
+			//logf("%s: [unknown] ", context);
+			logf("%s: [%llx] ", context, addr);
 		}
 	}
 

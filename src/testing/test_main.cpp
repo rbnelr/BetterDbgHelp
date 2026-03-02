@@ -471,26 +471,10 @@ void pdb_testing () {
 		auto name = q.query(0x75eb9, &sym_rva, &idx);
 		assert(strcmp(name, "Ordinal492") == 0);
 	}
+	
 }
 
-// hard code which test cases are used for now
-int main(int argc, const char** argv) {
-
-	//run_dll_wrapper_as_resolver = true;
-
-	pdb_testing();
-	//test_dll();
-	//example_addresses(true, true, 0);
-	
-	//print_timings = false;
-	//example_addresses(true, false, 0);
-	//sweep_tests();
-
-	//profiling_run();
-	//profiling_run_cached();
-	//profiling_run_cachemiss();
-
-	//profiling_pdb_parse(100);
+void various () {
 	
 	//try {
 	//	TestRunner sym("test_executables/CppGame/city_builder_rel.exe");
@@ -551,6 +535,41 @@ int main(int argc, const char** argv) {
 	//		at_addr(stack_address); // allocated, but not module
 	//	});
 	//} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+
+	try {
+		TestRunner sym("test_executables/TinyProgram/TinyProgram.exe", 0.5f);
+
+		sym.show_addr2sym((char*)0xfffff802848bfdb3llu);
+		sym.show_addr2sym((char*)0xfffff802848bf64allu);
+		sym.show_addr2sym((char*)0xfffff802848bd128llu);
+		sym.show_addr2sym((char*)0xfffff802848bc86fllu);
+		sym.show_addr2sym((char*)0xfffff80284fb418ellu);
+		sym.show_addr2sym((char*)0xfffff802848d3830llu);
+		sym.show_addr2sym((char*)0xfffff80284beb0cdllu);
+		sym.show_addr2sym((char*)0xfffff80284a11505llu);
+		sym.show_addr2sym((char*)0xfffff8028486d996llu);
+	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
+}
+
+// hard code which test cases are used for now
+int main(int argc, const char** argv) {
+
+	//run_dll_wrapper_as_resolver = true;
+	
+	various();
+	//pdb_testing();
+	//test_dll();
+	//example_addresses(true, true, 0);
+	
+	//print_timings = false;
+	//example_addresses(true, false, 0);
+	//sweep_tests();
+
+	//profiling_run();
+	//profiling_run_cached();
+	//profiling_run_cachemiss();
+
+	//profiling_pdb_parse(100);
 
 	return 0;
 }

@@ -315,9 +315,45 @@ public:
 			print_err_throw("SymInitialize");
 		}
 
+		CacheProcessDrivers();
 	}
 	~SymResolverDebughelp () {
 		real_dbghelp.SymCleanup(hprocess);
+	}
+
+	// Temp: stolen from tracy, this is needed to get dbghelp to return kernel symbols
+	void CacheProcessDrivers() {
+		DWORD needed;
+		LPVOID dev[4096];
+		if (EnumDeviceDrivers(dev, sizeof(dev), &needed) != 0) {
+			char windir[MAX_PATH];
+			if (!GetWindowsDirectoryA(windir, sizeof(windir))) memcpy(windir, "c:\\windows", 11);
+			const auto windirlen = strlen(windir);
+
+			const auto sz = needed / sizeof(LPVOID);
+			for (size_t i = 0; i < sz; i++) {
+				char fn[MAX_PATH];
+				const auto len = GetDeviceDriverBaseNameA(dev[i], fn, sizeof(fn));
+				if (len != 0) {
+
+					const auto len = GetDeviceDriverFileNameA(dev[i], fn, sizeof(fn));
+					if (len != 0) {
+						char full[MAX_PATH];
+						char* path = fn;
+
+						if (memcmp(fn, "\\SystemRoot\\", 12) == 0) {
+							memcpy(full, windir, windirlen);
+							strcpy(full + windirlen, fn + 11);
+							path = full;
+						}
+
+						DWORD64 baseOfDll = (DWORD64)dev[i];
+						DWORD bllSize = 0;
+						real_dbghelp.SymLoadModuleEx(hprocess, nullptr, path, nullptr, baseOfDll, bllSize, nullptr, 0);
+					}
+				}
+			}
+		}
 	}
 
 	bool addr2sym (void* addr, SymResult* res) {
