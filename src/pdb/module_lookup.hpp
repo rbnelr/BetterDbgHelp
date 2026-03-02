@@ -157,31 +157,15 @@ public:
 			return std::less<uint64_t>()(l->base_addr, r->base_addr);
 		});
 
-		for (auto& m : sorted_modules) {
-			printf("%llx %s\n", m->base_addr, m->ansi_filename.c_str());
-		}
+		//for (auto& m : sorted_modules) {
+		//	printf("%llx %s\n", m->base_addr, m->ansi_filename.c_str());
+		//}
 	}
 
 	LoadedModule* find_module_for_addr (uint64_t addr) {
 		//ZoneScoped;
 
-		// Try find cached data for module loaded in process
-		// Linear search shoule be fast enough for the moment
-		// 
-		//if (is_kernel_addr(addr)) {
-		//	// These addresses apparently are actual kernel addresses, but VirtualQueryEx returns nothing for them
-		//	// bail to avoid wasting time on search + VirtualQueryEx
-		//
-		//	// TODO: Implement this, tracy uses CacheProcessDrivers to find these
-		//	return nullptr;
-		//}
-		//
-		//for (auto& m : sorted_modules) {
-		//	if (addr >= m->base_addr && addr < m->base_addr + m->size) {
-		//		return m.get();
-		//	}
-		//}
-
+	#if 0
 		// Handle module.size==0, which means assume it goes until next module
 		size_t count = sorted_modules.size();
 		for (size_t i=0; i<count; i++) {
@@ -200,6 +184,31 @@ public:
 				break;
 			}
 		}
+	#else
+		// Binary search for modules
+		// TODO: user space modules are loaded lazily, but kernel modules are pre-cached
+		// could possibly speed this up by keeping two lists, kernel and user space and branching?
+		// Should cut down on total iteration count, if kernel/user space is too unpredictable and causes branch misses
+		// could also try branchless selection of list
+		auto begin = sorted_modules.begin();
+		auto it = std::upper_bound(begin, sorted_modules.end(), addr,
+		[] (uint64_t addr, std::unique_ptr<LoadedModule> const& entry) {
+			return addr < entry->base_addr;
+		});
+
+		if (it != begin) {
+			assert(addr < (*it)->base_addr);
+			it--;
+			// prev module is what 
+			auto* mod = it->get();
+			assert(addr >= mod->base_addr);
+
+			if (mod->size == 0 || addr < mod->base_addr + mod->size) {
+				mod->lazy_load();
+				return mod;
+			}
+		}
+	#endif
 
 		return try_get_and_cache_module(addr);
 	}

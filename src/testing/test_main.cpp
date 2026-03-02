@@ -571,6 +571,11 @@ void various () {
 		sym.show_addr2sym((char*)0xfffff80284beb0cdllu);
 		sym.show_addr2sym((char*)0xfffff80284a11505llu);
 		sym.show_addr2sym((char*)0xfffff8028486d996llu);
+
+		char* ntoskrnl_base = (char*)0xfffff80284600000llu;
+		sym.show_addr2sym(ntoskrnl_base + 0x2c93c3);
+		sym.show_addr2sym(ntoskrnl_base + 0x4135c0);
+		sym.show_addr2sym(ntoskrnl_base + 0x2c9483);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 
