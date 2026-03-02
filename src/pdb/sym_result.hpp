@@ -58,6 +58,19 @@ inline void print_diff_SYMBOL_INFO (const SYMBOL_INFO& l, const SYMBOL_INFO& r) 
 	logf("   |Scope     : %12d | %12d \n",     l.Scope    , r.Scope    );
 	logf("   |Tag       : %12s | %12s \n",     SymTagEnum_str((SymTagEnum)l.Tag), SymTagEnum_str((SymTagEnum)r.Tag));
 }
+inline void print_diff_SYMBOL_INFO_quiet (const SYMBOL_INFO& l, const SYMBOL_INFO& r) {
+	logf_quiet(" > SYMBOL_INFO:       custom |      dbghelp\n");
+	//logf_quiet("   |TypeIndex : %12d | %12d \n",     l.TypeIndex, r.TypeIndex);
+	//logf_quiet("   |Index     : %12d | %12d \n",     l.Index    , r.Index    );
+	logf_quiet("   |Size      : %12x | %12x \n",     l.Size     , r.Size     );
+	//logf_quiet("   |ModBase   : %12llx | %12llx \n", l.ModBase  , r.ModBase  );
+	logf_quiet("   |Flags     : %12x | %12x \n",     l.Flags    , r.Flags    );
+	logf_quiet("   |Value     : %12llx | %12llx \n", l.Value    , r.Value    );
+	logf_quiet("   |Address   : %12llx | %12llx \n", l.Address  , r.Address  );
+	logf_quiet("   |Register  : %12d | %12d \n",     l.Register , r.Register );
+	logf_quiet("   |Scope     : %12d | %12d \n",     l.Scope    , r.Scope    );
+	logf_quiet("   |Tag       : %12s | %12s \n",     SymTagEnum_str((SymTagEnum)l.Tag), SymTagEnum_str((SymTagEnum)r.Tag));
+}
 inline bool sym_info_equal_diff (const SYMBOL_INFO& l, const SYMBOL_INFO& r) {
 	return true
 		//&& l.TypeIndex    == r.TypeIndex

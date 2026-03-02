@@ -41,6 +41,15 @@ public:
 
 		va_end(args2);
 	}
+	void vlogf_quiet (const char* format, va_list args) {
+		if (!log_file && filepath) {
+			open();
+		}
+
+		if (log_file) {
+			vfprintf(log_file, format, args);
+		}
+	}
 };
 
 // define elsewhere
@@ -51,6 +60,14 @@ inline void logf (const char* format, ...) {
 	va_start(args, format);
 
 	g_logger.vlogf(format, args);
+
+	va_end(args);
+}
+inline void logf_quiet (const char* format, ...) {
+	va_list args;
+	va_start(args, format);
+
+	g_logger.vlogf_quiet(format, args);
 
 	va_end(args);
 }

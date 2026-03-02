@@ -79,9 +79,22 @@ public:
 		sorted_modules.shrink_to_fit();
 		modules_by_handle.clear();
 	}
+	
+	// TODO: handle kernel addresses somehow, there is a pdb even for ntoskrnl.exe!
+	static inline bool IsKernelAddress(uint64_t addr) {
+		return (addr >> 63) != 0;
+	}
 
 	LoadedModule* find_module_for_addr (uint64_t addr) {
 		//ZoneScoped;
+
+		if (IsKernelAddress(addr)) {
+			// These addresses apparently are actual kernel addresses, but VirtualQueryEx returns nothing for them
+			// bail to avoid wasting time on search + VirtualQueryEx
+
+			// TODO: Implement this, tracy uses CacheProcessDrivers to find these
+			return nullptr;
+		}
 		
 		// Try find cached data for module loaded in process
 		// Linear search shoule be fast enough for the moment

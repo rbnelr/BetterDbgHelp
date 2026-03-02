@@ -462,6 +462,9 @@ void pdb_error_cases () {
 
 // hard code which test cases are used for now
 int main(int argc, const char** argv) {
+	ExportTableQuery("C:\\WINDOWS\\SYSTEM32\\ntoskrnl.exe");
+	PdbReader::load_lookup_for_exe("C:\\WINDOWS\\SYSTEM32\\ntoskrnl.exe");
+
 	run_dll_wrapper_as_resolver = true;
 
 	//pdb_error_cases();

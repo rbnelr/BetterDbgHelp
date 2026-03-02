@@ -855,78 +855,78 @@ struct DbgHelpWrapperSession {
 				cached.pdb->stralloc[cached.sym->name] :
 				"[unknown]";
 
-			logf("[BetterDbgHelp] !! Mismatch [%s+%llx] (%s):\n", mod_name, rel_addr, sym_name);
+			logf_quiet("[BetterDbgHelp] !! Mismatch [%s+%llx] (%s):\n", mod_name, rel_addr, sym_name);
 		}
 	}
 
 	void print_diff_sym (const char* api, DWORD64 Address, const ResultSym cus, const ResultSym dh, int inl_ctx=-1) {
 		print_diff_header(Address);
 		
-		if (inl_ctx < 0) logf("> %s", api);
-		else             logf("> %s(%d)", api, inl_ctx);
+		if (inl_ctx < 0) logf_quiet("> %s", api);
+		else             logf_quiet("> %s(%d)", api, inl_ctx);
 		if (cus.success != dh.success) {
-			logf(" custom: %s | dbghelp: %s\n",
+			logf_quiet(" custom: %s | dbghelp: %s\n",
 			    cus.success ? "Success":"Fail",
 			     dh.success ? "Success":"Fail");
 			return;
 		}
-		logf("\n");
+		logf_quiet("\n");
 
 		if (cus.success) assert(cus.Symbol->Name && strlen(cus.Symbol->Name) == cus.Symbol->NameLen);
 		if ( dh.success) assert( dh.Symbol->Name && strlen(dh.Symbol->Name) == dh.Symbol->NameLen);
 
 		if (!nullable_strcmp(cus.Symbol->Name, dh.Symbol->Name)) {
-			logf(" >  custom: \"%s\" !=\n"
+			logf_quiet(" >  custom: \"%s\" !=\n"
 			     " > dbghelp: \"%s\"\n", cus.Symbol->Name, dh.Symbol->Name);
 		}
 
 		//if (!sym_info_equal_diff(*cus.Symbol, *dh.Symbol)) {
-		//	print_diff_SYMBOL_INFO(*cus.Symbol, *dh.Symbol);
+		//	print_diff_SYMBOL_INFO_quiet(*cus.Symbol, *dh.Symbol);
 		//}
 		
 		assert(dh.Displacement);
 		if (cus.Displacement) {
 			if (*dh.Displacement != *cus.Displacement) {
-				logf(" > Displacement: custom: %llx != dbghelp: %llx\n", *dh.Displacement, *cus.Displacement);
+				logf_quiet(" > Displacement: custom: %llx != dbghelp: %llx\n", *dh.Displacement, *cus.Displacement);
 			}
 		}
 	}
 	void print_diff_line (const char* api, DWORD64 Address, const ResultLine cus, const ResultLine dh, int inl_ctx=-1) {
 		print_diff_header(Address);
 		
-		if (inl_ctx < 0) logf("> %s\n", api);
-		else             logf("> %s(%d)\n", api, inl_ctx);
+		if (inl_ctx < 0) logf_quiet("> %s\n", api);
+		else             logf_quiet("> %s(%d)\n", api, inl_ctx);
 
 		//if (cus.success != dh.success) {
-		//	logf("custom: %s | dbghelp: %s\n",
+		//	logf_quiet("custom: %s | dbghelp: %s\n",
 		//		cus.success ? "Success":"Fail",
 		//		 dh.success ? "Success":"Fail");
 		//}
 
 		if (cus.success) {
-			logf(" >  custom: [%llx] \"%s:%d\" !=\n", cus.Line->Address, cus.Line->FileName, cus.Line->LineNumber);
+			logf_quiet(" >  custom: [%llx] \"%s:%d\" !=\n", cus.Line->Address, cus.Line->FileName, cus.Line->LineNumber);
 		}
 		else {
-			logf(" >  custom: (No source info) !=\n");
+			logf_quiet(" >  custom: (No source info) !=\n");
 		}
 				
 		if (dh.success) {
-			logf(" > dbghelp: [%llx] \"%s:%d\"\n", dh.Line->Address, dh.Line->FileName, dh.Line->LineNumber);
+			logf_quiet(" > dbghelp: [%llx] \"%s:%d\"\n", dh.Line->Address, dh.Line->FileName, dh.Line->LineNumber);
 		}
 		else {
-			logf(" > dbghelp: (No source info)\n");
+			logf_quiet(" > dbghelp: (No source info)\n");
 		}
 	}
 	void print_diff_SymAddrIncludeInlineTrace (const char* api, DWORD64 Address, DWORD num_inlines, DWORD dh_num_inlines) {
 		print_diff_header(Address);
 		
-		logf("> %s:  custom: %u | dbghelp: %u\n", api,
+		logf_quiet("> %s:  custom: %u | dbghelp: %u\n", api,
 		    num_inlines, dh_num_inlines);
 	}
 	void print_diff_SymQueryInlineTrace (const char* api, DWORD64 Address, BOOL success, DWORD dh_success) {
 		print_diff_header(Address);
 		
-		logf("> %s:  custom: %s | dbghelp: %s\n", api,
+		logf_quiet("> %s:  custom: %s | dbghelp: %s\n", api,
 		       success ? "Success":"Fail",
 		    dh_success ? "Success":"Fail");
 	}

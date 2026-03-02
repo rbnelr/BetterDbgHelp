@@ -79,13 +79,17 @@ public:
 			return false;
 		}
 		// list[NumberOfFunctions] of RVA of function addresses
-		// Not sorted!
+		// Not sorted by address! Wait these are sorted alphabetically so the dll loader can do a name lookup, not useful to us though
 		auto* functions = (DWORD*)map_rva(export_directory->AddressOfFunctions);
 		// list[NumberOfNames] of RVA of function name strings
 		auto* names = (DWORD*)map_rva(export_directory->AddressOfNames);
 		// list[NumberOfNames] of RVA of indices into functions, for each name
 		auto* ordinals = (WORD*)map_rva(export_directory->AddressOfNameOrdinals);
-			
+
+		// TODO: have this loop copy the names from names+ordinals into a names_by_ordinal[NumberOfFunctions]
+		// Where nameless functions will be NULL, then sort names_by_ordinal + ordinals to allow
+		// binary search by address -> name != NULL ? name : format(ordinal)
+		
 		// export table can have functions without name entry,
 		// which is why we iterate list of ordinals instead to skip nameless function
 		for (DWORD i=0; i<export_directory->NumberOfNames; i++) {
@@ -283,6 +287,15 @@ public:
 		return memcmp(&exe.guidSig, &pdb->guid, sizeof(GUID)) == 0; /* && exe.age == pdb->age;*/
 	}
 };
+
+
+// TODO: Apparently dbghelp can sometimes return things like "Ordinal492"
+// I thought export functions by ordinal are not common anymore, but maybe I can replicate this
+//[BetterDbgHelp] !! Mismatch [urlmon.dll+75eb9] (BuildUserAgentStringMobileHelper):
+//> SymFromAddr
+// >  custom: "BuildUserAgentStringMobileHelper" !=
+// > dbghelp: "Ordinal492"
+// -> Looks like since i return the lower function where 
 
 class ExportTableQuery {
 	StrAlloc names;

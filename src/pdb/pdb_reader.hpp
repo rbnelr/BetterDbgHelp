@@ -527,7 +527,7 @@ class PdbReader {
 		}
 
 		for (size_t i=1; i<sections_sorted.size(); i++) {
-			assert(sections_sorted[i].base_addr > sections_sorted[i-1].base_addr + sections_sorted[i-1].size);
+			assert(sections_sorted[i].base_addr >= sections_sorted[i-1].base_addr + sections_sorted[i-1].size);
 		}
 	}
 	[[msvc::forceinline]] bool resolve_rva (u32 offs, u16 seg, uint64_t* out_rva) {
