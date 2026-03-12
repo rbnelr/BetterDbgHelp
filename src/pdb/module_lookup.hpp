@@ -19,6 +19,7 @@ public:
 	size_t size;
 
 	// rust enum would be nice here
+	// TODO: two std::options or single std::variant would avoid another potential cache miss
 	bool attempted_load = false;
 	std::unique_ptr<FastPdbLookup> pdb = nullptr;
 	std::unique_ptr<ExportTableQuery> exports = nullptr;
@@ -60,8 +61,7 @@ public:
 	
 	static std::unique_ptr<FastPdbLookup> load_pdb (std::filesystem::path const& path) {
 		try {
-			logf("[BetterDbgHelp] Loading pdb for %s.\n", path.string().c_str());
-			return PdbReader::load_lookup_for_exe(path);
+			return std::make_unique<FastPdbLookup>(FastPdbLookup::load(path));
 		}
 		catch (std::exception& ex) {
 			logf("!!! PDB loading exception: %s\n", ex.what());
@@ -186,6 +186,10 @@ public:
 			}
 		}
 	#else
+		// TODO: when turned vector of LoadedModule into vector of std::unique_ptr<LoadedModule>, this may have become slightly less cache friendly, but likely fits in L1
+		// but this is fixed by extracting addresses into 2nd cache-friendly vector for searching, this is easy, simply recreate this vector on re-sorts of main vector
+		// but once doing this measure perf (normal and with cache trashing)
+
 		// Binary search for modules
 		// TODO: user space modules are loaded lazily, but kernel modules are pre-cached
 		// could possibly speed this up by keeping two lists, kernel and user space and branching?

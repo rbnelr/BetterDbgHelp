@@ -1677,6 +1677,9 @@ class PdbReader {
 
 	void finalize_symbols () {
 		ZoneScoped;
+
+		if (lookup.symbols.size() > UINT_MAX)
+			throw std::runtime_error("Too many symbols");
 		
 		typedef BinAlloc::bid Id;
 		auto _cmp = [&] (Id l, Id r) -> int {
@@ -1690,7 +1693,7 @@ class PdbReader {
 		// use stable sorts as symbol can and will overlap, so preserve insertion order
 		std::stable_sort(lookup.symbols.begin(), lookup.symbols.end(), _cmp);
 
-		lookup.symbol_index.build_index((uint32_t)lookup.symbols.size(), [&] (uint32_t idx) {
+		lookup.symbol_index = AddressIndex::build_index((uint32_t)lookup.symbols.size(), [&] (uint32_t idx) {
 			return lookup.get_sym(idx).get_addr();
 		});
 	}
@@ -1805,14 +1808,14 @@ class PdbReader {
 	}
 
 //// Final needed data
-	FastPdbLookup lookup;
+	FastPdbLookupData lookup;
 
 public:
 
 	PdbReader (std::filesystem::path&& pdb_path, PDB_Locator::PDB_guid_and_age const& rsds) {
 		ZoneScopedN("parse_pdb");
 
-		if (!file.open(pdb_path)) {
+		if (!file.open_read_only(pdb_path)) {
 			throw std::runtime_error("File not found: "+ pdb_path.string());
 		}
 
@@ -1874,20 +1877,19 @@ public:
 		//print_dump_names();
 		//stralloc.print_dump();
 
-		//lookup.print_symbols();
+		//lookup.get_lookup().print_symbols();
 		//_dbghelp_get_sym(0x1B370);
 
 		//logf("PDB read.\n");
 	}
 	
-	static std::unique_ptr<PdbReader> pdb_for_exe (std::filesystem::path const& exe_path) {
-		PDB_Locator locator(exe_path);
-		auto path = locator.get_pdb_path();
-		auto rsds = locator.get_rsds();
-		return std::make_unique<PdbReader>(std::move(path), rsds);
-	}
-	static std::unique_ptr<FastPdbLookup> load_lookup_for_exe (std::filesystem::path const& exe_path) {
-		auto reader = PdbReader::pdb_for_exe(exe_path);
-		return std::make_unique<FastPdbLookup>( std::move(reader->lookup) );
+	FastPdbLookupData extract_lookup () {
+		return std::move(lookup);
 	}
 };
+
+// avoid circular reference
+inline FastPdbLookupData FastPdbLookup::parse_pdb (std::filesystem::path&& pdb_path, PDB_Locator::PDB_guid_and_age const& rsds) {
+	PdbReader reader(std::move(pdb_path), rsds);
+	return reader.extract_lookup();
+}

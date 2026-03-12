@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <filesystem>
 #include <fstream>
+#include <span>
 
 #include "util/logger.hpp"
 #include "util/timer.hpp"
@@ -165,23 +166,23 @@ inline bool load_file (std::string const& filepath, std::vector<char>* out_data)
 
 // https://www.jeremyong.com/winapi/io/2024/11/03/windows-memory-mapped-file-io/
 class MemoryMappedFile {
-	HANDLE file_mapping_handle = INVALID_HANDLE_VALUE;
 	void* _data = nullptr;
+	HANDLE file_mapping_handle = INVALID_HANDLE_VALUE;
 	
+public:
 	// Move-only class
 	friend void swap (MemoryMappedFile& l, MemoryMappedFile& r) {
-		std::swap(l.file_mapping_handle, r.file_mapping_handle);
 		std::swap(l._data, r._data);
+		std::swap(l.file_mapping_handle, r.file_mapping_handle);
 	}
 	MemoryMappedFile& operator= (MemoryMappedFile& r) = delete;
 	MemoryMappedFile (MemoryMappedFile& r) = delete;
 	MemoryMappedFile& operator= (MemoryMappedFile&& r) {	swap(*this, r);	return *this; }
 	MemoryMappedFile (MemoryMappedFile&& r) {				swap(*this, r); }
 
-public:
 	void* data () { return _data; }
 
-	bool open (std::filesystem::path const& filepath) {
+	bool open_read_only (std::filesystem::path const& filepath, uint64_t* out_file_size=nullptr) {
 		HANDLE file_handle = CreateFileW(
 			filepath.c_str(),
 			GENERIC_READ,
@@ -201,6 +202,12 @@ public:
 				0,
 				nullptr);
 
+			if (out_file_size) {
+				LARGE_INTEGER size;
+				GetFileSizeEx(file_handle, &size);
+				*out_file_size = size.QuadPart;
+			}
+
 			// We can close this now because the file mapping retains an open handle to
 			// the underlying file.
 			CloseHandle(file_handle);
@@ -209,6 +216,42 @@ public:
 				_data = MapViewOfFile(
 					file_mapping_handle,
 					FILE_MAP_READ,
+					0, // Offset high
+					0, // Offset low
+					// A zero here indicates we want to map the entire range.
+					0);
+
+				if (_data != NULL) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+	bool open_new_readwrite (std::filesystem::path const& filepath, uint64_t size) {
+		HANDLE file_handle = CreateFileW(
+			filepath.c_str(),
+			GENERIC_READ|GENERIC_WRITE,
+			0,
+			nullptr,
+			CREATE_ALWAYS, // create file, reset to size 0 (effectively clear) file
+			0,
+			nullptr);
+		if (file_handle != INVALID_HANDLE_VALUE) {
+			file_mapping_handle = CreateFileMappingW(
+				file_handle,
+				nullptr,
+				PAGE_READWRITE,
+				(uint32_t)(size >> 32),
+				(uint32_t)size,
+				nullptr);
+
+			CloseHandle(file_handle);
+
+			if (file_mapping_handle != NULL) {
+				_data = MapViewOfFile(
+					file_mapping_handle,
+					FILE_MAP_ALL_ACCESS,
 					0, // Offset high
 					0, // Offset low
 					// A zero here indicates we want to map the entire range.
@@ -356,67 +399,6 @@ public:
 			_realloc_single_pages(safe_capacity);
 		}
 	}
-
-#if 1
-	// fast strlen for strings in this buffer
-	// only safe if v.pad_for_simd() was called! as it reads past the end of src
-	static size_t fast_strlen (const char* str) {
-		size_t len = 0;
-		__m128i zero = _mm_setzero_si128();
-
-		for (;;) {
-			__m128i bytes = _mm_load_si128((__m128i const*)(str + len));
-			__m128i mask = _mm_cmpeq_epi8(bytes, zero);
-			unsigned bitmask = (unsigned)_mm_movemask_epi8(mask);
-			if (bitmask) {
-				len += (uint32_t)_tzcnt_u16((unsigned short)bitmask);
-				break;
-			}
-			len += 16;
-		}
-
-		assert(len == strlen(str));
-		return len;
-	}
-
-	// for dbghelp wrapper:
-	// copy null terminated string with unknown length into fixed size destination buffer
-	// returns written string length excluding null terminator, or max_len if truncated
-	// will not null terminate if strlen(src) >= max_len
-	// will write bytes past null terminator in dst for simd efficiency, but not past max_len
-	// only safe if v.pad_for_simd() was called! as it reads past the end of src
-	static __forceinline uint32_t fast_strcpy_trunc (char* dst, uint32_t max_len, char const* src) {
-		uint32_t len = 0;
-		__m128i zero = _mm_setzero_si128();
-		
-		// read in unalinged simd blocks including reads past the end of src
-		// write out full simd blocks, even if block contains null terminator
-		// loop until max_length reached or
-		// null terminator detected using simd, use bitscan to find real length and terminate
-		while (len+16 <= max_len) {
-			__m128i bytes = _mm_load_si128((__m128i const*)(src + len));
-			__m128i mask = _mm_cmpeq_epi8(bytes, zero);
-			unsigned bitmask = (unsigned)_mm_movemask_epi8(mask);
-
-			_mm_storeu_si128((__m128i*)(dst + len), bytes);
-			
-			if (bitmask) {
-				len += (uint32_t)_tzcnt_u16((unsigned short)bitmask);
-				return len;
-			}
-			len += 16;
-		}
-		
-		// once store would write past max_len, switch to single byte copy
-		while (len < max_len) {
-			dst[len] = src[len];
-			if (src[len] == '\0')
-				break;
-			len++;
-		}
-		return len;
-	}
-#endif
 };
 typedef VirtualMemoryVector MemoryVector;
 #else
@@ -469,6 +451,67 @@ public:
 #endif
 
 #include <immintrin.h>
+
+#if 1
+// fast strlen for strings in this buffer
+// only safe if VirtualMemoryVector::pad_for_simd() was called! as it reads past the end of src
+inline size_t fast_strlen (const char* str) {
+	size_t len = 0;
+	__m128i zero = _mm_setzero_si128();
+
+	for (;;) {
+		__m128i bytes = _mm_load_si128((__m128i const*)(str + len));
+		__m128i mask = _mm_cmpeq_epi8(bytes, zero);
+		unsigned bitmask = (unsigned)_mm_movemask_epi8(mask);
+		if (bitmask) {
+			len += (uint32_t)_tzcnt_u16((unsigned short)bitmask);
+			break;
+		}
+		len += 16;
+	}
+
+	assert(len == strlen(str));
+	return len;
+}
+
+// for dbghelp wrapper:
+// copy null terminated string with unknown length into fixed size destination buffer
+// returns written string length excluding null terminator, or max_len if truncated
+// will not null terminate if strlen(src) >= max_len
+// will write bytes past null terminator in dst for simd efficiency, but not past max_len
+// only safe if VirtualMemoryVector::pad_for_simd() was called! as it reads past the end of src
+inline __forceinline uint32_t fast_strcpy_trunc (char* dst, uint32_t max_len, char const* src) {
+	uint32_t len = 0;
+	__m128i zero = _mm_setzero_si128();
+		
+	// read in unalinged simd blocks including reads past the end of src
+	// write out full simd blocks, even if block contains null terminator
+	// loop until max_length reached or
+	// null terminator detected using simd, use bitscan to find real length and terminate
+	while (len+16 <= max_len) {
+		__m128i bytes = _mm_load_si128((__m128i const*)(src + len));
+		__m128i mask = _mm_cmpeq_epi8(bytes, zero);
+		unsigned bitmask = (unsigned)_mm_movemask_epi8(mask);
+
+		_mm_storeu_si128((__m128i*)(dst + len), bytes);
+			
+		if (bitmask) {
+			len += (uint32_t)_tzcnt_u16((unsigned short)bitmask);
+			return len;
+		}
+		len += 16;
+	}
+		
+	// once store would write past max_len, switch to single byte copy
+	while (len < max_len) {
+		dst[len] = src[len];
+		if (src[len] == '\0')
+			break;
+		len++;
+	}
+	return len;
+}
+#endif
 
 struct StrAlloc {
 	typedef int32_t sid; // Strbuf index
@@ -588,6 +631,33 @@ struct StrAlloc {
 			cur += strlen(cur)+1;
 		}
 	}
+	
+	struct Span {
+		std::span<const char> v;
+
+		size_t size () const {
+			return v.size();
+		}
+		
+		const char* operator[] (sid offset) const {
+			return v.data() + offset;
+		}
+	
+		void print_dump () const {
+			logf("StrAlloc:\n");
+
+			char const* cur = v.data();
+			char const* end = cur + v.size();
+
+			while (cur < end) {
+				logf("> [%8llx] %s\n", cur - v.data(), cur);
+				cur += strlen(cur)+1;
+			}
+		}
+	};
+	Span span () {
+		return Span{ std::span<char>( v.data(), (size_t)v.size() ) };
+	}
 };
 
 // Use memory reservation to push data with having to copy on grow
@@ -695,6 +765,32 @@ struct BinAlloc {
 		assert(offset >= 0);
 		assert(offset % alignof(T) == 0);
 		return (T*)(v.data() + offset);
+	}
+
+	struct Span {
+		std::span<const char> v;
+
+		size_t size () const {
+			return v.size();
+		}
+		
+		template <typename T>
+		__forceinline const T* get (bid offset) const {
+			if (offset >= 0) {
+				assert(offset % alignof(T) == 0);
+				return (const T*)(v.data() + offset);
+			}
+			return nullptr;
+		}
+		template <typename T>
+		__forceinline const T* get_unchecked (bid offset) const {
+			assert(offset >= 0);
+			assert(offset % alignof(T) == 0);
+			return (const T*)(v.data() + offset);
+		}
+	};
+	Span span () {
+		return Span{ std::span<char>( v.data(), (size_t)v.size() ) };
 	}
 };
 

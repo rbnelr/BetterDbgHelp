@@ -137,11 +137,11 @@ namespace lineinfo {
 	};
 
 	template <typename FUNC>
-	inline void decode (char* data, FUNC test_range) {
-		char* cur = (char*)data;
-		Block* block;
+	inline void decode (const char* data, FUNC test_range) {
+		const char* cur = (const char*)data;
+		const Block* block;
 		do {
-			block = (Block*)cur;
+			block = (const Block*)cur;
 			cur += sizeof(Block);
 
 			int32_t offset = block->start_offset;
@@ -172,13 +172,13 @@ namespace lineinfo {
 			//		return;
 			//}
 			
-			char* end = cur + sizeof(DeltaCoded)*block->num_deltas;
-			DeltaCoded* delta;
+			const char* end = cur + sizeof(DeltaCoded)*block->num_deltas;
+			const DeltaCoded* delta;
 			goto Ltest;
 
 			do {
 				
-				delta = (DeltaCoded*)cur;
+				delta = (const DeltaCoded*)cur;
 				cur += sizeof(DeltaCoded);
 			
 				offset = end_offset;
@@ -195,7 +195,7 @@ namespace lineinfo {
 			} while (cur < end);
 
 			// align up to 4 bytes
-			cur = (char*)(((uint64_t)cur + 0b11) & ~0b11);
+			cur = (const char*)(((uint64_t)cur + 0b11) & ~0b11);
 		} while (!block->is_last);
 	}
 
@@ -464,7 +464,7 @@ namespace lineinfo {
 		return encoder.result;
 	}
 
-	inline bool find_line_for_addr (char* data, uint64_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
+	inline bool find_line_for_addr (const char* data, uint64_t rel_addr, StrAlloc::Span const& stralloc, SourceLoc* out_src_loc) {
 		assert((uint64_t)data % ALIGN == 0);
 
 		uint32_t found_sourcefile = 0;
@@ -504,7 +504,7 @@ namespace lineinfo {
 
 	// TODO: due to lineinfo acting weird,
 	// for the moment develop a replacement for binary annotations first, then make it work with lineinfo afterwards
-	inline bool find_line_for_addr_for_inline (char* data, uint64_t rel_addr, StrAlloc const& stralloc, SourceLoc* out_src_loc) {
+	inline bool find_line_for_addr_for_inline (const char* data, uint64_t rel_addr, StrAlloc::Span const& stralloc, SourceLoc* out_src_loc) {
 		assert((uint64_t)data % ALIGN == 0);
 
 		bool found = false;

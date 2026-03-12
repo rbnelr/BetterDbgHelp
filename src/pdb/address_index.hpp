@@ -4,7 +4,10 @@
 #include <immintrin.h>
 
 class AddressIndex {
-	template <typename T> using align_alloc = AlignedAllocator<T, 64>; // cache line alignment
+friend class FastPdbLookupFile;
+
+	static inline constexpr size_t ALIGNMENT = 64; // cache line alignment
+	template <typename T> using align_alloc = AlignedAllocator<T, ALIGNMENT>;
 
 	static inline constexpr int BLOCKSZ = 16*2; // Two AVX regs
 	static_assert(BLOCKSZ*sizeof(int16_t) % 32 == 0); // 16*u16 fits in AVX reg
@@ -24,32 +27,62 @@ class AddressIndex {
 		}
 	};
 	
-	std::vector<int64_t, align_alloc<int64_t>> addresses;
-	std::vector<Block, align_alloc<Block>> blocks;
-	std::vector<uint32_t, align_alloc<uint32_t>> block_indices;
+	// All aligned by backing storage, currently to cache line
+	uint32_t  blocks_count;
+
+	const int64_t*  addresses;
+	const Block*    blocks;
+	const uint32_t* block_indices;
 	
 public:
+
+	AddressIndex () {}
+
+	AddressIndex (uint32_t blocks_count, const int64_t* addresses, const Block* blocks, const uint32_t* block_indices):
+				blocks_count{blocks_count}, addresses{addresses}, blocks{blocks}, block_indices{block_indices} {}
+
 	void print_stats (size_t count, const char* name) const {
 		auto used_slots = count;
-		auto num_slots = blocks.size()*BLOCKSZ;
+		auto num_slots = blocks_count*BLOCKSZ;
 
-		logf("%s:    simd blocks: %llu\n    addresses: %.1f kB\n    blocks: %.1f kB\n    block_indices: %.1f kB\n    wasted block ratio: %.2f%%\n", name, blocks.size(),
-			addresses.size()*sizeof(addresses[0])/1000.0f,
-			blocks.size()*sizeof(blocks[0])/1000.0f,
-			block_indices.size()*sizeof(block_indices[0])/1000.0f,
+		logf("%s:    simd blocks: %u\n    addresses: %.1f kB\n    blocks: %.1f kB\n    block_indices: %.1f kB\n    wasted block ratio: %.2f%%\n", name, blocks_count,
+			blocks_count*sizeof(addresses[0])/1000.0f,
+			blocks_count*sizeof(blocks[0])/1000.0f,
+			blocks_count*sizeof(block_indices[0])/1000.0f,
 			(1.0f - (float)used_slots / num_slots) * 100.0f);
 	}
 	
-	template <typename FUNC>
-	void build_index (uint32_t count, FUNC get_addr) {
-		ZoneScoped;
+	struct Data {
+		std::vector<int64_t, align_alloc<int64_t>> addresses;
+		std::vector<Block, align_alloc<Block>> blocks;
+		std::vector<uint32_t, align_alloc<uint32_t>> block_indices;
+		
+		AddressIndex get_lookup () {
+			assert(addresses.size() < 0xffffffffllu);
+			assert(addresses.size() == blocks.size());
+			assert(addresses.size() == block_indices.size());
 
-		if (count <= 0) return;
+			return AddressIndex{
+				(uint32_t)addresses.size(),
+				addresses.data(),
+				blocks.data(),
+				block_indices.data()
+			};
+		}
+	};
+
+	template <typename FUNC>
+	static Data build_index (uint32_t count, FUNC get_addr) {
+		ZoneScoped;
+		
+		Data d;
+
+		if (count <= 0) return d;
 		assert(count <= INT_MAX);
 
-		addresses.reserve(count/BLOCKSZ);
-		blocks.reserve(count/BLOCKSZ);
-		block_indices.reserve(count/BLOCKSZ);
+		d.addresses.reserve(count/BLOCKSZ);
+		d.blocks.reserve(count/BLOCKSZ);
+		d.block_indices.reserve(count/BLOCKSZ);
 
 		// use signed 64 bit addresses as they are more convenient, should never overflow
 		Block* cur_block = nullptr;
@@ -64,13 +97,13 @@ public:
 			// if all slots are filled (or initial case)
 			// or if offset would be ==MAX_OFFSET, start new block
 			if (idx_in_block >= BLOCKSZ || addr >= block_max_addr) {
-				cur_block = &blocks.emplace_back();
+				cur_block = &d.blocks.emplace_back();
 
 				block_address = addr;
 				block_elem_index = i;
 				idx_in_block = 0;
-				addresses.emplace_back(block_address);
-				block_indices.emplace_back(block_elem_index);
+				d.addresses.emplace_back(block_address);
+				d.block_indices.emplace_back(block_elem_index);
 
 				block_max_addr = block_address + MAX_OFFSET;
 			}
@@ -80,17 +113,20 @@ public:
 			cur_block->offsets[idx_in_block] = (int16_t)offset;
 			idx_in_block++;
 		}
+		
+		return d;
 	}
 
-	__forceinline uint32_t upper_bound (int64_t addr) {
-		auto it = std::upper_bound(addresses.begin(), addresses.end(), addr);
-		if (it <= addresses.begin()) // addr before first item
+	__forceinline uint32_t upper_bound (int64_t addr) const {
+		auto* end = addresses + blocks_count;
+		auto it = std::upper_bound(addresses,end, addr);
+		if (it <= addresses) // addr before first item
 			return 0;
 		
-		assert(it == addresses.end() || addr < *it);
+		assert(it == end || addr < *it);
 		it--;
 		assert(addr >= *it);
-		auto block_idx = it - addresses.begin();
+		auto block_idx = it - addresses;
 		
 		static_assert(BLOCKSZ == (16*2));
 

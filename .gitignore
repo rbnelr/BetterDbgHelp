@@ -19,6 +19,8 @@ dbghelp*.pdb
 dbghelp*.exp
 dbghelp*.lib
 
+*.fastpdb
+
 # User-specific files
 *.rsuser
 *.suo

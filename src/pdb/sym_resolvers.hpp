@@ -198,7 +198,7 @@ public:
 		}
 		
 		uint32_t sym_idx;
-		Symbol* sym;
+		Symbol const* sym;
 		{
 			TimerMeasZone(tfind_symbol_for_addr);
 			sym = mod->pdb->find_symbol_for_addr(rva, &sym_idx);

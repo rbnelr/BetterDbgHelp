@@ -26,7 +26,7 @@ class ExeParser {
 
 public:
 	void open_image (std::filesystem::path const& filepath) {
-		if (!file.open(filepath.c_str()))
+		if (!file.open_read_only(filepath.c_str()))
 			throw std::runtime_error("File not found");
 
 		dos_header = (IMAGE_DOS_HEADER*)file.data();
@@ -133,20 +133,18 @@ public:
 // if neither are found, we look at %temp%/SymbolCache/<pdb_filename>/<pdb_guid><pdb_age>/<pdb_filename>, which is where symbol server pdbs get placed by VS
 // if not, try to fetch it from https://msdl.microsoft.com/download/symbols/<pdb_name>/<pdb_guid><pdb_age>/<pdb_name> and cache it inside this folder ourselves
 class PDB_Locator {
-	ExeParser exe;
-
-	ExeParser::RSDSI* rsds = {};
-
 	std::filesystem::path const& exe_path;
+
+	ExeParser exe;
+	ExeParser::RSDSI* rsds = nullptr;
+
 	std::filesystem::path pdb_path_in_exe;
-	
-	std::wstring symbol_server_url;
-	std::filesystem::path cache_path;
+	std::wstring pdb_filename;
+	wchar_t guid_age_str[128];
 
 	void parse_rsds () {
 		auto& guid = rsds->guidSig;
 
-		wchar_t guid_age_str[128];
 		// guid in hex + age (is this also hex?)
 		swprintf(guid_age_str, 128, L"%08X%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X%X",
 			guid.Data1, guid.Data2, guid.Data3,
@@ -155,16 +153,13 @@ class PDB_Locator {
 			rsds->age);
 		
 		pdb_path_in_exe = std::string( (const char*)rsds->pdb_name );
-		auto pdb_name = pdb_path_in_exe.filename().wstring();
-
-		symbol_server_url = get_symbol_server_url(guid_age_str, pdb_name);
-		cache_path = get_cache_path(guid_age_str, pdb_name);
+		pdb_filename = pdb_path_in_exe.filename().wstring();
 	}
 	
-	std::wstring get_symbol_server_url (const wchar_t* guid_age_str, std::wstring const& pdb_name) {
-		return std::wstring(L"https://msdl.microsoft.com/download/symbols/")+ pdb_name +L"/"+ guid_age_str +L"/"+ pdb_name;
+	static std::wstring get_symbol_server_url (const wchar_t* guid_age_str, std::wstring const& pdb_filename) {
+		return std::wstring(L"https://msdl.microsoft.com/download/symbols/")+ pdb_filename +L"/"+ guid_age_str +L"/"+ pdb_filename;
 	}
-	std::filesystem::path get_cache_path (const wchar_t* guid_age_str, std::wstring const& pdb_name) {
+	static std::filesystem::path get_cache_path (const wchar_t* guid_age_str, std::wstring const& pdb_filename) {
 		// hardcode cache temp, I'm not sure if there's a more correct way to come up with this
 		// supposedly the _NT_SYMBOL_PATH env var exists, but apparently that's not what Visual Studio used, so screw that
 
@@ -175,15 +170,19 @@ class PDB_Locator {
 		// and that this caused dbghelp to fail, but actually it fails on notepad even without me interfering (despite me using the pdb successfully)
 		// But still, let's create a custom cache folder to avoid future problems with peoples debugging, since I have no idea what the microsoft code is actually doing
 
-		//return std::filesystem::temp_directory_path() / "SymbolCache" / pdb_name / guid_age_str / pdb_name;
-		return std::filesystem::temp_directory_path() / "Hexcoder" / "SymbolCache" / pdb_name / guid_age_str / pdb_name;
+		//return std::filesystem::temp_directory_path() / "SymbolCache" / pdb_filename / guid_age_str / pdb_filename;
+		return std::filesystem::temp_directory_path() / "Hexcoder" / "SymbolCache" / pdb_filename / guid_age_str / pdb_filename;
 	}
 
 	std::filesystem::path try_downloading_pdb_if_not_in_cache () {
+		std::filesystem::path cache_path = get_cache_path(guid_age_str, pdb_filename);
+
 		if (std::filesystem::exists(cache_path)) {
 			return cache_path;
 		}
 		
+		std::wstring symbol_server_url = get_symbol_server_url(guid_age_str, pdb_filename);
+
 		std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
 		std::string url = converter.to_bytes(symbol_server_url);
 		
@@ -231,7 +230,7 @@ class PDB_Locator {
 	}
 
 public:
-	// global search path across all DbgHelpWrapper sessions
+	// HACK: global search path across all DbgHelpWrapper sessions
 	static inline std::vector<std::filesystem::path> extra_search_paths;
 
 	PDB_Locator (std::filesystem::path const& filepath): exe_path{filepath} {
@@ -240,22 +239,23 @@ public:
 		try {
 			exe.open_image(exe_path);
 			rsds = exe.find_rsds();
-
 			parse_rsds();
 		}
 		catch (std::exception& ex) {
 			throw std::runtime_error((exe_path.string() +": ")+ ex.what());
 		}
-		//logf(">> %s ->\n>>> symbol_server_url: %s\n>>> cache_path: %s\n", filepath.c_str(), symbol_server_url.c_str(), cache_path.u8string().c_str());
 	}
 
 	// This way of finding pdbs may not actually match what dbghelp does, but it made sense for me
 	// only file existance is checked, not if file is actually the correct pdb
 	// instead pdb parsing will later check PDB_guid_and_age
+	// TODO: Could actually call dbghelp here and ask it where to locate it and fetch it from symbol server, which lets us avoid having to have our own cache
+	//       keep this code as optional if dbghelp dependency is not desired in library version of this pdb parser
 	std::filesystem::path get_pdb_path () {
 		ZoneScoped;
 
 		// prefer pdb next to exe
+		// TODO: probably should use pdb_filename stored in exe instead of just assuming .exe -> .pdb
 		{
 			std::filesystem::path pdb_path = exe_path;
 			pdb_path.replace_extension({".pdb"});
@@ -298,6 +298,14 @@ public:
 	};
 	PDB_guid_and_age get_rsds () {
 		return { rsds->guidSig, rsds->age };
+	}
+
+	// Always place our cached .fastpdb next to wherever the pdb it was created from was found
+	// This way symbol cache entries can get permanently cache .fastpdb
+	// and when executables a user recompiles overwrite the pdb, we also overwrite our .fastpdb by detecting the guid mismatch, and avoid bloating temp or similar folders
+	static std::filesystem::path get_fastpdb_cache_path (std::filesystem::path const& located_pdb_path) {
+		auto fastpdb_path = located_pdb_path;
+		return fastpdb_path.replace_extension({".fastpdb"});
 	}
 
 	// compare GUID and age from exe and pdb, this helps detect when the wrong pdb is used by accident
@@ -346,8 +354,8 @@ public:
 			throw std::runtime_error((filepath.string() +": ")+ ex.what());
 		}
 
-		printf("ExportTableQuery %s:\n", filepath.string().c_str());
-		print_functions();
+		//printf("ExportTableQuery %s:\n", filepath.string().c_str());
+		//print_functions();
 	}
 
 	void print_functions () {

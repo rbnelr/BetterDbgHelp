@@ -12,8 +12,8 @@
 // Could consider not loading dbghelp at all and returning error in those cases
 // Could consider adding additional runtime for verification, but there is no good reason to do so right now
 #if NDEBUG
-	//#define ENABLE_VERIFICATION 0
-	#define ENABLE_VERIFICATION 1
+	#define ENABLE_VERIFICATION 0
+	//#define ENABLE_VERIFICATION 1
 #else
 	#define ENABLE_VERIFICATION 1
 #endif
@@ -33,7 +33,7 @@ struct DbgHelpWrapperSession {
 		// unsafe ptr
 		ExportTableQuery* export_table = nullptr;
 		// unsafe but stable ptr if FastPdbLookup stays loaded, could also store symbol index here
-		Symbol* sym = nullptr;
+		const Symbol* sym = nullptr;
 		uint32_t sym_idx = (uint32_t)-1;
 
 		// -1: not yet cached
@@ -101,7 +101,7 @@ struct DbgHelpWrapperSession {
 			dst[len] = '\0';
 		return len;
 	#else
-		ULONG written_len = VirtualMemoryVector::fast_strcpy_trunc(dst, max_len, src);
+		ULONG written_len = fast_strcpy_trunc(dst, max_len, src);
 		assert(written_len <= max_len);
 		if (written_len < max_len) {
 			assert(dst[written_len] == '\0');

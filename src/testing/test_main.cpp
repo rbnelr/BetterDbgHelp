@@ -592,13 +592,13 @@ int main(int argc, const char** argv) {
 
 	//run_dll_wrapper_as_resolver = true;
 	
-	various();
+	//various();
 	//pdb_testing();
 	//test_dll();
 	//example_addresses(true, true, 0);
 	
 	//print_timings = false;
-	//example_addresses(true, false, 0);
+	example_addresses(true, false, 0);
 	//sweep_tests();
 
 	//profiling_run();
