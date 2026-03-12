@@ -547,35 +547,43 @@ void various () {
 		 >  custom: "KeReleaseGuardedMutex" !=
 		 > dbghelp: "ExReleaseFastMutex"
 
-
-		 
-[BetterDbgHelp] !! Mismatch [ntoskrnl.exe+4135c0] ([unknown]):
-> SymFromAddr
-	>  custom: "memmove" !=
-	> dbghelp: "RtlMoveMemory"
+		[BetterDbgHelp] !! Mismatch [ntoskrnl.exe+4135c0] ([unknown]):
+		> SymFromAddr
+			>  custom: "memmove" !=
+			> dbghelp: "RtlMoveMemory"
 			 
-[BetterDbgHelp] !! Mismatch [ntoskrnl.exe+2c9483] ([unknown]):
-> SymFromAddr
- >  custom: "KeReleaseGuardedMutex" !=
- > dbghelp: "ExReleaseFastMutex"
+		[BetterDbgHelp] !! Mismatch [ntoskrnl.exe+2c9483] ([unknown]):
+		> SymFromAddr
+		 >  custom: "KeReleaseGuardedMutex" !=
+		 > dbghelp: "ExReleaseFastMutex"
 
- (ctrl+F "ntoskrnl.exe+": 132 total)
+		 (ctrl+F "ntoskrnl.exe+": 132 total)
 		 */
+		//sym.help_mod_rel("ntoskrnl.exe", (char*)0xfffff8060fc11505llu);
 
-		sym.show_addr2sym((char*)0xfffff802848bfdb3llu);
-		sym.show_addr2sym((char*)0xfffff802848bf64allu);
-		sym.show_addr2sym((char*)0xfffff802848bd128llu);
-		sym.show_addr2sym((char*)0xfffff802848bc86fllu);
-		sym.show_addr2sym((char*)0xfffff80284fb418ellu);
-		sym.show_addr2sym((char*)0xfffff802848d3830llu);
-		sym.show_addr2sym((char*)0xfffff80284beb0cdllu);
-		sym.show_addr2sym((char*)0xfffff80284a11505llu);
-		sym.show_addr2sym((char*)0xfffff8028486d996llu);
+		char* ntoskrnl = sym.get_addr("ntoskrnl.exe");
+		char* ntdll = sym.get_addr("ntdll.dll");
+		//char* sechost = sym.get_addr("sechost.dll");
+		// random functions that mismatched in city_builder tracing run before cache_process_driver in module_lookup
+		sym.show_addr2sym(ntoskrnl+0x647290);
+		sym.show_addr2sym(ntoskrnl+0x6465f3);
+		sym.show_addr2sym(ntoskrnl+0x642757);
+		sym.show_addr2sym(ntoskrnl+0x6cec8a);
+		sym.show_addr2sym(ntoskrnl+0x6cea6c);
+		sym.show_addr2sym(ntoskrnl+0x6ce3b1);
+		sym.show_addr2sym(ntoskrnl+0x6778e2);
+		sym.show_addr2sym(ntoskrnl+0x411505);
+		// function that mismatched after implementing cache_process_driver
+		sym.show_addr2sym(ntoskrnl+0x411505);
+		sym.show_addr2sym(ntdll+0x9d7e4);
+		sym.show_addr2sym(ntdll+0x45a0e);
+		sym.show_addr2sym(ntdll+0x47e28);
+		//sym.show_addr2sym(sechost+0xb5eb);
 
-		char* ntoskrnl_base = (char*)0xfffff80284600000llu;
-		sym.show_addr2sym(ntoskrnl_base + 0x2c93c3);
-		sym.show_addr2sym(ntoskrnl_base + 0x4135c0);
-		sym.show_addr2sym(ntoskrnl_base + 0x2c9483);
+		//char* ntoskrnl_base = (char*)0xfffff80284600000llu;
+		//sym.show_addr2sym(ntoskrnl_base + 0x2c93c3);
+		//sym.show_addr2sym(ntoskrnl_base + 0x4135c0);
+		//sym.show_addr2sym(ntoskrnl_base + 0x2c9483);
 	} catch (std::exception& err) { logf("!! Exception: %s\n", err.what()); }
 }
 

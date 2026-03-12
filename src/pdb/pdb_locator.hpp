@@ -345,6 +345,15 @@ public:
 		catch (std::exception& ex) {
 			throw std::runtime_error((filepath.string() +": ")+ ex.what());
 		}
+
+		printf("ExportTableQuery %s:\n", filepath.string().c_str());
+		print_functions();
+	}
+
+	void print_functions () {
+		for (auto& f : functions_sorted) {
+			printf(" %x %s\n", f.address, names[f.mangled_name]);
+		}
 	}
 
 	const char* query (uint64_t mod_rva, uint64_t* out_sym_rva, uint32_t* out_idx) const {

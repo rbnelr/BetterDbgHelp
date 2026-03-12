@@ -46,7 +46,8 @@ class TestRunner {
 		}
 		LoadedModule const& find (char* addr) {
 			for (auto& m : list) {
-				if (addr >= m.addr && addr < (char*)m.addr + m.size) {
+				if ( (m.size == 0 && addr == m.addr) ||
+					 (addr >= m.addr && addr < (char*)m.addr + m.size) ) {
 					return m;
 				}
 			}
@@ -148,6 +149,8 @@ class TestRunner {
 
 			ContinueDebugEvent(de.dwProcessId, de.dwThreadId, DBG_CONTINUE);
 		}
+
+		cache_process_driver();
 	}
 	void finish_debugging_and_kill_child_process () {
 		ZoneScopedC(0xff0000);
@@ -191,6 +194,41 @@ class TestRunner {
 
 		return init_rng((uint32_t)seed);
 	}
+
+	void cache_process_driver () {
+		DWORD needed;
+		LPVOID dev[4096];
+		if (EnumDeviceDrivers(dev, sizeof(dev), &needed) != 0) {
+			char windir[MAX_PATH];
+			if (!GetWindowsDirectoryA(windir, sizeof(windir))) memcpy(windir, "c:\\windows", 11);
+			const auto windirlen = strlen(windir);
+
+			const auto sz = needed / sizeof(LPVOID);
+			for (size_t i = 0; i < sz; i++) {
+				char fn[MAX_PATH];
+				const auto len = GetDeviceDriverBaseNameA(dev[i], fn, sizeof(fn));
+				if (len != 0) {
+
+					const auto len = GetDeviceDriverFileNameA(dev[i], fn, sizeof(fn));
+					if (len != 0) {
+						char full[MAX_PATH];
+						char* path = fn;
+
+						if (memcmp(fn, "\\SystemRoot\\", 12) == 0) {
+							memcpy(full, windir, windirlen);
+							strcpy(full + windirlen, fn + 11);
+							path = full;
+						}
+
+						DWORD64 baseOfDll = (DWORD64)dev[i];
+						DWORD dllSize = 0;
+
+						loaded_modules.add(full, (void*)baseOfDll, dllSize);
+					}
+				}
+			}
+		}
+	}
 public:
 	//bool tests_failed = false;
 	MismatchCounts mismatch_counts;
@@ -222,6 +260,19 @@ public:
 	}
 	char* get_addr (std::string_view filter) {
 		return (char*)loaded_modules.find(filter).addr;
+	}
+	
+	void help_mod_rel (std::string_view filter, char* addr) {
+		char* base = get_addr(filter);
+		auto& mod = get_mod(base);
+
+		auto rel = addr - (char*)mod.addr;
+		printf("Help: [%s+0x%llx]\n", mod.name.c_str(), rel);
+	}
+	void help_mod_rel (char* addr) {
+		auto& mod = get_mod(addr);
+		auto rel = addr - (char*)mod.addr;
+		printf("Help: [%s+0x%llx]\n", mod.name.c_str(), rel);
 	}
 
 	void print_addr (const char* context, char* addr) {

@@ -12,8 +12,8 @@
 // Could consider not loading dbghelp at all and returning error in those cases
 // Could consider adding additional runtime for verification, but there is no good reason to do so right now
 #if NDEBUG
-	#define ENABLE_VERIFICATION 0
-	//#define ENABLE_VERIFICATION 1
+	//#define ENABLE_VERIFICATION 0
+	#define ENABLE_VERIFICATION 1
 #else
 	#define ENABLE_VERIFICATION 1
 #endif

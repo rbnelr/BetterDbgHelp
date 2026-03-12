@@ -145,6 +145,7 @@ public:
 						
 						sorted_modules.emplace_back(std::move(mod));
 
+						// lazy load kernel stuff instead since there are so many modules, most of which may never be hit by a profiler
 						//load_module_lookup(pmod);
 					}
 				}
